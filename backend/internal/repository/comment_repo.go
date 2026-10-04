@@ -88,12 +88,21 @@ func (r *CommentRepository) ListByUser(userID uint, page, pageSize int) ([]model
 }
 
 func (r *CommentRepository) Delete(id uint) error {
-	res := r.db.Delete(&model.Comment{}, id)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// comments.parent_id 是自引用外键：父评论带着回复时直接删除会被数据库
+		// 拒绝（SQLSTATE 23503）。先把回复的 parent_id 置空（提升为顶级评论，
+		// 不丢内容），再删父评论本身。
+		if err := tx.Model(&model.Comment{}).Where("parent_id = ?", id).
+			Update("parent_id", nil).Error; err != nil {
+			return err
+		}
+		res := tx.Delete(&model.Comment{}, id)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }

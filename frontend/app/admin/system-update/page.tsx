@@ -283,8 +283,9 @@ export default function AdminSystemUpdatePage() {
         </div>
       ) : (
         <>
-          {/* 更新不可用时的说明（关闭开关 / 未探测到源码目录） */}
-          {!update.enabled || !update.source_dir ? (
+          {/* 更新不可用时的说明（关闭开关 / commits 模式下未探测到源码目录）。
+              releases 模式装的是 Release 镜像包，不需要源码目录，不在此告警。 */}
+          {!update.enabled || (update.source !== 'releases' && !update.source_dir) ? (
             <Reveal y={12} className="mt-6 rounded-2xl border border-amber-500/40 bg-amber-500/5 p-5">
               <div className="flex items-start gap-3">
                 <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -386,8 +387,10 @@ export default function AdminSystemUpdatePage() {
             </div>
 
             <p className="mt-3 text-xs text-muted-foreground">
-              上次检查：{formatTime(version?.last_checked)} · 源码目录：
-              {update.source_dir || '未探测到'}
+              上次检查：{formatTime(version?.last_checked)} ·{' '}
+              {update.source === 'releases'
+                ? `更新目录：${update.update_dir || '未探测到'}（镜像包安装，无需源码目录）`
+                : `源码目录：${update.source_dir || '未探测到'}`}
             </p>
             {version?.compare_note ? (
               <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">

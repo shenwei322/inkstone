@@ -36,30 +36,65 @@ func (r *ArticleRepository) Update(article *model.Article) error {
 	return r.db.Save(article).Error
 }
 
+// purgeArticleRelations 清理一篇文章的所有关联行（评论 / 点赞收藏 / 标签关联）。
+// articles 被 comments、reactions、article_tags 的外键引用，直接 DELETE 会被
+// 数据库拒绝（SQLSTATE 23503），必须先清关联再删文章。
+func purgeArticleRelations(tx *gorm.DB, id uint) error {
+	if err := tx.Where("article_id = ?", id).Delete(&model.Comment{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("article_id = ?", id).Delete(&model.Reaction{}).Error; err != nil {
+		return err
+	}
+	return tx.Exec("DELETE FROM article_tags WHERE article_id = ?", id).Error
+}
+
 func (r *ArticleRepository) Delete(id, authorID uint) error {
-	result := r.db.Where("id = ? AND author_id = ?", id, authorID).Delete(&model.Article{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := purgeArticleRelations(tx, id); err != nil {
+			return err
+		}
+		result := tx.Where("id = ? AND author_id = ?", id, authorID).Delete(&model.Article{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (r *ArticleRepository) DeleteAny(id uint) error {
-	result := r.db.Delete(&model.Article{}, id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := purgeArticleRelations(tx, id); err != nil {
+			return err
+		}
+		result := tx.Delete(&model.Article{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (r *ArticleRepository) DeleteByAuthor(authorID uint) error {
-	return r.db.Where("author_id = ?", authorID).Delete(&model.Article{}).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var ids []uint
+		if err := tx.Model(&model.Article{}).Where("author_id = ?", authorID).
+			Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := purgeArticleRelations(tx, id); err != nil {
+				return err
+			}
+		}
+		return tx.Where("author_id = ?", authorID).Delete(&model.Article{}).Error
+	})
 }
 
 func (r *ArticleRepository) CountAll() (int64, error) {
