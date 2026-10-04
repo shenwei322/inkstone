@@ -1,7 +1,7 @@
 {
   "name": "blog-platform",
   "version": "1.0.0",
-  "description": "多用户博客平台（P1 骨架）— Go (Gin + GORM) 后端 + Next.js 15 前端。",
+  "description": "InkStone（砚石）：可自托管的多用户博客平台 —— Go (Gin + GORM) + PostgreSQL 后端，Next.js + React 前端，内置管理后台、人机验证与在线更新。",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -12,7 +12,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/shenwei322/inkstone/issues"

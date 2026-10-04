@@ -2,11 +2,20 @@
 
 **English** | [简体中文](./README.zh-CN.md)
 
-> Multi-user blogging platform · Chinese-first · Self-hosted, full-stack
+**A self-hosted, multi-user blogging platform you own end to end.**
 
-InkStone (砚石, "inkstone") is an open-source, self-hostable multi-user blogging platform built as a single full-stack application: a Go backend and a Next.js frontend. It ships with a complete admin dashboard, built-in human verification, and one-click online updates — configure your site, restyle its appearance, and upgrade versions without ever touching the code. It is designed as a long-term self-hosted WordPress alternative for Chinese-language sites.
+InkStone (砚石, "inkstone") packs an entire blog system into one deployable stack —
+**Go + Gin + PostgreSQL** on the backend, **Next.js + React** on the frontend, plus a
+complete admin dashboard. Write in Markdown or rich text and switch between the two at
+will, restyle the site, manage users and comments, and upgrade versions online — all
+without ever touching the code.
 
-Current version: **Beta1.27** · License: [MIT](./LICENSE) · Repository: https://github.com/shenwei322/inkstone
+Personal column or multi-author publication, InkStone is built to be the blog you can
+still maintain five years from now: no plugin sprawl, no monthly fees, no surprises.
+
+✍️ Two editors · 🛡️ Three CAPTCHA providers · 🔄 One-click online updates · 🌏 Bilingual docs
+
+**Beta1.27** · [MIT License](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
 
 > **Language note**: the visitor site, the admin dashboard, and the `docs/` + `.ai-skill/` documentation currently ship with Simplified Chinese copy only — the project is Chinese-first by design. Application-level i18n (including an English UI) is **not implemented yet**; this README is bilingual, the product itself is not.
 
