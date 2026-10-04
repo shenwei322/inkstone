@@ -5,17 +5,17 @@ Next.js（App Router）+ React 19 + TypeScript + Tailwind CSS v4 + React Query +
 ## 目录结构
 
 ```
-app/                          # 路由（App Router）
+frontend/app/                   # 访客站路由（App Router；含站内后台 app/admin/，19 页）
 ├── layout.tsx                # 根布局：Providers + Navbar + 壁纸 + Footer + SiteHead
-├── page.tsx                  # 首页（文章列表 + 侧边栏小工具）
+├── page.tsx                  # 首页（文章列表 + 侧栏小工具）
 ├── login/page.tsx            # 登录
 ├── register/page.tsx         # 注册
 ├── me/page.tsx               # 用户中心（账户/我的文章/我的评论）
 ├── links/page.tsx            # 友情链接页
 ├── posts/[slug]/page.tsx     # 文章详情（正文 + 目录 + 分享 + 回顶）
 ├── p/[slug]/page.tsx         # 独立页面（3 种模板）
-└── admin/                    # 管理后台（独立布局）
-    ├── layout.tsx            # 侧边栏 + 权限守卫
+└── admin/                    # 站内管理后台（19 页）
+    ├── layout.tsx            # 侧边栏（fixed 贴视口最左、w-52 全高、顶部避开导航栏 4rem）+ 权限守卫 + 深浅模式；内容区 max-w-5xl，文章新建/编辑路由（/admin/articles/new|edit）放宽 max-w-7xl
     ├── page.tsx              # 概览（统计卡 + 资源监控 + 趋势图）
     ├── users/                # 用户管理
     ├── articles/             # 文章管理 + 编辑器
@@ -25,14 +25,14 @@ app/                          # 路由（App Router）
     ├── files/                # 文件管理
     ├── sitemap/              # 站点地图（URL 列表 + 统计 + robots 预览）
     ├── links/                # 友情链接
-    ├── appearance/           # 外观（菜单/小工具/侧边栏位置）
+    ├── appearance/           # 外观（菜单/小工具/侧栏位置）
     ├── security/             # 安全防护（验证码/限流/邮箱验证）
     ├── settings/             # 网站管理（站点信息/壁纸/SMTP）
     ├── logs/                 # 网站日志（统计卡片/多维筛选/详情展开/CSV 导出）
     └── about/                # 关于系统
 
-components/                   # 组件
-lib/                          # 工具与状态
+frontend/components/          # 组件（页面组件单份存放于此）
+frontend/lib/                 # 工具与状态（api.ts / types.ts / auth-context / ui.ts）
 ```
 
 ---
@@ -58,7 +58,7 @@ captcha: {
 }
 ```
 
-> 浏览器标题与标签页图标（favicon）由 `components/site-head.tsx` 以 React 19 metadata hoist 渲染；原来在 context 里运行时改 DOM link 的方式在 React 19 下会被覆盖，导致后台改了 favicon 前台不生效。
+> 浏览器标签页图标（favicon）由 `components/site-head.tsx` 以 React 19 metadata hoist 渲染 `<link rel="icon">`（必须在 `SiteConfigProvider` 内层，且已删除 `app/icon.svg`/`app/favicon.ico` file convention）；站点 title 由根 `layout.tsx` 的 `generateMetadata` 从后端配置生成。原来在 context 里运行时改 DOM link / `document.title` 的方式在 React 19 下会被覆盖，导致后台改了前台不生效。
 
 ### 2. AuthProvider（`lib/auth-context.tsx`）
 ```tsx
@@ -139,6 +139,16 @@ export function uploadImage(file: File): Promise<string>  // 返回 url
 export function downloadFile(id: number, filename: string)  // 鉴权下载
 ```
 
+**系统更新**（Beta1.27，见「系统更新页」）：
+```ts
+fetchUpdateStatus()                    // GET  /admin/system/update        只读本地状态，可高频轮询
+checkSystemUpdate()                    // POST /admin/system/update/check  联网比对上游提交
+applySystemUpdate(commit)              // POST /admin/system/update/apply  返回 202，异步执行
+rollbackSystemUpdate(backupId)         // POST /admin/system/update/rollback
+```
+
+**系统信息**：`fetchSystemInfo()` 的返回新增 `commit` / `commit_at` / `commit_source`（运行中提交与来源）。
+
 ---
 
 ## 核心组件
@@ -201,7 +211,7 @@ export function downloadFile(id: number, filename: string)  // 鉴权下载
 > baseline 快照含 `{t, c, g, s, v}`（title/content/category/tags/cover），
 > 任何保存动作（自动保存/存草稿/发布）成功后刷新，避免误报 dirty。
 
-### 人机验证（`components/captcha.tsx` 门面 + 两个 provider hook）
+### 人机验证（`components/captcha.tsx` 门面 + 三个 provider hook）
 
 页面统一调用门面 hook，由后台 `captcha_provider` 设置自动选用 provider：
 
@@ -213,7 +223,8 @@ const captcha = useCaptcha('login') // 'login' | 'register' | 'comment'
 ```
 
 - `useGeetestCaptcha`（`geetest-captcha.tsx`）：极验 GT4，动态加载 gt4.js，
-  `getValidate()` 拿 `{lot_number, captcha_output, pass_token, gen_time}`
+  `getValidate()` 拿 `{lot_number, captcha_output, pass_token, gen_time}`。
+  **enabled 条件排除 lap/pow 两个 provider**（`captchaProvider !== 'lap' && !== 'pow'`）
 - `useLapCaptcha`（`lap-captcha.tsx`）：Lap 工作量证明，按 `lap.api_endpoint`
   推导并加载同实例 `widget.js`，挂载 `lap-widget` 自定义元素，监听其
   `solve`（detail.token）/ `error`（detail.message）事件拿 `lap_token`。
@@ -243,7 +254,31 @@ const captcha = useCaptcha('login') // 'login' | 'register' | 'comment'
   成功后 `solvedRef` 标记销毁实例并重建预热（token 已消费防重放）；
   未消费的实例关闭时移回屏幕外保留 done。弹窗文案随 `progress` 事件显示
   「正在本地计算工作量证明… n%」，成功后展示 600ms 即关闭
-- 两个 hook **provider 互斥**：未选中的 enabled=false，不加载任何外部脚本
+- 三个 hook **provider 互斥**：未选中的 enabled=false，不加载任何外部脚本、
+  不发任何请求（POW 连 challenge 都不领）
+
+- `usePowCaptcha`（`pow-captcha.tsx`）：**自研 POW v2，零外部依赖**（2026-10 为解决
+  「服务器不能用代理、workers.dev 不可达」新增）。提交流：`run()` 开弹窗 →
+  `fetchPowChallenge()` → **两阶段消耗本地资源** → resolve `{pow_challenge, pow_nonce,
+  pow_signal}` 后业务请求照常提交。无预热、无 widget、无外部脚本
+  - **阶段一·交互信号**：监听 pointermove/keydown/touchstart（passive），取前
+    `min_events` 个事件（`m/k/t:unix_ms:x:y`，坐标 clamp ±32767）拼成 signal；
+    弹窗文案「请晃动鼠标或触摸屏幕（还需 N 次）」，30 秒未采集够报错。
+    真人设备独有——纯 curl/requests 脚本必须额外复刻整套构造逻辑
+  - **阶段二·本地计算**：`solvePow()` 构建 `memory_mb` 内存表（Uint32Array，
+    xorshift128 填充）并多轮「查表-混合」迭代，找出前导零答案
+  - **`lib/pow.ts` 求解器**：优先 `crypto.subtle` 批量并发 digest（https/localhost，
+    快数十倍），回退 `lib/sha256.ts` 纯 JS 实现（**http 部署也可用**——crypto.subtle
+    只在安全上下文可用，这是写纯 JS 版的原因）。`digestNative` 的缓冲区**每次调用
+    新建**（并发共享会互相覆盖）。算法口径与后端 `powDigest` 严格一致；**TS 的 `^`
+    会把无符号转 int32，取 idx 必须 `>>> 0`**（否则两端不一致、登录 400）
+  - **`lib/sha256.ts`**：`sha256Hex` / `sha256Bytes` / `sha256Raw`（POW 表混合必须
+    字节级入口，不能走 TextDecoder 中转——会丢不可打印字节）/ `bytesToHex` /
+    `leadingZerosOK`；已过 NIST 标准向量验证
+  - 进度条 `origin-left` + `scaleX`（不用 width 动画，避免每帧 layout 重排）；
+    计算分批 `setTimeout(0)` yield 保 UI 响应；取消经 `cancelledRef` 通知求解器停止
+  - 弹窗动画复用 lap 同款 CSS keyframes（`captcha-closing-overlay` /
+    `captcha-check-pop` / `animate-scale-in`），**不用 GSAP opacity**（rAF 节流坑）
 
 弹窗**必须 `createPortal` 到 `document.body`**：调用方页面（如友链申请表单）外层常是
 带动画（GSAP `transform`）的容器 div，内联渲染 `fixed inset-0` 会被 transform 包含块困住，
@@ -286,7 +321,7 @@ useCodeHighlight(contentRef, articleHtml) // ref 挂到 dangerouslySetInnerHTML 
 | `tags` | 标签云 | limit |
 | `search` | 搜索框 | — |
 | `html` | 自定义 HTML | content |
-| `profile` | 站长信息 | avatar, content |
+| `profile` | 站长信息 | 头像（avatar）/ 名字（subtitle，留空回退 title）/ 简介（content）/ 社交图标（socials: {icon,url,label?}[]，icon 用 MenuIcon 图标名）+ 文章统计。居中布局：头像→名字→简介→社交图标行→统计；后台外观页 profile 编辑器含名字输入 + 社交图标增删（`SocialsEditor`，IconPicker 选图标 + URL + 名称），site-config-context 解构 subtitle/socials 白名单需同步维护 |
 | `weather` | 天气（Open-Meteo，无需 Key） | city |
 | `countdown` | 节日倒计时 | date, eventName |
 | `clock` | 实时时钟 | — |
@@ -407,23 +442,21 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 ③scroll 监听 rAF 节流 + 函数式 setState。hover 反馈：button 用 `hoverTapScale`，箭头图标另用
 `group-hover:-translate-y-0.5` 微上移（两个元素互不冲突）。
 
-### 站点 head（`components/site-head.tsx`）
-在根布局渲染 `<title>` / `<link rel="icon">`（React 19 metadata hoist 到 head），
-`site_favicon` 有值用自定义图标、为空回退 `/icon.svg`。
-**不要再在 site-config-context 里用 querySelector/appendChild 改 favicon**——运行时 DOM 操作会被
-React 19 metadata 管理覆盖/清理，后台改了前台不生效（踩过）。
+### 站点 head（`components/site-head.tsx`）+ 站点 title（`app/layout.tsx` 的 `generateMetadata`）
+- **favicon**：`site-head.tsx` 只渲染一个 `<link rel="icon">`（React 19 metadata hoist 到 head），`site_favicon` 有值用自定义图标、为空回退 `/icon.svg`（`public/icon.svg`）。两点硬约束：①**必须渲染在 `SiteConfigProvider` 内层**（`app/layout.tsx` 的 `<Providers>` 内、`<MaintenanceGate>` 前），在 Provider 外 `useSiteConfig()` 只拿到 `DEFAULT_CONFIG`→永远回退默认图标；②**`app/icon.svg`、`app/favicon.ico` 已删除**（Next file convention 会额外注入静态 icon link，与动态 link 并存互相抢占，实测 head 出现 3 个 rel=icon）。
+- **站点 title/description**：`app/layout.tsx` 用 `export async function generateMetadata()` fetch `${NEXT_PUBLIC_API_URL}/site-config` 取 `site_name`/`site_description`，`next: { revalidate: 30 }`（与后端 settings 30s 缓存对齐）+ try/catch 兜底。**不要**在 SiteHead 里渲染 `<title>`（React 19 hoist title 不复用 Next 注入的节点→多个 title 而 Chrome 只读第一个），**也不要**在 context 里 `document.title =`（会被 Next metadata 管理覆盖，实测 navbar 已显示新名而 title 不变）。副作用：全站变为 **ISR 30s**。
+- **不要再在 site-config-context 里用 querySelector/appendChild 改 favicon**——运行时 DOM 操作会被 React 19 metadata 管理覆盖/清理，后台改了前台不生效（踩过）。
 
-### 管理后台（`app/admin/`）
-- `layout.tsx` 做**权限守卫**：未登录跳 `/login`，非管理员显示「需要管理员权限」
-- 侧边栏导航入口，激活项用 `key` 重挂 + GSAP `scaleX` 入场做高亮滑块
+### 管理后台（博客站 `/admin` 全功能）
+`frontend/app/admin/`（21 页，全部管理功能）：站内 `layout.tsx` 做**权限守卫**（未登录跳 `/login`，非管理员显示「需要管理员权限」）+ 侧边栏导航；navbar「后台管理」按钮、登录分流（admin 角色跳 `/admin`）、首页空态「写文章」都指向这里。侧边栏导航顺序（15 项）：概览/用户管理/文章管理/标签管理/页面管理/评论管理/文件管理/站点地图/友情链接/外观管理/安全防护/网站管理/系统更新/网站日志/关于系统。
 
-#### 站点地图页（`app/admin/sitemap/page.tsx`）
+#### 站点地图页（`frontend/app/admin/sitemap/page.tsx`）
 - 数据：`useQuery(['admin','sitemap'], fetchSitemapData)`（GET `/admin/sitemap`）
 - 统计卡：URL 总数 + 分组计数徽章；sitemap.xml 入口卡（打开/复制地址）；robots.txt 预览卡（复制内容）
 - 分组列表：基础页面/文章/独立页/分类/标签（后端 `collectEntries()` 分组顺序），条目表格（名称/地址/频率/权重/最后更新）
 - 顶部搜索框按名称或地址前端过滤（服务端数据一次性拿全）
 
-#### 网站日志页（`app/admin/logs/page.tsx`）
+#### 网站日志页（`frontend/app/admin/logs/page.tsx`）
 - 列表样式：表格行（表头 + `divide-y` 分隔行），桌面端 `md:grid-cols-[18px_minmax(0,1fr)_150px_110px_130px]`（状态/操作+详情/时间/用户/IP），
   移动端 flex-wrap 两行堆叠；点击行展开完整详情（`whitespace-pre-wrap`）与 UA，未展开时详情 `truncate` + `title` 全文
 - 统计卡片：日志总数 / 今日新增 / 失败操作 / 当前筛选数（数据来自 `GET /admin/logs/overview`）
@@ -434,6 +467,18 @@ React 19 metadata 管理覆盖/清理，后台改了前台不生效（踩过）�
 
 ### 用户中心（`app/me/page.tsx`）
 所有登录用户可用：账户安全（改用户名/密码）、我的文章、我的评论。
+
+#### 系统更新页（`frontend/app/admin/system-update/page.tsx`，Beta1.27）
+- 数据：`useQuery(['admin','system','update'], fetchUpdateStatus)`（GET `/admin/system/update`，**后端不联网**）；
+  `refetchInterval` 按 `stage.running` 动态开关（进行中 2.5 秒轮询，空闲不轮询）
+- 进入页面自动检查一次：本地 `version.last_checked` 为空或超过 10 分钟才触发 `checkSystemUpdate()`（`autoChecked` ref 保证只触发一次，避免循环）
+- 检查更新：`checkSystemUpdate()` → 把返回的 `update` 直接 `setQueryData` 写回缓存（不额外请求）
+- 一键更新：`applySystemUpdate(commit)` 返回 **202**，先 `notify.confirm()` 二次确认（提示落后提交数、预计替换文件数、可能短暂中断），随后靠轮询看进度
+- 进度面板 `StagePanel`：阶段中文名（`PHASE_LABEL`）、进度条（`stage.progress`）、错误文案、变更文件数、备份 ID
+- 「待生效」卡片：`version.pending` 存在时说明源码已替换、等宿主代理重建（`mode === 'waiting_agent'`）；
+  宿主代理执行完毕会写回 `update-result.json` → 页面显示代理结果
+- 回滚：`rollbackSystemUpdate(backupId)`（来自 `backups`，最新在前）
+- 更新历史：`update.history`（后端保留最近 20 条）
 
 ---
 
@@ -491,15 +536,17 @@ Tailwind 中直接用 `bg-card`、`text-muted-foreground`、`border-border`、`t
 5. 路由切换进度条由根 layout 的 `RouteLoader` 自动接管，新页面无需额外配置
 
 ### 新增一个管理页
-1. `app/admin/新路径/page.tsx`
-2. 在 `app/admin/layout.tsx` 的 `navItems` 数组加菜单项（含 lucide 图标）
-3. 页内用 `useNotify()` 做反馈、`notify.confirm()` 做删除确认
+1. 页面组件放 `frontend/components/`（需要跨页复用时）；页面文件 `frontend/app/admin/新路径/page.tsx` 写 `export { default } from '@/components/...'` reexport 或直接实现
+2. 在 `frontend/app/admin/layout.tsx` 的 `navItems` 数组加菜单项（含 lucide 图标）
+3. 页内用 `useNotify()` 做反馈、`notify.confirm()` 做删除确认（Promise 风格：`const ok = await notify.confirm({title, message, confirmText, danger})`）
+4. API 函数加 `frontend/lib/api.ts`
 
 ### 修改站点配置字段
 1. 后端 `settings_service.go` 加常量
-2. `admin/settings/page.tsx` 的 **payload 白名单**手动加字段（关键！）
+2. `frontend/app/admin/settings/page.tsx` 的 **payload 白名单**手动加字段（关键！）
 3. `site-config-context.tsx` 手动解构成字段
 4. 使用处 `useSiteConfig()` 取值
+5. 若该字段要被 admin 后台表单编辑，同步加进 `frontend/lib/types.ts` 的 `SiteSettings`（TS 报错的常见点）
 
 ### 调试站点配置
 ```ts

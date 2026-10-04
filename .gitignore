@@ -2,6 +2,11 @@
 /data/
 /backend/data/
 
+# ===== 在线更新工作目录（源码包 / 备份 / 状态，非默认位置时）=====
+/.update/
+# 在线更新演示副本：把 UPDATE_SOURCE_DIR 指向它做端到端验证，避免动到正在开发的源码树
+/.uptest/
+
 # ===== 后端 =====
 backend/server
 backend/server.exe

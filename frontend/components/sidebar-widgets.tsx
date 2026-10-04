@@ -29,6 +29,7 @@ import {
   useReveal,
 } from '@/components/motion'
 import { PageLoading } from '@/components/page-loader'
+import { MenuIcon } from '@/components/menu-icon'
 import type { SidebarWidget } from '@/components/site-config-context'
 
 /** 循环动画类型：rotate 旋转 / scale 脉冲 / y 浮动 / opacity 呼吸闪烁 / wiggle 摆动 */
@@ -251,44 +252,64 @@ function ProfileWidget({ widget }: { widget: SidebarWidget }) {
     queryFn: () => fetchArticles({ page: 1, page_size: 1 }),
   })
   const total = data?.total ?? 0
+  const name = widget.subtitle?.trim() || widget.title
+  const socials = (widget.socials ?? []).filter((s) => s.icon && s.url)
 
   return (
     <div
       {...hoverLift}
-      className="relative overflow-hidden rounded-xl border border-border bg-card p-5"
+      className="relative overflow-hidden rounded-xl border border-border bg-card p-5 text-center"
     >
       <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-accent/15 blur-2xl" />
-      <div className="relative flex items-center gap-3">
+      <div className="relative flex flex-col items-center">
         <div className="relative">
           {widget.avatar ? (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={widget.avatar}
-              alt={widget.title}
-              className="h-14 w-14 rounded-full border-2 border-accent/40 object-cover"
+              alt={name}
+              className="h-20 w-20 rounded-full border-2 border-accent/40 object-cover"
             />
           ) : (
-            <div className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-accent/40 bg-accent/15 text-xl font-black text-accent">
-              {widget.title.charAt(0).toUpperCase()}
+            <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-accent/40 bg-accent/15 text-2xl font-black text-accent">
+              {name.charAt(0).toUpperCase()}
             </div>
           )}
           <LoopAnim
             kind="scale"
             amount={0.25}
             duration={2}
-            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-card bg-emerald-500"
+            className="absolute -right-0.5 top-1 h-3.5 w-3.5 rounded-full border-2 border-card bg-emerald-500"
           />
         </div>
-        <div className="min-w-0">
-          <p className="truncate font-semibold">{widget.title}</p>
-          <p className="text-xs text-muted-foreground">站长 · 在线</p>
-        </div>
+
+        <p className="mt-3 truncate text-base font-semibold">{name}</p>
+        <p className="text-xs text-muted-foreground">站长 · 在线</p>
+
+        {widget.content && (
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+            {widget.content}
+          </p>
+        )}
+
+        {socials.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {socials.map((s, idx) => (
+              <a
+                key={`${s.icon}-${idx}`}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.label || s.icon}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background/60 text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent"
+              >
+                <MenuIcon name={s.icon} className="h-4 w-4" />
+              </a>
+            ))}
+          </div>
+        )}
       </div>
-      {widget.content && (
-        <p className="relative mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-          {widget.content}
-        </p>
-      )}
+
       <div className="relative mt-4 grid grid-cols-2 gap-2 text-center">
         <div className="rounded-lg bg-background/60 py-2">
           <p className="text-lg font-bold text-accent">

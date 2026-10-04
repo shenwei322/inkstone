@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { fetchSiteConfig, type EmailCodeConfig, type GeetestConfig, type LapConfig } from '@/lib/api'
+import { fetchSiteConfig, type EmailCodeConfig, type GeetestConfig, type LapConfig, type PowConfig } from '@/lib/api'
 
 export interface NavMenuItem {
   label: string
@@ -22,6 +22,12 @@ export type WidgetType =
   | 'stats'
   | 'hitokoto'
 
+export interface WidgetSocial {
+  icon: string
+  url: string
+  label?: string
+}
+
 export interface SidebarWidget {
   type: WidgetType
   title: string
@@ -31,6 +37,10 @@ export interface SidebarWidget {
   avatar?: string
   date?: string
   eventName?: string
+  /** 站长信息：显示的名字（留空则用 title） */
+  subtitle?: string
+  /** 站长信息：社交图标 */
+  socials?: WidgetSocial[]
 }
 
 export interface SiteConfig {
@@ -45,7 +55,8 @@ export interface SiteConfig {
   emailCode: EmailCodeConfig
   geetest: GeetestConfig
   lap: LapConfig
-  /** 当前启用的验证码提供方：geetest | lap */
+  pow: PowConfig
+  /** 当前启用的验证码提供方：geetest | lap | pow */
   captchaProvider: string
   wallpaper: string
   wallpaperOpacity: number
@@ -53,6 +64,9 @@ export interface SiteConfig {
   articleSidebar: boolean
   allowRegistration: boolean
   maintenanceMode: boolean
+  /** 友情链接页显示内容（后台友链管理页编辑） */
+  friendLinksTitle: string
+  friendLinksIntro: string
   loaded: boolean
 }
 
@@ -73,6 +87,18 @@ const DEFAULT_LAP: LapConfig = {
   api_endpoint: '',
 }
 
+const DEFAULT_POW: PowConfig = {
+  enabled: false,
+  on_login: false,
+  on_register: false,
+  on_comment: false,
+  difficulty: 4,
+  ttl_seconds: 600,
+  memory_mb: 8,
+  rounds: 4,
+  min_events: 3,
+}
+
 const DEFAULT_CONFIG: SiteConfig = {
   siteName: 'InkStone',
   siteDescription: 'InkStone — 现代化多用户博客系统',
@@ -85,6 +111,7 @@ const DEFAULT_CONFIG: SiteConfig = {
   emailCode: { on_register: false, on_login: false },
   geetest: DEFAULT_GEETEST,
   lap: DEFAULT_LAP,
+  pow: DEFAULT_POW,
   captchaProvider: 'geetest',
   wallpaper: '',
   wallpaperOpacity: 100,
@@ -92,6 +119,8 @@ const DEFAULT_CONFIG: SiteConfig = {
   articleSidebar: true,
   allowRegistration: true,
   maintenanceMode: false,
+  friendLinksTitle: '友情链接',
+  friendLinksIntro: '',
   loaded: false,
 }
 
@@ -116,12 +145,15 @@ interface RawSiteConfig {
   email_code?: Partial<EmailCodeConfig>
   geetest?: Partial<GeetestConfig>
   lap?: Partial<LapConfig>
+  pow?: Partial<PowConfig>
   captcha_provider?: string
   site_wallpaper?: string
   wallpaper_opacity?: string
   wallpaper_blur?: string
   article_sidebar?: string
   maintenance_mode?: string
+  friend_links_title?: string
+  friend_links_intro?: string
 }
 
 function parseItems<T>(raw: unknown, validate: (item: unknown) => T | null): T[] {
@@ -165,6 +197,8 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
               avatar?: string
               date?: string
               eventName?: string
+              subtitle?: string
+              socials?: unknown
             }
             if (w && typeof w.type === 'string' && typeof w.title === 'string') {
               return {
@@ -176,6 +210,18 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
                 avatar: typeof w.avatar === 'string' ? w.avatar : undefined,
                 date: typeof w.date === 'string' ? w.date : undefined,
                 eventName: typeof w.eventName === 'string' ? w.eventName : undefined,
+                subtitle: typeof w.subtitle === 'string' ? w.subtitle : undefined,
+                socials: parseItems(w.socials, (s) => {
+                  const o = s as { icon?: string; url?: string; label?: string }
+                  if (o && typeof o.icon === 'string' && typeof o.url === 'string') {
+                    return {
+                      icon: o.icon,
+                      url: o.url,
+                      label: typeof o.label === 'string' ? o.label : undefined,
+                    }
+                  }
+                  return null
+                }),
               }
             }
             return null
@@ -201,12 +247,25 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
             site_key: cfg.lap?.site_key ?? '',
             api_endpoint: cfg.lap?.api_endpoint ?? '',
           },
-          captchaProvider: cfg.captcha_provider === 'lap' ? 'lap' : 'geetest',
+          pow: {
+            enabled: cfg.pow?.enabled === true,
+            on_login: cfg.pow?.on_login === true,
+            on_register: cfg.pow?.on_register === true,
+            on_comment: cfg.pow?.on_comment === true,
+            difficulty: typeof cfg.pow?.difficulty === 'number' ? cfg.pow.difficulty : DEFAULT_POW.difficulty,
+            ttl_seconds: typeof cfg.pow?.ttl_seconds === 'number' ? cfg.pow.ttl_seconds : DEFAULT_POW.ttl_seconds,
+            memory_mb: typeof cfg.pow?.memory_mb === 'number' ? cfg.pow.memory_mb : DEFAULT_POW.memory_mb,
+            rounds: typeof cfg.pow?.rounds === 'number' ? cfg.pow.rounds : DEFAULT_POW.rounds,
+            min_events: typeof cfg.pow?.min_events === 'number' ? cfg.pow.min_events : DEFAULT_POW.min_events,
+          },
+          captchaProvider: cfg.captcha_provider === 'lap' ? 'lap' : cfg.captcha_provider === 'pow' ? 'pow' : 'geetest',
           wallpaper: cfg.site_wallpaper ?? '',
           wallpaperOpacity: Number(cfg.wallpaper_opacity ?? 100) || 100,
           wallpaperBlur: Number(cfg.wallpaper_blur ?? 0) || 0,
           articleSidebar: cfg.article_sidebar !== 'false',
           maintenanceMode: cfg.maintenance_mode === 'true',
+          friendLinksTitle: cfg.friend_links_title || '友情链接',
+          friendLinksIntro: cfg.friend_links_intro ?? '',
           loaded: true,
         }
         setConfig(next)

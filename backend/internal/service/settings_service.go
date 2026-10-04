@@ -67,6 +67,18 @@ const (
 	SettingLapOnRegister  = "lap_on_register"  // 注册需人机验证
 	SettingLapOnComment   = "lap_on_comment"   // 评论/发表需人机验证
 
+	// 人机验证（POW —— 自研工作量证明，零外部依赖，服务器/本机通用）
+	SettingPowEnabled    = "pow_enabled"     // 总开关（默认 false，后台按需开启）
+	SettingPowDifficulty = "pow_difficulty"  // 难度：答案哈希前导零个数（十六进制位，1-6，越大越难；默认 4）
+	SettingPowTTLMinutes = "pow_ttl_minutes" // 挑战有效期（分钟，1-60；默认 10）
+	SettingPowOnLogin    = "pow_on_login"    // 登录需人机验证
+	SettingPowOnRegister = "pow_on_register" // 注册需人机验证
+	SettingPowOnComment  = "pow_on_comment"  // 评论/发表需人机验证
+	// POW v2：本地资源参数（签发时快照进挑战，服务端只校验一次）
+	SettingPowMemoryMB  = "pow_memory_mb"  // 内存表大小 MB（1-32，默认 8）：每次验证实打实占用的本地内存带宽
+	SettingPowRounds    = "pow_rounds"     // 表查找-混合轮数（1-16，默认 4）：每轮一次随机查表 + 一次 SHA-256
+	SettingPowMinEvents = "pow_min_events" // 需采集的本地交互事件数（0-10，默认 3；0=关闭 signal 校验）
+
 	// 站点外观
 	SettingSiteWallpaper    = "site_wallpaper"    // 全站壁纸图片地址
 	SettingWallpaperOpacity = "wallpaper_opacity" // 壁纸不透明度（0-100）
@@ -78,6 +90,10 @@ const (
 
 	// 友链自助申请（默认开放，后台审核）
 	SettingFriendApplyEnabled = "friend_apply_enabled" // "true"/"false" 前台开放友链自助申请
+
+	// 友情链接页面显示内容（后台 → 安全防护旁边的友链管理页编辑，/site-config 下发）
+	SettingFriendLinksTitle = "friend_links_title" // 页面标题（默认「友情链接」）
+	SettingFriendLinksIntro = "friend_links_intro" // 页面介绍文案（空 = 不显示介绍段）
 )
 
 var settingDefaults = map[string]string{
@@ -118,15 +134,28 @@ var settingDefaults = map[string]string{
 	SettingGeetestOnComment:  "false",
 
 	SettingCaptchaProvider: "lap",
-	SettingLapEnabled:      "false",
-	SettingLapAPIEndpoint:  "",
-	SettingLapSiteKey:      "",
-	SettingLapSecretKey:    "",
-	SettingLapResolveIP:    "",
-	SettingLapHTTPProxy:    "",
-	SettingLapOnLogin:      "false",
-	SettingLapOnRegister:   "false",
-	SettingLapOnComment:    "false",
+	// Lap 零配置开箱即用：内置默认实例 + 登录场景默认开启人机验证
+	SettingLapEnabled:     "true",
+	SettingLapAPIEndpoint: "",
+	SettingLapSiteKey:     "",
+	SettingLapSecretKey:   "",
+	SettingLapResolveIP:   "",
+	SettingLapHTTPProxy:   "",
+	SettingLapOnLogin:     "true",
+	SettingLapOnRegister:  "false",
+	SettingLapOnComment:   "false",
+
+	// POW 默认关闭（零外部依赖，但需要后台显式开启；场景默认与 lap 对称）
+	SettingPowEnabled:    "false",
+	SettingPowDifficulty: "4",
+	SettingPowTTLMinutes: "10",
+	SettingPowOnLogin:    "true",
+	SettingPowOnRegister: "false",
+	SettingPowOnComment:  "false",
+	// POW v2 本地资源参数：默认 8MB 表 + 4 轮查找 + 3 个交互事件
+	SettingPowMemoryMB:  "8",
+	SettingPowRounds:    "4",
+	SettingPowMinEvents: "3",
 
 	SettingSiteWallpaper:      "",
 	SettingWallpaperOpacity:   "100",
@@ -134,6 +163,8 @@ var settingDefaults = map[string]string{
 	SettingArticleSidebar:     "true",
 	SettingMaintenanceMode:    "false",
 	SettingFriendApplyEnabled: "true",
+	SettingFriendLinksTitle:   "友情链接",
+	SettingFriendLinksIntro:   "",
 }
 
 // jsonSettingKeys hold JSON arrays; they are decoded before leaving the API.

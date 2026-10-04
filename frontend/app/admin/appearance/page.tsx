@@ -19,11 +19,11 @@ import { IconPicker } from '@/components/menu-icon'
 import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { updateAdminSettings, fetchAdminPages, ApiError } from '@/lib/api'
 import { useNotify } from '@/components/toast'
-import type { NavMenuItem, SidebarWidget, WidgetType } from '@/components/site-config-context'
+import type { NavMenuItem, SidebarWidget, WidgetSocial, WidgetType } from '@/components/site-config-context'
 import { fetchSiteConfig } from '@/lib/api'
 
 const WIDGET_TYPES: { type: WidgetType; label: string; desc: string }[] = [
-  { type: 'profile', label: '站长信息', desc: '头像 + 简介 + 统计' },
+  { type: 'profile', label: '站长信息', desc: '头像 + 名字 + 简介 + 社交图标' },
   { type: 'weather', label: '天气', desc: '实时天气（Open-Meteo）' },
   { type: 'countdown', label: '节日倒计时', desc: '自动春节倒计时或自定义' },
   { type: 'clock', label: '实时时钟', desc: '动态日期时钟' },
@@ -230,6 +230,55 @@ function MenuTab() {
   )
 }
 
+function SocialsEditor({
+  socials,
+  onChange,
+}: {
+  socials: WidgetSocial[]
+  onChange: (next: WidgetSocial[]) => void
+}) {
+  const update = (i: number, patch: Partial<WidgetSocial>) =>
+    onChange(socials.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+
+  return (
+    <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+      <p className="text-xs text-muted-foreground">社交图标（点击图标切换，填写链接地址）</p>
+      {socials.map((s, j) => (
+        <div key={j} className="flex items-center gap-2">
+          <IconPicker value={s.icon} onChange={(icon) => update(j, { icon })} />
+          <input
+            value={s.url}
+            onChange={(e) => update(j, { url: e.target.value })}
+            placeholder="https://..."
+            className={`${inputClass} flex-1`}
+          />
+          <input
+            value={s.label ?? ''}
+            onChange={(e) => update(j, { label: e.target.value })}
+            placeholder="名称（可选）"
+            className="w-28 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+          />
+          <button
+            type="button"
+            title="删除"
+            onClick={() => onChange(socials.filter((_, k) => k !== j))}
+            className="rounded-md p-1.5 text-red-500 transition-colors hover:bg-red-500/10"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...socials, { icon: 'github', url: '' }])}
+        className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent"
+      >
+        <Plus className="h-3.5 w-3.5" /> 添加社交图标
+      </button>
+    </div>
+  )
+}
+
 function WidgetsTab() {
   const notify = useNotify()
   const [widgets, setWidgets] = useState<SidebarWidget[]>([])
@@ -265,7 +314,7 @@ function WidgetsTab() {
       tags: { limit: 20 },
       weather: { city: '北京' },
       countdown: { eventName: '', date: '' },
-      profile: { content: '', avatar: '' },
+      profile: { content: '', avatar: '', subtitle: '', socials: [] },
     }
     setWidgets((arr) => [
       ...arr,
@@ -370,12 +419,22 @@ function WidgetsTab() {
                   placeholder="头像图片地址（可留空显示首字头像）"
                   className={inputClass}
                 />
+                <input
+                  value={w.subtitle ?? ''}
+                  onChange={(e) => updateWidget(i, { subtitle: e.target.value })}
+                  placeholder="站长名字（留空则显示上方标题）"
+                  className={inputClass}
+                />
                 <textarea
                   value={w.content ?? ''}
                   onChange={(e) => updateWidget(i, { content: e.target.value })}
                   placeholder="站长简介..."
                   rows={2}
                   className={`${inputClass} resize-y`}
+                />
+                <SocialsEditor
+                  socials={w.socials ?? []}
+                  onChange={(socials) => updateWidget(i, { socials })}
                 />
               </div>
             )}

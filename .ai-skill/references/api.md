@@ -214,28 +214,42 @@ Body 字段：`{title, content, template, status, sort_order, show_in_nav}`
 
 ---
 
-## 人机验证（无独立端点，凭证随业务接口提交）
+## 人机验证（POW 有独立签发端点，凭证随业务接口提交）
 
-验证码**没有专属路由**，凭证作为普通字段随登录/注册/评论/友链申请请求提交，由 handler 层的
-CaptchaService 门面按 `captcha_provider` 设置校验。
+验证码凭证作为普通字段随登录/注册/评论/友链申请请求提交，由 handler 层的
+CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——它需要一个
+前置的 challenge 签发端点。
 
-**支持 2 种提供方**：`geetest`（极验 v4，默认）/ `lap`（Lap 工作量证明，Cap 的 Cloudflare Workers 分支）
+**支持 3 种提供方**：`geetest`（极验 v4）/ `lap`（Lap 工作量证明，Cap 的 Cloudflare Workers 分支）/ `pow`（自研工作量证明，零外部依赖）
 
 **请求体凭证字段**（按 provider 只提交其一）：
 - geetest：`lot_number` / `captcha_output` / `pass_token` / `gen_time`
 - lap：`lap_token`（widget `solve` 事件产出的 `SITEKEY:ID:TOKEN`）
+- pow：`pow_challenge` + `pow_nonce` + `pow_signal`（`pow_nonce` 是使 v2 算法（8MB 内存表 + 4 轮查表混合）输出摘要前 `difficulty` 位全为 0 的递增数字；`pow_signal` 是本地交互事件流 `m/k/t:unix_ms:x:y` 逗号连接，至少 `min_events` 条且在挑战签发时间窗内）
 
-**`GET /site-config` 的人机验证字段**（`captcha_provider` + `geetest` / `lap` 两套公开配置，均不含密钥）：
+**`POST /pow/challenge`（公开，签发 POW 挑战）**：
+
+| 项 | 值 |
+|---|---|
+| 方法/路径 | `POST /api/v1/pow/challenge` |
+| 鉴权 | 无（验证发生在登录之前） |
+| 限流 | 30 次/分钟/IP（`pow-challenge`） |
+| 响应 | `{ "challenge": "64位hex", "difficulty": 4, "memory_mb": 8, "rounds": 4, "min_events": 3, "ttl_seconds": 600 }` |
+
+参数为**签发时刻快照**（后台调整只影响之后的新挑战）。挑战一次性消费（校验通过即作废）+ TTL 过期失效，服务端内存存储（重启全部失效=用户重新验证一次，无正确性影响）；池上限 1 万，满时 503「服务繁忙」。
+
+**`GET /site-config` 的人机验证字段**（`captcha_provider` + `geetest` / `lap` / `pow` 三套公开配置，均不含密钥——POW 本就没有密钥）：
 
 ```json
 {
-  "captcha_provider": "lap",
+  "captcha_provider": "pow",
   "geetest": { "enabled": false, "on_login": false, "on_register": false, "on_comment": false, "captcha_id": "" },
-  "lap": { "enabled": true, "on_login": true, "on_register": true, "on_comment": false, "site_key": "…", "api_endpoint": "https://xxx.workers.dev/SITEKEY/" }
+  "lap": { "enabled": true, "on_login": true, "on_register": true, "on_comment": false, "site_key": "…", "api_endpoint": "https://xxx.workers.dev/SITEKEY/" },
+  "pow": { "enabled": true, "on_login": true, "on_register": false, "on_comment": false, "difficulty": 4, "ttl_seconds": 600, "memory_mb": 8, "rounds": 4, "min_events": 3 }
 }
 ```
 
-前端按 `captcha_provider` 选用 `useGeetestCaptcha` / `useLapCaptcha`（门面 `useCaptcha`）。
+前端按 `captcha_provider` 选用 `useGeetestCaptcha` / `useLapCaptcha` / `usePowCaptcha`（门面 `useCaptcha`）。
 后端在「未配置密钥」或「服务不可达」时放行（避免锁死用户）。
 
 ---
@@ -257,9 +271,12 @@ CaptchaService 门面按 `captcha_provider` 设置校验。
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| GET | `/system/info` | 公开 | 系统信息（名称、版本、Go 版本、运行时长、作者） |
+| GET | `/system/info` | 公开 | 系统信息（名称、版本、Go 版本、运行时长、作者、**运行中提交 `commit` / `commit_at` / `commit_source`**） |
 | GET | `/feed.xml` | 公开 | RSS 2.0 订阅源 |
 | GET | `/healthz` | 公开 | 健康检查（Docker healthcheck 用） |
+
+`commit_source` 取值：`ldflags`（编译期 `-X ...BuildCommit=` 注入，最准）> `deployed`（部署记录
+`data/deployed-commit.json`）> `env`（`INKSTONE_COMMIT`）。三者皆无时 `commit` 为空串。
 
 ---
 
@@ -303,7 +320,7 @@ CaptchaService 门面按 `captcha_provider` 设置校验。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/settings` | 全部设置（敏感字段只返回 `xxx_set`） |
+| GET | `/admin/settings` | 全部设置（敏感字段只返回 `xxx_set`：`smtp_pass_set`/`geetest_captcha_key_set`/`lap_secret_key_set`） |
 | PUT | `/admin/settings` | 更新。Body: `{settings: {...}}`（**注意包装层**） |
 | POST | `/admin/settings/test-mail` | 发送测试邮件。Body: `{to}` |
 
@@ -326,6 +343,52 @@ curl -H "Authorization: Bearer <token>" \
   "https://blog.example.com/api/v1/admin/logs/export?category=auth&from=2026-09-01" \
   -o logs.csv
 ```
+
+### 系统更新（Beta1.27 新增）
+
+后台「系统更新」页的全部接口。两套更新源（`UPDATE_SOURCE`，`update.source` 字段返回值）：
+
+- **commits（默认）**：检查上游提交 → 下载源码镜像包 → SHA256 校验 → 安全解压 → 备份 → 原子替换源码 → 触发重建；
+- **releases**：GitHub Releases（`tag_name` 版本号 + `body` 发布说明 + 镜像包资产）→ 下载镜像包 → 宿主代理 `docker load` + compose 重建（详见 `references/deployment.md`）。
+
+所有操作归入 `system` 日志分类（成功与失败都留痕）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/system/update` | 状态总览：`{update, backups, agent}`。**不联网**，前端可安全高频轮询 |
+| POST | `/admin/system/update/check` | 联网检查上游最新版本（提交或 Release）并生成更新日志，返回最新 `update` |
+| POST | `/admin/system/update/apply` | 启动一键更新。Body: `{commit?, target?, confirm:true}`（目标留空 = 上游最新；`target` 优先于 `commit`。commits 模式传 commit 哈希，releases 模式传版本 tag 如 `v1.28.0`）。成功返回 **202** + `{message, update}` |
+| POST | `/admin/system/update/rollback` | 回滚。Body: `{backup_id, confirm:true}`（commits 模式为备份 ID；releases 模式为历史版本号） |
+
+`update` 结构要点：
+
+| 字段 | 说明 |
+|---|---|
+| `enabled` / `mode` / `message` | 是否可用 / 重建方式 / 面向管理员的说明 |
+| `source` | `commits` / `releases`（决定下面所有版本字段的语义） |
+| `mode` | `waiting_agent`（等宿主代理重建）/ `in_place`（本机编译重启）/ `docker` / `unavailable` |
+| `version.current` | 运行中提交（含 `current_from` 来源） |
+| `version.current_version` / `current_version_from` | 本地版本号（releases 模式；`version_file` / `app_version`） |
+| `version.latest` | 上游最新提交（commits 模式）；releases 模式下 `hash` 填 tag |
+| `version.latest_version` / `release` | 上游最新 Release 的版本号与详情（releases 模式：`tag/name/body/url/published_at/prerelease/draft/assets[]`） |
+| `version.update_available` / `behind` / `compare_note` | 是否有更新 / 落后提交数（`-1` = 未知；releases 模式恒 `-1`）/ 判定说明 |
+| `version.changelog` | 更新日志（commits 模式；releases 模式为空数组，发布说明在 `version.release.body`） |
+| `version.pending` | 待生效更新。`kind=source`（源码已替换）或 `release_image`（镜像包已下载：`version/image_path/image_name/compose_file/bytes/sha256`） |
+| `stage` | 实时进度：`phase`/`progress`/`message`/`error`/`files_changed`/`backup_id`/`waiting_agent` |
+| `history` | 最近 20 条更新记录（含操作人、结果、备份 ID；releases 模式下 `from`/`to` 是版本号） |
+| `backups` | commits 模式为源码备份点；releases 模式为安装历史里的镜像包（`id` = 版本号） |
+| `agent` | 宿主更新代理写回的执行结果（无则 `null`） |
+
+`stage.phase` 取值：`staging`（下载解压/下载镜像包）→ `swapping`（备份替换/镜像包就绪）→ `rebuilding` → `success` /
+`failed` / `rolled_back`。前端在 `stage.running=true` 时以 2.5 秒间隔轮询本接口。
+
+**设计约束**（改动时别破坏）：
+- `GET` 状态接口绝不发外部请求，联网只在 `check` / `apply` 里发生；
+- 下载地址只来自后端配置（`UPDATE_MIRROR` / 上游仓库 / Release 资产），**不接受请求体指定 URL**；
+- 解压拒绝绝对路径、`..` 穿越、符号链接，并限制文件数与体积；
+- 替换源码时**永不触碰** `data/`、`uploads/`、`files/`、`.env*`、`node_modules/`、`.git/`、`.update/`、`.next/`；
+- 覆盖前逐文件备份到 `UPDATE_DIR/backups/<备份ID>/`，替换失败自动回滚；
+- releases 模式的镜像包必须与 Release 资产声明的 `size` 对账，并按 SHA-256 校验（代理侧同样校验）。
 
 ---
 

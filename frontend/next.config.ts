@@ -19,6 +19,9 @@ const nextConfig: NextConfig = {
   },
   // standalone 输出：运行镜像只含必要依赖（785MB → ~200MB），部署镜像体积大幅缩小。
   output: "standalone",
+  // Next 16 dev 默认拦截非 localhost 源的静态资源（HTML 200 但 CSS/JS chunk 403 → 页面无 UI）。
+  // 用 127.0.0.1 访问 dev 时需显式放行（仅开发生效；生产不受影响）。
+  allowedDevOrigins: ["localhost", "127.0.0.1"],
 };
 
 export default nextConfig;

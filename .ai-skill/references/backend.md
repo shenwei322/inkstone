@@ -86,6 +86,7 @@ db.AutoMigrate(
     &model.User{}, &model.Article{}, &model.Category{}, &model.Tag{},
     &model.Comment{}, &model.Reaction{}, &model.Setting{}, &model.Page{},
     &model.FriendLink{}, &model.FileAsset{}, &model.DailyStat{}, &model.VisitorDay{},
+    &model.FriendLinkApplication{},
 )
 ```
 
@@ -125,6 +126,8 @@ middleware.RequireRole(model.RoleAdmin)
 异步记录每请求流量到 `StatService`，不阻塞请求。
 
 ### CORS（`middleware/cors.go`）
+
+单源白名单 + credentials。**访客站与独立后台双源**：`main.go` 传 `[]string{cfg.FrontendURL, cfg.AdminURL}`（去重后），后台跨源部署（API 指向另一域名）时才不会被拦；同源反代（默认）无感。
 白名单来自 `FRONTEND_URL`。
 
 ---
@@ -158,25 +161,47 @@ func resolveCover(explicit, content string) string {
 }
 ```
 
-### 人机验证（`geetest_service.go` / `lap_service.go` / `captcha_service.go`）
+### 人机验证（`geetest_service.go` / `lap_service.go` / `pow_service.go` / `captcha_service.go`）
 
-三层结构：两个 provider 实现 + 一个门面。
+三层结构：三个 provider 实现 + 一个门面。
 
 ```
 CaptchaService（captcha_service.go，handler 唯一入口）
- ├── GeetestService（geetest_service.go）极验第四代行为验证
- └── LapService（lap_service.go）Lap 工作量证明（Cap 的 CF Workers 分支）
+  ├── GeetestService（geetest_service.go）极验第四代行为验证
+  ├── LapService（lap_service.go）Lap 工作量证明（Cap 的 CF Workers 分支）
+  └── PowService（pow_service.go）自研工作量证明（零外部依赖，内存挑战池）
 ```
 
 ```go
-// 门面：按设置项 captcha_provider（"geetest" 默认 | "lap"）分发
+// 门面：按设置项 captcha_provider（"lap" 默认 | "pow" | "geetest"）分发
 captcha.Required(action)              // "register"|"login"|"comment" 场景是否开启
-captcha.Verify(action, CaptchaParams) // 按 provider 校验；CaptchaParams 同时携带两套凭证字段
-captcha.PublicConfig()                // {provider, geetest:{...}, lap:{...}} 下发 /site-config
+captcha.Verify(action, CaptchaParams) // 按 provider 校验；CaptchaParams 同时携带三套凭证字段
+captcha.PublicConfig()                // {provider, geetest:{...}, lap:{...}, pow:{...}} 下发 /site-config
 ```
 
 `CaptchaParams` 请求体字段：极验 `{lot_number, captcha_output, pass_token, gen_time}`，
-Lap `{lap_token}`（widget solve 事件产出的 `SITEKEY:ID:TOKEN`）；未选中的 provider 忽略。
+Lap `{lap_token}`，POW `{pow_challenge, pow_nonce, pow_signal}`；未选中的 provider 忽略。
+
+**POW v2 协议**（`pow_service.go` + `pow_handler.go`，无任何外部请求）：
+1. 前端 `POST /api/v1/pow/challenge` → 32 字节随机 challenge + 本地资源参数快照
+   （`memory_mb` / `rounds` / `min_events` / `difficulty` / TTL，快照进挑战记录）
+2. 前端两阶段（组件 `pow-captcha.tsx`）：
+   a. **交互信号采集**：监听 pointermove/keydown/touchstart，取前 min_events 个
+      事件（`{m|k|t}:{unix_ms}:{x}:{y}` 逗号连接）；b. **本地计算**：构建内存表并
+      多轮「查表-混合」找前导零答案（求解器 `lib/pow.ts`）
+3. 业务请求带 `{pow_challenge, pow_nonce, pow_signal}` 提交 → 后端同参数重算校验 +
+   signal 格式/时间窗校验（事件数、ms 落在 [签发时刻-2s, 现在+2s]），通过即消费挑战
+   - 挑战池上限 1 万（满 → 503），GC 每 2 分钟扫过期；
+   - **内存存储 = 仅单实例有效**（单 backend 容器无碍，多副本部署需换共享存储）；
+   - 难度 1-6 / 内存 1-32MB / 轮数 1-16 / 事件数 0-10，越界均回退默认值。
+   - 算法口径（两端逐位一致，**任一侧改动必须同步另一侧并对拍**）：
+     `TABLE_LEN = memoryMB*262144`；xorshift128 种子 = `SHA-256(challenge)` 前 16 字节
+     （大端 4×u32）；`h = SHA-256(challenge:nonce)`；rounds 轮
+     `idx = (BE32(h[0:4]) ^ (r*0x9E3779B9)) % TABLE_LEN; h = SHA-256(h || BE32(table[idx]))`；
+     答案 = hex(h) 前 difficulty 位全 '0'。
+     **前端 TS 陷阱**：`^` 会把操作数转 int32，`be32(...) ^ Math.imul(...)` 必须
+     **`>>> 0`** 回无符号再取模，否则 idx 出负数与 Go 的 uint32 口径不一致
+     （2026-10 实测：表现为登录 400「验证未通过」，而验证码算法两头"都觉得自己对"）。
 
 **Lap 协议**（前端由实例的 widget.js 完成 challenge→redeem，后端只做 siteverify）：
 1. widget POST `{endpoint}challenge`（endpoint = 后台配置的 `lap_api_endpoint`）
@@ -267,6 +292,46 @@ Stats()                   // 各分类计数（旧接口）
 - file / link / page / taxonomy / system：增删改详情含标题/名称，更新前先查实体名
 - Detail 长度防护：`Record` 按字符截断到 500（列宽上限），防长标题导致入库失败
 
+### UpdateService（`service/update_*.go`，Beta1.27 新增）
+
+在线更新的全部逻辑。文件划分：
+
+| 文件 | 职责 |
+|---|---|
+| `update_service.go` | 状态机与状态文件（`UPDATE_DIR/update-state.json`）、`Status()` / `Check()`、版本信息组装、预览缓存 |
+| `update_remote.go` | HTTP 客户端（`getJSON` / `download` 流式 + SHA256）、更新源响应解析（GitHub 形状 / 自建 JSON）、仓库地址与哈希工具 |
+| `update_changelog.go` | 提交差异：compare 接口 → 提交列表分页回溯 → 空日志 + 说明（**绝不假装「已是最新」**） |
+| `update_release.go` | **releases 更新源**：Releases 拉取与解析、版本号解析/比较（兼容 `Beta1.27` 与 `v1.28.0`）、镜像包资产挑选与下载、部署版本记录（`deployed-version.json`）与安装历史（`release-history.json`） |
+| `update_archive.go` | 镜像包候选地址、下载 → 校验 → 安全解压（tar.gz / zip）→ 源码完整性校验 |
+| `update_swap.go` | 变更计算、备份、原子替换（临时文件 + rename）、回滚、受保护路径 |
+| `update_apply.go` | `Apply` / `Rollback` / 后台流程 `runUpdate`、阶段进度、历史、备份列表 |
+| `update_apply_release.go` | **releases 更新源**执行流：`applyRelease` / `runUpdateRelease`（下载镜像包 → 清单 → 安装）、本机 `docker load` 安装、版本维度回滚 |
+| `update_agent.go` | 宿主代理契约：`pendingManifest`（`pending-update.json`，`kind=source`/`release_image`）与 `RebuildResult`（`update-result.json`） |
+| `update_rebuild.go` | 重建方式分发：`waiting_agent`（写清单）/ `docker`（compose build+up）/ `in_place`（拉起重建脚本） |
+| `update_restart_unix.go` / `_windows.go` | 平台相关：`WaitForExit`（等旧进程退出）、`startDetachedRebuild`（脱离会话启动脚本） |
+
+```go
+Status() UpdateStatus                                    // 只读本地状态，不联网（前端轮询用）
+Check(ctx) (UpdateStatus, error)                         // 联网比对上游最新提交 + 生成更新日志
+Apply(ctx, target, operator) error                       // 启动后台更新任务（校验后立即返回）
+Rollback(backupID, operator) error                       // 用备份还原源码
+Backups() []BackupInfo                                   // 可回滚的备份点（最新在前）
+AgentResult() *RebuildResult                             // 宿主代理写回的执行结果
+```
+
+**两个版本概念别混淆**：`data/deployed-commit.json` 是「上一次部署到哪一版」；
+`GET /api/v1/system/info` 的 `commit` 是「现在跑的是哪一版」——
+优先级 `-ldflags BuildCommit` > 部署记录 > `INKSTONE_COMMIT`。
+`buildVersionInfo()` 会在部署记录等于 pending 目标时**自动收敛 pending**（说明新进程已起来）。
+
+**安全边界**（`update_swap.go` 的 `guardedPrefixes` / `isGuardedPath`）：
+替换源码时永不触碰 `data/`、`uploads/`、`files/`、`node_modules/`、`.git/`、`.update/`、
+`.next/`、`.tools/` 与任何层级的 `.env*`。解压侧拒绝绝对路径、`..` 穿越、符号链接，
+并限制文件数（2 万）与解压体积（512 MB）。
+
+**并发约束**：`reportStage(func(st *UpdateStage))` 的闭包在**持锁**状态执行，
+里面**只能改 `st` 的字段**；调用任何会加锁的方法（`Mode` / `rebuildMessage` / `snapshot`）会死锁。
+
 ### LinkService
 - `StartAutoCheck()` — 启动后台协程，每 6 小时检测「超过 24 小时未检测」的友链
 - `probeURL()` — HEAD 优先 → GET 回退，`status < 500` 视为可达
@@ -299,6 +364,9 @@ Stats()                   // 各分类计数（旧接口）
 | IP 存哈希不存原值 | 隐私合规 |
 | 设置缓存 30 秒 | 减少 DB 查询；写操作立即失效缓存 |
 | 限流计数器内存化 | 无 Redis 依赖；重启清空（可接受） |
+| 在线更新的重建交给宿主代理 | 后端容器没有 docker 权限与 systemd，无法重建自身；后端只负责下载/校验/替换源码，重建由 `deploy/update-agent.sh` 完成 |
+| 在线更新不引入 git 依赖 | 用镜像 tarball 直接替换源码，服务器无需 git / 无需外网到 GitHub（走 `UPDATE_MIRROR`） |
+| 更新状态落盘（JSON）而非入库 | 更新要在数据库可用之前就能工作（且更新失败时不该污染业务表） |
 
 ---
 

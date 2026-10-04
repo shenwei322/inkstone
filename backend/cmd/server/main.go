@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,7 +69,8 @@ func main() {
 	emailCodeSvc := service.NewEmailCodeService(settingsSvc, mailer)
 	geetestSvc := service.NewGeetestService(settingsSvc)
 	lapSvc := service.NewLapService(settingsSvc)
-	captchaSvc := service.NewCaptchaService(settingsSvc, geetestSvc, lapSvc)
+	powSvc := service.NewPowService(settingsSvc)
+	captchaSvc := service.NewCaptchaService(settingsSvc, geetestSvc, lapSvc, powSvc)
 	apiLimiter := middleware.NewSlidingLimiter()
 
 	authHandler := handler.NewAuthHandler(authSvc, emailCodeSvc, captchaSvc, apiLimiter, logSvc)
@@ -81,8 +83,9 @@ func main() {
 	sitemapHandler := handler.NewSitemapHandler(articleSvc, pageSvc, taxonomyRepo, cfg.FrontendURL)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc, mailer, emailCodeSvc, captchaSvc, logSvc)
 	lapProxyHandler := handler.NewLapProxyHandler(settingsSvc)
+	powHandler := handler.NewPowHandler(powSvc)
 	pageHandler := handler.NewPageHandler(pageSvc, logSvc)
-	systemHandler := handler.NewSystemHandler(settingsSvc)
+	systemHandler := handler.NewSystemHandler(settingsSvc, cfg.UpdateSourceDir)
 	linkHandler := handler.NewLinkHandler(linkSvc, logSvc)
 	linkAppHandler := handler.NewLinkApplicationHandler(linkAppSvc, captchaSvc, logSvc)
 	fileHandler := handler.NewFileHandler(fileSvc, cfg.PublicAPIURL, logSvc)
@@ -90,6 +93,21 @@ func main() {
 	logHandler := handler.NewLogHandler(logSvc)
 	emailCodeHandler := handler.NewEmailCodeHandler(emailCodeSvc)
 	adminTagHandler := handler.NewAdminTagHandler(taxonomyRepo, logSvc)
+
+	// 在线更新：检查上游提交、下载镜像包、替换源码、触发重建
+	updateSvc := service.NewUpdateService(cfg, logSvc)
+	updateHandler := handler.NewUpdateHandler(updateSvc, logSvc)
+	updateSource := "commits（提交 + 源码包）"
+	if cfg.UpdateSource == config.UpdateSourceReleases {
+		updateSource = "releases（GitHub Releases + 镜像包）"
+	}
+	if commit, _, _ := service.ResolveRunningCommit(cfg.UpdateSourceDir); commit != "" {
+		log.Printf("[update] 当前运行版本 %s（源码目录 %s，更新源 %s，模式 %s）",
+			service.ShortCommit(commit), cfg.UpdateSourceDir, updateSource, updateSvc.Mode())
+	} else {
+		log.Printf("[update] 未取得运行版本记录（源码目录 %s，更新源 %s，模式 %s）",
+			cfg.UpdateSourceDir, updateSource, updateSvc.Mode())
+	}
 
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -99,7 +117,31 @@ func main() {
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(middleware.SecurityHeaders())
 	router.Use(middleware.TrafficStats(statSvc))
-	router.Use(middleware.CORS([]string{cfg.FrontendURL}))
+	// 允许的源：访客站 + 独立管理后台（后台跨源部署时携带 Authorization 请求）
+	allowedOrigins := []string{cfg.FrontendURL}
+	if cfg.AdminURL != "" && !strings.EqualFold(cfg.AdminURL, cfg.FrontendURL) {
+		allowedOrigins = append(allowedOrigins, cfg.AdminURL)
+	}
+	// dev 便利：本机 127.0.0.1 与 localhost 等价。用户换 IP 写法访问（127.0.0.1:3001）
+	// 时 Origin 不在白名单，浏览器 CORS 会拦截登录/带鉴权请求（表现为前端「登录失败」兜底）。
+	// 仅对默认 localhost 源追加变体，生产域名不受影响。
+	for _, u := range []string{cfg.FrontendURL, cfg.AdminURL} {
+		v := strings.Replace(u, "localhost", "127.0.0.1", 1)
+		if v == "" || v == u {
+			continue
+		}
+		dup := false
+		for _, o := range allowedOrigins {
+			if strings.EqualFold(o, v) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			allowedOrigins = append(allowedOrigins, v)
+		}
+	}
+	router.Use(middleware.CORS(allowedOrigins))
 	router.MaxMultipartMemory = 12 << 20
 
 	securityEnabled := func() bool {
@@ -137,6 +179,18 @@ func main() {
 		},
 		Window:  time.Hour,
 		Message: "register",
+	})
+	// POW 挑战签发限流：防刷 challenge 池（正常登录一次只领 1 个）
+	powChallengeLimit := middleware.IPRateLimit(middleware.RateLimitConfig{
+		Limiter: apiLimiter,
+		LimitFn: func() int {
+			if !securityEnabled() {
+				return 0
+			}
+			return 30
+		},
+		Window:  time.Minute,
+		Message: "pow-challenge",
 	})
 	articleLimit := middleware.IPRateLimit(middleware.RateLimitConfig{
 		Limiter: apiLimiter,
@@ -210,6 +264,9 @@ func main() {
 		// Lap（工作量证明验证码）同源代理：访客浏览器不直连 workers.dev，
 		// 规避 DNS 污染 / 超时（白名单：widget.js、wasm、challenge、redeem）
 		api.Any("/lap/*path", lapProxyHandler.Proxy)
+		// POW（自研工作量证明）挑战签发：零外部依赖，服务器/本机通用。
+		// 挑战一次性消费，签发走 IP 限流防刷池。
+		api.POST("/pow/challenge", powChallengeLimit, powHandler.Challenge)
 		api.GET("/pages", pageHandler.ListPublic)
 		api.GET("/pages/:slug", pageHandler.GetBySlug)
 		api.GET("/links", linkHandler.ListPublic)
@@ -298,6 +355,12 @@ func main() {
 			admin.GET("/pages/:id", pageHandler.Get)
 			admin.PUT("/pages/:id", pageHandler.Update)
 			admin.DELETE("/pages/:id", pageHandler.Delete)
+
+			// 系统更新（高危：替换源码 + 重建重启，全程记入系统类操作日志）
+			admin.GET("/system/update", updateHandler.Status)
+			admin.POST("/system/update/check", updateHandler.Check)
+			admin.POST("/system/update/apply", updateHandler.Apply)
+			admin.POST("/system/update/rollback", updateHandler.Rollback)
 		}
 	}
 

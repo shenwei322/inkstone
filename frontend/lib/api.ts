@@ -156,11 +156,51 @@ export interface LapConfig {
   api_endpoint: string
 }
 
+/** POW（自研工作量证明）人机验证：前台配置（零外部依赖，无任何密钥） */
+export interface PowConfig {
+  enabled: boolean
+  on_login: boolean
+  on_register: boolean
+  on_comment: boolean
+  /** 难度：答案哈希前导零个数（十六进制位） */
+  difficulty: number
+  /** 挑战有效期（秒） */
+  ttl_seconds: number
+  /** 内存表大小（MB）：每次验证在本地实打实占用/访问的内存 */
+  memory_mb: number
+  /** 表查找-混合轮数 */
+  rounds: number
+  /** 需采集的本地交互事件数（鼠标/触摸/按键；0=不校验） */
+  min_events: number
+}
+
+/** POW 挑战签发响应（POST /api/v1/pow/challenge，参数为签发时快照） */
+export interface PowChallenge {
+  challenge: string
+  difficulty: number
+  memory_mb: number
+  rounds: number
+  min_events: number
+  ttl_seconds: number
+}
+
 /**
  * 人机验证凭证：按 captcha_provider 提交不同字段——
- * geetest 四元组或 lap_token（二选一），随登录/注册/评论提交给后端做二次校验。
+ * geetest 四元组 / lap_token / pow_challenge+pow_nonce+pow_signal（三选一），
+ * 随登录/注册/评论提交给后端做二次校验。
  */
-export type CaptchaCredential = Partial<GeetestCredential> & { lap_token?: string }
+export type CaptchaCredential = Partial<GeetestCredential> & {
+  lap_token?: string
+  pow_challenge?: string
+  pow_nonce?: string
+  pow_signal?: string
+}
+
+
+/** 签发 POW 挑战（免登录）：拿到后本地计算满足难度的 nonce */
+export function fetchPowChallenge() {
+  return api<PowChallenge>('/pow/challenge', { method: 'POST' })
+}
 
 /** 发送邮箱验证码 */
 export function sendEmailCode(email: string, purpose: 'register' | 'login') {
@@ -716,10 +756,204 @@ export interface SystemInfo {
   go_version: string
   uptime: string
   author: string
+  /** 运行中代码的提交（短哈希，未知为空） */
+  commit?: string
+  commit_at?: string
+  /** 提交来源：ldflags / deployed / env */
+  commit_source?: string
 }
 
 export function fetchSystemInfo() {
   return api<{ info: SystemInfo }>('/system/info')
+}
+
+// ---------- 在线更新（仅管理员） ----------
+
+/** 一次提交的展示信息 */
+export interface UpdateCommit {
+  hash: string
+  short: string
+  message: string
+  author: string
+  date: string
+  url: string
+}
+
+/** GitHub Release 资产（镜像包等） */
+export interface UpdateReleaseAsset {
+  name: string
+  size: number
+  url: string
+  content_type: string
+}
+
+/** GitHub Release 详情（releases 更新源） */
+export interface UpdateRelease {
+  tag: string
+  name: string
+  /** 发布说明（Markdown 原文，前端渲染） */
+  body: string
+  url: string
+  published_at: string
+  prerelease: boolean
+  draft: boolean
+  assets: UpdateReleaseAsset[]
+}
+
+export interface UpdatePendingPreview {
+  writes: number
+  deletes: number
+  bytes: number
+}
+
+export interface UpdatePending {
+  hash: string
+  short: string
+  /** source（源码更新）/ release_image（镜像包更新） */
+  kind: string
+  /** releases 模式的目标版本号 */
+  version: string
+  downloaded: boolean
+  apply_ready: boolean
+  files: number
+  bytes: number
+  sha256: string
+  source: string
+  staged_at: string
+  staged_dir: string
+  image_path: string
+  image_name: string
+  compose_file: string
+  preview: UpdatePendingPreview | null
+}
+
+export interface UpdateStage {
+  running: boolean
+  /** idle / staging / swapping / rebuilding / success / failed / rolled_back */
+  phase: string
+  progress: number
+  message: string
+  started_at: string
+  finished_at: string
+  target: string
+  error: string
+  success: boolean
+  files_changed: number
+  backup_id: string
+  rolled_back: boolean
+  /** waiting_agent / in_place / docker */
+  rebuild_mode: string
+  rebuild_ms: number
+  /** 已替换源码，等待宿主代理重建重启 */
+  waiting_agent: boolean
+  operator?: string
+}
+
+export interface UpdateVersion {
+  current: UpdateCommit
+  current_from: string
+  /** 本地版本号（releases 模式；从部署版本记录读出，缺失时为 AppVersion） */
+  current_version: string
+  current_version_from: string
+  deployed: { hash: string; short: string; updated_at: string; path: string }
+  latest: UpdateCommit
+  /** 上游最新版本号（releases 模式） */
+  latest_version: string
+  /** 上游最新 Release 详情（releases 模式） */
+  release: UpdateRelease | null
+  /** 检查快照的更新源：source / release_image */
+  kind: string
+  update_available: boolean
+  /** 落后提交数，-1 表示未知 */
+  behind: number
+  compare_note: string
+  changelog: UpdateCommit[]
+  changelog_offset: number
+  changelog_truncated: boolean
+  changelog_from: string
+  last_checked: string
+  pending: UpdatePending | null
+}
+
+export interface UpdateHistoryItem {
+  at: string
+  from: string
+  to: string
+  result: string
+  detail: string
+  backup_id: string
+  operator: string
+}
+
+export interface UpdateStatus {
+  enabled: boolean
+  repo_url: string
+  repo_name: string
+  branch: string
+  /** commits（提交+源码包）/ releases（GitHub Releases+镜像包） */
+  source: string
+  /** waiting_agent / in_place / docker / unavailable */
+  mode: string
+  source_dir: string
+  update_dir: string
+  message: string
+  version: UpdateVersion
+  stage: UpdateStage | null
+  history: UpdateHistoryItem[]
+}
+
+export interface UpdateBackup {
+  id: string
+  created_at: string
+  path: string
+}
+
+/** 宿主更新代理是否已执行完毕（容器部署时由宿主脚本写回） */
+export interface UpdateAgentResult {
+  state: string
+  commit: string
+  success: boolean
+  message: string
+  agent: string
+  finished_at: string
+  duration_ms: number
+}
+
+export interface UpdateOverview {
+  update: UpdateStatus
+  backups: UpdateBackup[]
+  agent: UpdateAgentResult | null
+}
+
+/** 读取更新状态（不联网，可安全高频轮询） */
+export function fetchUpdateStatus() {
+  return api<UpdateOverview>('/admin/system/update', { auth: true })
+}
+
+/** 联网检查上游最新提交与更新日志 */
+export function checkSystemUpdate() {
+  return api<{ update: UpdateStatus }>('/admin/system/update/check', {
+    method: 'POST',
+    auth: true,
+  })
+}
+
+/** 一键更新（commits 模式传 commit；releases 模式传版本 tag，如 v1.28.0） */
+export function applySystemUpdate(target: string) {
+  return api<{ message: string; update: UpdateStatus }>('/admin/system/update/apply', {
+    method: 'POST',
+    body: { commit: target, target, confirm: true },
+    auth: true,
+  })
+}
+
+/** 回滚到指定备份 */
+export function rollbackSystemUpdate(backupId: string) {
+  return api<{ message: string; update: UpdateStatus }>('/admin/system/update/rollback', {
+    method: 'POST',
+    body: { backup_id: backupId, confirm: true },
+    auth: true,
+  })
 }
 
 export function changePassword(currentPassword: string, newPassword: string) {

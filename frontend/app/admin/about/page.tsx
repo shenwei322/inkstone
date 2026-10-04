@@ -11,9 +11,11 @@ import {
   Info,
   MessageSquare,
   Palette,
+  RefreshCw,
   ShieldCheck,
   User,
 } from 'lucide-react'
+import Link from 'next/link'
 import { fetchSystemInfo } from '@/lib/api'
 import { useSiteConfig } from '@/components/site-config-context'
 import { Reveal, prefersReducedMotion, useReveal } from '@/components/motion'
@@ -108,7 +110,40 @@ export default function AdminAboutPage() {
           <div className="ml-auto text-right text-xs text-muted-foreground">
             <p>作者：{info?.author ?? 'shenwei'}</p>
             <p className="mt-0.5">已稳定运行 {info?.uptime ?? '—'}</p>
+            <p className="mt-0.5">
+              版本提交：
+              {info?.commit ? (
+                <code className="rounded bg-muted px-1.5 py-0.5">{info.commit}</code>
+              ) : (
+                '未知'
+              )}
+            </p>
           </div>
+        </div>
+
+        {/* 版本与更新入口：系统信息接口同时下发运行中的提交哈希 */}
+        <div className="relative mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background/70 px-4 py-3">
+          <RefreshCw className="h-4 w-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">系统更新</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {info?.commit
+                ? `当前运行提交 ${info.commit}${
+                    info.commit_source === 'deployed'
+                      ? '（来自部署记录）'
+                      : info.commit_source === 'ldflags'
+                        ? '（编译期注入）'
+                        : ''
+                  }`
+                : '未取得版本提交，可到系统更新页检查上游最新版本'}
+            </p>
+          </div>
+          <Link
+            href="/admin/system-update"
+            className="shrink-0 rounded-lg border border-border px-3.5 py-2 text-sm font-medium transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            前往系统更新
+          </Link>
         </div>
       </Reveal>
 

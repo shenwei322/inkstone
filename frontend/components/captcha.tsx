@@ -5,6 +5,7 @@ import type { CaptchaCredential } from '@/lib/api'
 import { useSiteConfig } from './site-config-context'
 import { useGeetestCaptcha } from './geetest-captcha'
 import { useLapCaptcha } from './lap-captcha'
+import { usePowCaptcha } from './pow-captcha'
 
 export type CaptchaScene = 'login' | 'register' | 'comment'
 
@@ -20,20 +21,24 @@ export interface CaptchaHandle {
 }
 
 /**
- * 人机验证门面：按后台 captcha_provider 设置选用极验或 Lap。
+ * 人机验证门面：按后台 captcha_provider 设置选用极验 / Lap / POW。
  *
- * 两个 hook 都会调用（React 规则要求），未选中的 provider 内部 enabled=false，
- * 不加载任何外部脚本（gt4.js / widget.js），也不会渲染弹窗。
+ * 三个 hook 都会调用（React 规则要求），未选中的 provider 内部 enabled=false，
+ * 不加载任何外部脚本、不发任何请求，也不会渲染弹窗。
  *
- * Lap 的 PoW 预热只对登录/注册开启（访客有明确验证意图，用读表单时间换
- * 弹窗零等待）；评论场景不开——文章页访客量大，不应让每个访客都消耗 PoW。
+ * Lap 的 PoW 预热只对登录/注册开启；POW 为自研实现无预热概念
+ * （本地计算本身只有几百毫秒）；评论场景两家都不预热。
  */
 export function useCaptcha(scene: CaptchaScene): CaptchaHandle {
   const provider = useSiteConfig().captchaProvider
   const geetest = useGeetestCaptcha(scene)
   const lap = useLapCaptcha(scene, { prewarm: scene !== 'comment' })
+  const pow = usePowCaptcha(scene)
   if (provider === 'lap') {
     return { enabled: lap.enabled, run: lap.run, dialog: lap.dialog, prewarmNode: lap.prewarmNode }
+  }
+  if (provider === 'pow') {
+    return { enabled: pow.enabled, run: pow.run, dialog: pow.dialog }
   }
   return geetest
 }

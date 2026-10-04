@@ -407,7 +407,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
     <form onSubmit={submit} className="min-h-[60vh]">
       {/* 顶部工具条 */}
       <div className="sticky top-16 z-40 -mx-4 border-b border-border bg-card/95 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
+        <div className="flex h-14 items-center justify-between px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
               href="/admin/articles"
@@ -475,7 +475,8 @@ function EditorShell({ mode, article }: EditorShellProps) {
         </div>
       </div>
 
-      <div className="mx-auto max-w-4xl px-4 py-8">
+      {/* 编辑器主体：跟随后台布局的文章编辑页宽容器（max-w-7xl），不再额外限宽 */}
+      <div className="px-4 py-8">
         <Reveal
           duration={0.45}
           className="rounded-xl border border-border bg-card p-6 sm:p-10"

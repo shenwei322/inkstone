@@ -35,8 +35,29 @@ services:
       JWT_SECRET: ${JWT_SECRET:?请在 .env 设置 JWT_SECRET}
       FRONTEND_URL: ${FRONTEND_URL:-https://blog.shenv.top}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://blog.shenv.top}
+      # 离线镜像部署默认关闭在线更新：镜像不含源码树，替换源码后也无法在服务器上重建。
+      # 需要在线更新时：把源码目录挂到 /app/src、把本项设为 true，
+      # 并在宿主机上运行 deploy/update-agent.sh 完成重建（详见 .ai-skill/references/deployment.md）。
+      # 镜像包更新（UPDATE_SOURCE=releases）不需要源码树：下载 Release 镜像包 →
+      # 宿主代理 docker load + compose up -d 即可生效。
+      UPDATE_ENABLED: ${UPDATE_ENABLED:-false}
+      # commits（默认，源码包替换）/ releases（GitHub Releases 镜像包）
+      UPDATE_SOURCE: ${UPDATE_SOURCE:-commits}
+      UPDATE_SOURCE_DIR: ${UPDATE_SOURCE_DIR:-/app/src}
+      UPDATE_REPO_URL: ${UPDATE_REPO_URL:-https://github.com/shenwei234/inkstone}
+      UPDATE_BRANCH: ${UPDATE_BRANCH:-main}
+      UPDATE_MIRROR: ${UPDATE_MIRROR:-https://gh-proxy.com/https://github.com/{owner}/{name}/archive/{commit}.tar.gz}
+      UPDATE_WAITING_AGENT: ${UPDATE_WAITING_AGENT:-true}
+      # releases 模式：镜像包资产名匹配 / 大小上限 / 安装用 compose 文件 / 部署版本记录
+      UPDATE_IMAGE_ASSET: ${UPDATE_IMAGE_ASSET:-}
+      UPDATE_IMAGE_MAX_MB: ${UPDATE_IMAGE_MAX_MB:-2048}
+      UPDATE_COMPOSE_FILE: ${UPDATE_COMPOSE_FILE:-}
+      UPDATE_VERSION_FILE: ${UPDATE_VERSION_FILE:-}
+      UPDATE_TOKEN: ${UPDATE_TOKEN:-}
     volumes:
       - uploads_data:/app/data
+      # 可选：在线更新需要访问宿主源码树时启用（默认注释，保持离线镜像最小依赖）
+      # - ./:/app/src
     # 最小权限：Go 静态服务无需任何 capability；被 RCE 时降低影响面
     cap_drop:
       - ALL

@@ -177,10 +177,17 @@ export default function LinksPage() {
           >
             <Link2 className="h-7 w-7" />
           </div>
-          <h1 className="relative mt-4 text-2xl font-bold tracking-tight sm:text-3xl">友情链接</h1>
+          <h1 className="relative mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
+            {site.friendLinksTitle}
+          </h1>
           <p className="relative mt-2 text-sm text-muted-foreground">
             {site.siteName} 的朋友们 · 共 {links.length} 个站点
           </p>
+          {site.friendLinksIntro && (
+            <p className="relative mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground/90">
+              {site.friendLinksIntro}
+            </p>
+          )}
         </header>
 
         {/* 列表 */}

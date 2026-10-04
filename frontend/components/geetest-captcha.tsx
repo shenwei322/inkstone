@@ -54,6 +54,7 @@ export function useGeetestCaptcha(scene: GeetestScene) {
   const enabled =
     site.loaded &&
     site.captchaProvider !== 'lap' &&
+    site.captchaProvider !== 'pow' &&
     geetest.enabled &&
     Boolean(geetest.captcha_id) &&
     (scene === 'login'

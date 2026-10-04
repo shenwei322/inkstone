@@ -16,6 +16,7 @@ import {
   Menu,
   MessageSquare,
   Paintbrush,
+  RefreshCw,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -26,6 +27,7 @@ import {
 import { Presence, Reveal, useReveal } from '@/components/motion'
 import { PageLoading } from '@/components/page-loader'
 import { useAuth } from '@/lib/auth-context'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 const navItems = [
   { href: '/admin', label: '概览', icon: LayoutDashboard },
@@ -40,6 +42,7 @@ const navItems = [
   { href: '/admin/appearance', label: '外观管理', icon: Paintbrush },
   { href: '/admin/security', label: '安全防护', icon: ShieldCheck },
   { href: '/admin/settings', label: '网站管理', icon: Settings },
+  { href: '/admin/system-update', label: '系统更新', icon: RefreshCw },
   { href: '/admin/logs', label: '网站日志', icon: ScrollText },
   { href: '/admin/about', label: '关于系统', icon: Info },
 ]
@@ -124,30 +127,42 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       )
     })
 
+  // 文章新建/编辑是工作台页面：富文本 + 元信息同屏，内容区比其他后台页放宽
+  const isArticleEditorRoute =
+    pathname.startsWith('/admin/articles/new') || pathname.startsWith('/admin/articles/edit/')
+
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8">
-      {/* 移动端顶栏：标题 + 汉堡按钮（<640px 显示） */}
-      <div className="mb-4 flex items-center justify-between sm:hidden">
+    <div className="min-h-[calc(100dvh-4rem)]">
+      {/* 移动端顶栏：标题 + 主题切换 + 汉堡按钮（<640px 显示） */}
+      <div className="mb-4 flex items-center justify-between px-4 pt-4 sm:hidden">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">管理控制台</p>
-        <button
-          type="button"
-          onClick={() => setMobileNavOpen(true)}
-          aria-label="打开导航菜单"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition-colors hover:border-accent/40 hover:text-accent"
-        >
-          <Menu className="h-4 w-4" /> 菜单
-        </button>
+        <div className="flex items-center gap-2">
+          <ThemeToggle className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="打开导航菜单"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            <Menu className="h-4 w-4" /> 菜单
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex">
+        {/* 桌面端侧边栏：贴视口最左侧、全高固定（顶部避开导航栏 4rem） */}
         <aside
           ref={asideRef}
-          className="sticky top-24 hidden h-fit w-52 shrink-0 rounded-xl border border-border bg-card p-3 sm:block"
+          className="fixed left-0 top-16 z-40 hidden h-[calc(100dvh-4rem)] w-52 shrink-0 flex-col overflow-y-auto border-r border-border bg-card p-3 sm:flex"
         >
           <p className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             管理控制台
           </p>
-          <nav className="space-y-1">{renderNav(false)}</nav>
+          <nav className="mt-2 flex-1 space-y-1 overflow-y-auto">{renderNav(false)}</nav>
+          <div className="mt-3 flex items-center justify-between border-t border-border px-3 pb-1 pt-3">
+            <span className="text-sm text-muted-foreground">深浅模式</span>
+            <ThemeToggle className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
+          </div>
           <div className="mt-3 border-t border-border px-3 pb-1 pt-3">
             <Link
               href="/"
@@ -158,8 +173,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
         </aside>
 
-        <div className="min-w-0 flex-1">
-          <Reveal duration={0.45}>{children}</Reveal>
+        <div className="min-w-0 flex-1 sm:ml-52">
+          <div
+            className={`mx-auto px-4 py-6 sm:px-6 sm:py-8 ${
+              isArticleEditorRoute ? 'max-w-7xl' : 'max-w-5xl'
+            }`}
+          >
+            <Reveal duration={0.45}>{children}</Reveal>
+          </div>
         </div>
       </div>
 
@@ -192,6 +213,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </button>
         </div>
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto">{renderNav(true)}</nav>
+        <div className="mt-2 flex items-center justify-between border-t border-border px-3 pb-1 pt-3">
+          <span className="text-sm text-muted-foreground">深浅模式</span>
+          <ThemeToggle className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
+        </div>
         <div className="mt-2 border-t border-border px-3 pb-1 pt-3">
           <Link
             href="/"

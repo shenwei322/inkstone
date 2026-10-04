@@ -1,7 +1,15 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/*
+ * 暗色模式策略：class（.dark）而非默认的 prefers-color-scheme 媒体查询，
+ * 这样主题才能由用户手动切换（components/theme.tsx + theme-toggle.tsx）。
+ * 覆盖后所有已有的 dark: 前缀继续有效，只是判断依据从系统偏好变为 .dark 类。
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
+  color-scheme: light;
   --background: #fafafa;
   --foreground: #18181b;
   --muted: #f4f4f5;
@@ -9,6 +17,17 @@
   --border: #e4e4e7;
   --card: #ffffff;
   --accent: #2563eb;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+  --border: #27272a;
+  --card: #101012;
+  --accent: #3b82f6;
 }
 
 @theme inline {
@@ -23,18 +42,6 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #09090b;
-    --foreground: #fafafa;
-    --muted: #18181b;
-    --muted-foreground: #a1a1aa;
-    --border: #27272a;
-    --card: #101012;
-    --accent: #3b82f6;
-  }
-}
-
 html {
   scroll-behavior: smooth;
 }
@@ -45,6 +52,8 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* 主题切换时背景/文字平滑过渡（只过渡颜色，不动 layout 属性） */
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 ::selection {
@@ -194,9 +203,29 @@ body {
   animation: toast-out 0.2s ease-in both;
 }
 
+/* 关于系统-技术栈卡片入场（与 toast 同理：CSS keyframes 走合成器线程，
+   避免 GSAP opacity tween 在 rAF 节流时卡中间透明度的「白雾」） */
+.tech-item-enter {
+  animation: tech-item-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tech-item-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .toast-enter,
   .toast-leave {
+    animation-duration: 0.01s;
+  }
+  .tech-item-enter {
     animation-duration: 0.01s;
   }
 }
@@ -402,54 +431,53 @@ body.has-wallpaper header {
   background: rgba(207, 34, 46, 0.12);
 }
 
-@media (prefers-color-scheme: dark) {
-  .hljs-comment,
-  .hljs-quote {
-    color: #8b949e;
-  }
-  .hljs-keyword,
-  .hljs-selector-tag,
-  .hljs-literal,
-  .hljs-section,
-  .hljs-doctag,
-  .hljs-type,
-  .hljs-name,
-  .hljs-strong {
-    color: #ff7b72;
-  }
-  .hljs-string,
-  .hljs-regexp,
-  .hljs-symbol,
-  .hljs-bullet,
-  .hljs-link,
-  .hljs-number {
-    color: #a5d6ff;
-  }
-  .hljs-title,
-  .hljs-title.class_,
-  .hljs-title.function_,
-  .hljs-built_in {
-    color: #d2a8ff;
-  }
-  .hljs-attr,
-  .hljs-attribute,
-  .hljs-variable,
-  .hljs-template-variable,
-  .hljs-selector-attr,
-  .hljs-selector-pseudo {
-    color: #ffa657;
-  }
-  .hljs-meta {
-    color: #8b949e;
-  }
-  .hljs-addition {
-    color: #7ee787;
-    background: rgba(46, 160, 67, 0.15);
-  }
-  .hljs-deletion {
-    color: #ffa198;
-    background: rgba(248, 81, 73, 0.15);
-  }
+/* 代码高亮暗色配色：跟随 .dark 类（class 策略，与上方 @custom-variant dark 一致） */
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal,
+.dark .hljs-section,
+.dark .hljs-doctag,
+.dark .hljs-type,
+.dark .hljs-name,
+.dark .hljs-strong {
+  color: #ff7b72;
+}
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-link,
+.dark .hljs-number {
+  color: #a5d6ff;
+}
+.dark .hljs-title,
+.dark .hljs-title.class_,
+.dark .hljs-title.function_,
+.dark .hljs-built_in {
+  color: #d2a8ff;
+}
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo {
+  color: #ffa657;
+}
+.dark .hljs-meta {
+  color: #8b949e;
+}
+.dark .hljs-addition {
+  color: #7ee787;
+  background: rgba(46, 160, 67, 0.15);
+}
+.dark .hljs-deletion {
+  color: #ffa198;
+  background: rgba(248, 81, 73, 0.15);
 }
 
 /* 代码块外框（header：语言标签 + 复制按钮，由预览 DOM 后处理注入） */

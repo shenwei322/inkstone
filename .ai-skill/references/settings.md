@@ -31,7 +31,7 @@
 | Key | 默认值 | 结构 |
 |---|---|---|
 | `nav_menu` | `[]` | `[{label, url, icon?}]` |
-| `sidebar_widgets` | `[]` | `[{type, title, content?, limit?, city?, avatar?, date?, eventName?}]` |
+| `sidebar_widgets` | `[]` | `[{type, title, content?, limit?, city?, avatar?, date?, eventName?, subtitle?, socials?: [{icon,url,label?}]}]` |
 
 ### SMTP 邮件
 | Key | 默认值 | 敏感 |
@@ -45,7 +45,7 @@
 ### 人机验证
 | Key | 默认值 | 说明 |
 |---|---|---|
-| `captcha_provider` | `lap` | `lap`（Lap 工作量证明，**默认，内置实例开箱即用**）/ `geetest`（极验第四代） |
+| `captcha_provider` | `lap` | `lap`（Lap 工作量证明，**默认，内置实例开箱即用**）/ `pow`（自研工作量证明，零外部依赖）/ `geetest`（极验第四代） |
 | `lap_enabled` | `false` | Lap 总开关（零配置可用；后台一键开启） |
 | `lap_api_endpoint` | `""` | 留空 = 内置默认实例（lap-serverless.2465813064.workers.dev）；含 siteKey 且以 / 结尾，自托管时填自己的。**后台不展示**（DB/env 覆盖） |
 | `lap_site_key` | `""` | 留空 = 内置默认实例的 site key。**后台不展示** |
@@ -61,6 +61,15 @@
 | `geetest_on_login` | `false` | 登录需人机验证 |
 | `geetest_on_register` | `false` | 注册需人机验证 |
 | `geetest_on_comment` | `false` | 评论/发表/友链申请需人机验证 |
+| `pow_enabled` | `false` | POW 总开关（provider=pow 时生效；零外部依赖、无任何密钥） |
+| `pow_on_login` | `false` | 登录需人机验证 |
+| `pow_on_register` | `false` | 注册需人机验证 |
+| `pow_on_comment` | `false` | 评论/发表/友链申请需人机验证 |
+| `pow_difficulty` | `4` | 难度：答案哈希前导零个数（1-6；4 ≈ 1-3 秒（v2 默认参数下），6 需数十秒） |
+| `pow_ttl_minutes` | `10` | 挑战有效期（分钟，1-60；过期未提交需重新领取） |
+| `pow_memory_mb` | `8` | 本地内存表大小 MB（1-32）：每次验证在访客浏览器构建并随机访问，越大越拖慢算力集群并行 |
+| `pow_rounds` | `4` | 表查找-混合轮数（1-16）：每轮一次随机查表 + 一次 SHA-256，线性拉高单次成本 |
+| `pow_min_events` | `3` | 需采集的本地交互事件数（鼠标/触摸/按键，0-10；0=关闭该检查退化为纯算法） |
 | `lap_enabled` | `false` | Lap 总开关（provider=lap 时生效） |
 | `lap_api_endpoint` | `""` | Lap 实例地址（**含 siteKey 且以 / 结尾**，形如 `https://xxx.workers.dev/SITEKEY/`） |
 | `lap_site_key` | `""` | Lap site key（前台 widget 初始化用，非敏感） |
@@ -99,6 +108,13 @@
 | Key | 默认值 | 说明 |
 |---|---|---|
 | `friend_apply_enabled` | `true` | 前台「友情链接」页开放自助申请表单（关闭后仅后台手动添加） |
+| `friend_links_title` | `友情链接` | 前台「友情链接」页标题（**后台友链管理页顶部的「页面显示内容」编辑**，/site-config 下发） |
+| `friend_links_intro` | `""` | 前台「友情链接」页介绍文案（空 = 不显示介绍段，上限 200 字） |
+
+### 人机验证默认开启说明
+`lap_enabled` 与 `lap_on_login` 默认值均为 `true`：新部署零配置开箱即用（内置默认 Lap 实例），**管理员登录后台即带人机验证**。想关闭：后台「安全防护」页取消勾选，不要改代码默认值。
+
+**POW（自研）默认 `pow_enabled=false`**： Lap 依赖 workers.dev（服务器不通外网/不能用代理时不可达），POW 零外部依赖但需要显式开启。服务器网络受限时推荐 `captcha_provider=pow` + `pow_enabled=true`（后台「安全防护」页三选一卡片 + 场景开关 + 难度/TTL）。
 
 ---
 

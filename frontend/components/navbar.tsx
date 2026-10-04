@@ -9,7 +9,9 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Moon,
   Search,
+  Sun,
   User,
   UserPlus,
   X,
@@ -19,10 +21,13 @@ import { Spinner } from '@/components/page-loader'
 import { useAuth } from '@/lib/auth-context'
 import { useSiteConfig } from '@/components/site-config-context'
 import { MenuIcon } from '@/components/menu-icon'
+import { useTheme } from '@/components/theme'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 export function Navbar() {
   const { user, loading, logout } = useAuth()
   const site = useSiteConfig()
+  const { theme } = useTheme()
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -187,6 +192,8 @@ export function Navbar() {
                 className="w-44 rounded-lg border border-border bg-card py-1.5 pl-9 pr-3 text-sm outline-none transition-[border-color,box-shadow] focus:w-56 focus:border-accent focus:ring-2 focus:ring-accent/20"
             />
           </form>
+
+          <ThemeToggle className={iconBtn} />
 
           {loading ? (
             <Spinner className="hidden h-9 w-9 md:inline-flex" />
@@ -355,6 +362,20 @@ export function Navbar() {
           </nav>
 
           <div className="border-t border-border" />
+
+          <div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5">
+            <span className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-card text-foreground">
+                {theme === 'dark' ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )}
+              </span>
+              外观模式
+            </span>
+            <ThemeToggle className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
+          </div>
 
           {user ? (
             <div className="space-y-1">

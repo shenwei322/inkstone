@@ -91,9 +91,10 @@ func (h *SettingsHandler) SiteConfig(c *gin.Context) {
 	if h.captcha != nil {
 		cfg := h.captcha.PublicConfig()
 		// geetest 保持顶层键名不变（前台配置读取路径兼容），
-		// 新增 lap 配置与 captcha_provider 选择器
+		// 新增 lap / pow 配置与 captcha_provider 选择器
 		out["geetest"] = cfg["geetest"]
 		out["lap"] = cfg["lap"]
+		out["pow"] = cfg["pow"]
 		out["captcha_provider"] = cfg["provider"]
 	}
 	c.JSON(http.StatusOK, out)

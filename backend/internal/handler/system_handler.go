@@ -9,10 +9,11 @@ import (
 
 type SystemHandler struct {
 	settings *service.SettingsService
+	repoRoot string
 }
 
-func NewSystemHandler(settings *service.SettingsService) *SystemHandler {
-	return &SystemHandler{settings: settings}
+func NewSystemHandler(settings *service.SettingsService, repoRoot string) *SystemHandler {
+	return &SystemHandler{settings: settings, repoRoot: repoRoot}
 }
 
 // Info handles GET /api/v1/system/info.
@@ -21,5 +22,5 @@ func (h *SystemHandler) Info(c *gin.Context) {
 	if err != nil {
 		name = "Blog 平台"
 	}
-	c.JSON(http.StatusOK, gin.H{"info": service.BuildSystemInfo(name)})
+	c.JSON(http.StatusOK, gin.H{"info": service.BuildSystemInfo(name, h.repoRoot)})
 }

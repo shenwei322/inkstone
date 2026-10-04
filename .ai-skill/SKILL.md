@@ -12,15 +12,18 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 项目 | 值 |
 |---|---|
 | 模块名 | `github.com/shenwei/inkstone/backend` |
-| 当前版本 | `Beta1.26` |
+| 当前版本 | `Beta1.27`（`AppVersion` 常量为准，见 `internal/service/system_service.go`） |
 | 后端端口 | `8080`（API 前缀 `/api/v1`） |
-| 前端端口 | `3000`（Next.js App Router） |
+| 前端端口 | `3000`（Next.js App Router，访客站） |
+| 管理后台 | 博客站内 `/admin`（`frontend/app/admin`，21 页全部管理功能） |
 | 数据库 | PostgreSQL 16（GORM AutoMigrate 自动建表） |
 | 认证 | JWT 双令牌（access 15min / refresh 7d） |
 | 角色 | `admin` / `user`（RBAC 中间件） |
 | 用户状态 | `active` / `banned` |
 | 文章状态 | `draft` / `published` |
 | 敏感字段 | SMTP 密码、验证码密钥（API 只返回 `xxx_set` 布尔值，不下发明文） |
+| 在线更新 | 后台「系统更新」。两套源（`UPDATE_SOURCE`）：默认 `commits`（检查上游提交 → 下载源码镜像包 → 校验 → 备份 → 替换源码 → 宿主代理重建）；`releases`（GitHub Releases：tag 版本号 + 发布说明 + 镜像包资产 → 宿主代理 `docker load` + compose 重建）。代码在 `internal/service/update_*.go`（`update_release.go`  Releases 源）+ `deploy/update-agent.sh` / `.ps1` |
+| 人机验证 | provider 三选一（`captcha_provider`）：`lap`（默认，Cap 的 CF Workers 分支）/ `pow`（自研工作量证明 v2：内存表+本地交互信号，零外部依赖，服务器不通外网/不能用代理也能用）/ `geetest`（极验四代）；场景与强度参数在后台「安全防护」页 |
 | Markdown 渲染 | 编辑前端 `marked` → 保存 HTML（后端 bluemonday 消毒）；预览高亮用 `highlight.js/lib/common`（主题在 `globals.css`，仅前端 DOM 后处理，不入库） |
 | 动画库 | GSAP 3.15（framer-motion 已彻底移除）；`components/motion.tsx` 封装 + `route-loader.tsx` 路由进度条 + `page-loader.tsx` 加载动画，**无 `.skeleton` 骨架图** |
 
@@ -32,13 +35,14 @@ backend/
   internal/handler/               # HTTP 层：参数绑定、调用 service、错误映射
   internal/handler/log_record.go  # recordOp：操作日志辅助（自动带当前用户/IP/UA）
   internal/service/               # 业务逻辑层
+  internal/service/update_*.go    # 在线更新：检查/下载/解压/替换/回滚/重建（见 backend.md）
   internal/repository/            # GORM 数据访问层
   internal/middleware/            # Auth / CORS / 限流 / 安全头 / 流量统计
   internal/model/                 # 数据模型（GORM 结构体）
   pkg/config/                     # 环境变量配置
   pkg/mailer/                     # SMTP 发信
-frontend/
-  app/                            # Next.js 路由（页面）
+frontend/                         # 访客站（Next.js App Router）
+  app/                            # Next.js 路由（页面）；app/admin/ = 站内管理后台（21 页）
   components/                     # 可复用组件
   lib/api.ts                      # 类型化 API 客户端（唯一 API 入口）
   lib/types.ts                    # 全部 TypeScript 类型
@@ -48,6 +52,10 @@ frontend/
   components/motion.tsx             # GSAP 动画封装（PageTransition/Reveal/Stagger/Presence/hoverTapScale 等）
   components/route-loader.tsx       # 路由切换 GSAP 顶部进度条（挂在根 layout）
   components/page-loader.tsx        # PageLoading / RowLoading / Spinner 加载动画（替代骨架图）
+deploy/
+  update-agent.sh / .ps1          # 宿主更新代理：读待更新清单 → 重建 → 重启 → 回报结果
+  scripts/rebuild.sh / .ps1       # 本机（二进制/systemd）部署的重建脚本，由后端自动拉起
+  nginx/inkstone.conf             # 生产 Nginx 配置（改完必须同步服务器）
 ```
 
 **详细文档：**
@@ -134,7 +142,7 @@ docker compose -f docker-compose.dev.yml up -d
 # 后端
 cd backend && go run ./cmd/server
 
-# 前端
+# 前端（访客站）
 cd frontend && npm run dev
 ```
 
@@ -147,7 +155,9 @@ cd frontend && npm run dev
 
 ```bash
 # 后端
-cd backend && gofmt -w . && go vet ./... && go build -o server.exe ./cmd/server
+cd backend && gofmt -w . && go vet ./... && go build -tags timetzdata -o server.exe ./cmd/server
+# timetzdata 不是可选项：Windows 上不带它，time.LoadLocation("Asia/Shanghai")
+# 报 "unknown time zone Asia/Shanghai"，后端连库 DSN 解析直接失败起不来
 
 # 前端
 cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
@@ -163,10 +173,11 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 |---|---|
 | PowerShell 内联中文会损坏文件 | 用 Edit/Write 工具改文件，**不要用 PowerShell 字符串替换处理中文** |
 | 前端新增 site-config 字段要双层透传 | `settings_service.Public()` 下发 + `site-config-context.tsx` 解构，缺一不可 |
-| 设置保存前端要显式带上字段 | `admin/settings/page.tsx` 的 payload 是白名单，新增设置项必须手动加入 |
-| 验证码配置无效应放行 | 见 `captcha_service.go` / `geetest_service.go` / `lap_service.go`：未配置密钥/服务不可达时 `return nil`（避免锁死用户） |
+| 设置保存前端要显式带上字段 | `frontend/app/admin/settings/page.tsx` 的 payload 是白名单，新增设置项必须手动加入 |
+| 验证码配置无效应放行 | 见 `captcha_service.go` / `geetest_service.go` / `lap_service.go` / `pow_service.go`：未配置密钥/服务不可达时 `return nil`（避免锁死用户） |
 | rAF gate 句柄禁用 useRef | 滚动监听「`if (raf) return; raf = requestAnimationFrame(...)`」的 gate 句柄必须是 effect 内**局部变量**（`article-toc.tsx` / `back-to-top.tsx` 同款）。用 `useRef` 时 StrictMode 先 cleanup（`cancelAnimationFrame`）再重放 effect，useRef 残留非零 id 让 gate 永久关闭 → setState 永不执行（症状：回顶按钮/目录高亮打死不出现，且无任何报错）。BackToTop 真实踩过：2026-10 修复 |
 | Lap 同源代理与两段式流程 | 访客端全走后端代理 `/api/v1/lap/*`（widget.js/wasm/challenge/redeem 白名单转发），浏览器零接触 workers.dev；后端两级网络兜底 `lap_resolve_ip`（DNS 污染固定 IP）/ `lap_http_proxy`（TUN 黑洞 CF 段）。代理必须透传浏览器 UA（Go 默认 UA 被 CF 403）。Cap widget 的 PoW 是**静默 speculative**（mousemove/touchstart/keydown 触发，redeem 后不派发事件），**必须用户真实点击**（mousedown）才 solve——e2e 漏点击会永远卡 initial 且无报错。**Transport 必须 `DisableKeepAlives` + `LapDo` 重试一次**：本地代理（clash）切换节点后缓存坏连接 EOF 而 POST 不重试 → 持续 502 |
+| POW（自研工作量证明）provider | `pow_service.go` 挑战存内存池（上限 1 万、一次性消费 + TTL、签发 30 次/分钟/IP 限流、参数签发时快照）。**v2 消耗用户本地资源**：8MB xorshift128 内存表（`pow_memory_mb`）+ 多轮「查表-混合」SHA-256（`pow_rounds`）+ 真人交互信号（`pow_min_events` 次鼠标/触摸/按键，时间窗校验）。前端 `lib/sha256.ts`（纯 JS）+ `lib/pow.ts`（crypto.subtle 优先、纯 JS 回退），难度 1-6 默认 4（v2 默认参数 ≈1-3s）。**challenge 存内存 = 仅单实例有效**（单 backend 容器无碍；多副本需共享存储）。服务器不通外网/不能用代理时选它 |
 | Lap 零配置开箱即用 | `captcha_provider` 默认 `lap`；`lap_defaults.go` 内置默认实例（endpoint/siteKey/secret），DB 字段留空即回退内置值（`LapEffectiveConfig`），自托管在后台覆盖或设 `INKSTONE_LAP_SECRET`。场景开关默认关，后台一键开启。后台保存时 lap_secret_key 空值 = 保持原值（maskKeys 语义）→ **不会被内置默认悄悄顶掉**。**数据安全三层**：① 后台 security 页不渲染 5 个技术字段且 save payload 显式剔除（防误清空）② 后端 `lapHiddenKeys` 对 4 个技术键做空值保护（API 直调空串也保持原值）③ 配置丢失回退内置默认实例，验证码不会被打挂。代理端点做路径-方法配对（静态 GET / 交互 POST），畸形请求 404 |
 | 验证码 provider 互斥 | `useCaptcha` 门面（`components/captcha.tsx`）按 `captcha_provider` 分发；`useGeetestCaptcha` 与 `useLapCaptcha` 两个 hook 都会被调用（React 规则），未选中的 `enabled=false` 不加载 gt4.js / widget.js。新增 provider 保持此模式 |
 | lap-widget 一次性 | Lap 的 PoW widget 完成后内部状态为 done，**无法原地复位**；每次打开验证弹窗必须 `box.replaceChildren()` 重建 `lap-widget` 元素并重挂 `solve`/`error` 监听。widget.js 地址从 `lap_api_endpoint` 推导 origin + `/widget.js`，脚本按 URL 全局缓存，开启时即预加载 |
@@ -201,4 +212,14 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | 动画卡顿四类源 | ①**`width` 动画**每帧 layout 重排（长页面/远程桌面 CPU 合成下卡死）——进度条一律 `origin-left` + `scaleX`；输入框 focus 展宽（如 navbar 搜索框 `w-44 → w-56`）不要写 `transition-all`，改 `transition-[border-color,box-shadow]` 瞬时展宽；②**循环动画空转**——`repeat:-1` 必须走 `createLoop`（页面隐藏自动 pause），多 ring（如 RowLoading 每行一环）合并为单环；③**blur(filter) 元素做 transform 动画**——每帧重绘模糊区域（CPU 合成下极重），装饰光斑只用 `opacity` 呼吸（侧栏倒计时光斑 `blur-xl` 已从 scale 改 opacity）；④**滚动 handler 逐帧查 DOM**——rAF 回调里逐项 `getElementById`+`getBoundingClientRect` 会反复强制同步 layout，headings 等 DOM 在 effect 内缓存（article-toc 已改）。长列表 stagger 总时长 cap 0.5s（`motion.tsx` 已内置） |
 | render 阶段不能访问 ref | ESLint（react-hooks v6 新规则）报 `react-hooks/refs`：render 体、`useState` lazy initializer、`useRef(初始值)` 里读写 `xxxRef.current` 全部算违规。渲染期要用的派生数据存 `useState`（如编辑器的 baseline/恢复的本地草稿），ref 只用于事件 handler/effect 内的可变引用。DOM 派生数据（如文章目录）可用 `useMemo + DOMParser` 解析 props 里的 HTML 字符串，不触碰 ref |
 | `prose` 类零效果 = Markdown 无样式 | 全站正文/编辑器预览依赖的 `prose` 来自 **@tailwindcss/typography 插件**；没装它（postcss.config 只有 @tailwindcss/postcss）时 `prose/prose-neutral/dark:prose-invert` 全部无效，表格退化成浏览器默认裸表。已在 `globals.css` 用 `@plugin "@tailwindcss/typography"` 引入，并定制 `.prose table` 框线/表头底色/斑马纹 |
-| 运行时改 favicon 不生效 | React 19/Next 16 下用 querySelector/appendChild 改 `link[rel=icon]` 会被 metadata hoist 覆盖或清理。把 `<title>`/`<link rel="icon">` 渲染进组件树（`components/site-head.tsx`）交给 React 管理 |
+| 运行时改 favicon 不生效 | React 19/Next 16 下用 querySelector/appendChild 改 `link[rel=icon]` 会被 metadata hoist 覆盖或清理。把 `<link rel="icon">` 渲染进组件树（`components/site-head.tsx`）交给 React 管理 |
+| 后台改 favicon / 站点名前台不生效（2026-10 修，四个连环坑） | ①**`SiteHead` 必须渲染在 `SiteConfigProvider` 内层**——曾放在 `app/layout.tsx` 的 `</body>` 前而 `SiteConfigProvider` 在 `components/providers.tsx` 里，`useSiteConfig()` 拿到 `DEFAULT_CONFIG`（`siteFavicon: ''`），favicon 永远回退 `/icon.svg`。症状：head 里 `<link rel="icon" href="/icon.svg">` 而 DB 有值。现在 `<SiteHead />` 放在 `<Providers>` 内 `<MaintenanceGate>` 前。②**Next file convention 图标会与动态 link 抢占**——`app/icon.svg`、`app/favicon.ico` 会被 Next 自动注入静态 `<link rel="icon">`，与 hoist 的动态 link 并存（实测 head 出现 3 个 rel=icon，各浏览器取哪个不确定）。已删除这两个文件，默认图标走 `public/icon.svg`（SiteHead 的 `/icon.svg` 回退）。③**`<title>` 不要交给 React hoist，也不要用 `document.title =`**——React 19 的 hoist `<title>` 不复用 Next metadata 已注入的节点，head 出现多个 title 而 Chrome 只读第一个（静态 `InkStone`）；`document.title =` 赋值也会被 Next 的 metadata 管理覆盖（实测 navbar 已显示新站点名而 title 仍旧）。正解：`app/layout.tsx` 删掉静态 `export const metadata`，改用 `export async function generateMetadata()` fetch `${NEXT_PUBLIC_API_URL}/site-config` 取 `site_name`/`site_description`（`next: { revalidate: 30 }` 与后端 settings 30s 缓存对齐，try/catch 兜底不可 500）；副作用是全站从 Static/Dynamic 变 **ISR 30s**。④**改动最多 30s 才可见**：后端 `settings_service` 的 `loadValues` 有 30s 内存缓存（未命中才查库），排查"改了没生效"时先 `curl /api/v1/site-config` 确认接口返回值再怀疑前端。验证用 `msedge --headless=new --dump-dom --virtual-time-budget=15000` 抓 hydration 后的 head |
+| 在线更新：容器内没有 docker 权限 | 后端能下载/校验/替换源码，但**不能重建自己**（容器里没有 docker socket、没有 systemd）。设计上把「重建 + 重启」交给宿主代理 `deploy/update-agent.sh`（或 `.ps1`）：后端写 `UPDATE_DIR/pending-update.json`，代理轮询后 `docker compose build && up -d`，再写回 `update-result.json` + `deployed-commit.json`。**别在 handler 里直接 exec docker**（模式是 `UPDATE_WAITING_AGENT=true`）；本机部署才走 `deploy/scripts/rebuild.sh` |
+| 两套更新源：commits vs releases | `UPDATE_SOURCE` 决定协议。默认 `commits`：commits API 比提交 + codeload/`UPDATE_MIRROR` 源码包 → 替换源码 → 重建。`releases`：`/repos/{owner}/{name}/releases/latest` 取 `tag_name`（语义化，如 `v1.28.0`）+ `body`（发布说明）+ `assets` 里的镜像包（正则 `UPDATE_IMAGE_ASSET`，默认 `inkstone-images-.*\.tar$`）→ 下载到 `UPDATE_DIR/images/` → 清单 `kind=release_image` → 宿主代理 `docker load` + `compose up -d`（更新代理两个脚本都已支持）。版本比较在 `update_release.go` 的 `parseVersionValue`（兼容 `Beta1.27` 与 `v1.28.0`，预发布低于正式版），本地版本读 `deployed-version.json`（`versionPath()`），没有记录时回落 `AppVersion`。**releases 模式不走 `looksLikeHash`/commit 语义**：`Apply` 的目标是版本 tag，`pendingState.Kind=release_image`，回滚点是安装历史 `release-history.json` 里的旧镜像包（不是源码备份） |
+| 发布镜像包 Release | 上游发版 = 打 Release（tag 版本号）+ 上传镜像包资产。打包用 `deploy/package-images.ps1`（Windows）/ `deploy/package-images.sh`（Linux）：构建 `inkstone-backend` / `inkstone-frontend` 的 `<版本>` 与 `latest` 两组 tag 并 `docker save` 成 `dist/inkstone-images-<版本>.tar`（附 `.sha256`）。tar 里同时含 `<版本>` 与 `latest` 两组 tag（回滚时旧版本 tag 才能留在镜像列表里，别只打 latest）。前端 `NEXT_PUBLIC_API_URL` 是**构建期注入**，用 `INKSTONE_PUBLIC_API_URL` / `-ApiUrl` 按部署域名传 |
+| 更新别覆盖站点数据与密钥 | `update_swap.go` 的 `guardedPrefixes` + `protectedSegment` 保证 `data/`、`uploads/`、`files/`、`node_modules/`、`.git/`、`.update/`、`.next/`、`.tools/` 与任何层级的 `.env*` **永不被上游源码覆盖**。判定分两层：**顶层前缀匹配**（`guardedPrefixes`）保护 `uploads/`、`files/` 这类顶层目录；**路径段匹配**（`protectedSegment`）只列 `data`、`node_modules`、`.git`、`.update`、`.next`、`.tools`——**别把 `files`/`uploads` 加进段匹配**：仓库里真实存在 `frontend/app/admin/files/page.tsx`，加了会让上游对这个页面的改动被静默跳过（真实踩过）。新增受保护目录要同步三处（两个函数 + `skipSourceDir`）并在 `TestIsGuardedPath` 补用例 |
+| 更新目录必须是绑定挂载 | 后端把待更新清单写在 `UPDATE_DIR`（默认 `/app/data/update`），宿主代理按 `INKSTONE_UPDATE_DIR` 轮询它。如果该目录落在**命名卷**里，宿主拿不到稳定路径 → 页面永远停在「等待宿主代理」。`docker-compose.prod.yml` 已加 `./data/update:/app/data/update` 绑定挂载，别删 |
+| UpdateService 的 Mutex 不可重入 | `reportStage(func(st *UpdateStage){...})` 的闭包在**持锁**状态下执行：里面只能改 `st` 的字段，调用任何会加锁的方法（`Mode`/`rebuildMessage`/`snapshot`…）都会**死锁**。需要这类值先在闭包外算好（`rebuildHint := s.rebuildMessage()` 的写法就是踩坑后改的） |
+| 已部署版本 vs 运行中版本 | `data/deployed-commit.json` 只说明「上一次部署到哪一版」，不代表进程已重启。判断更新是否生效要用 `GET /api/v1/system/info` 的 `commit`（优先级 `-ldflags BuildCommit` > 部署记录 > `INKSTONE_COMMIT`）。更新页的 `pending` 会在部署记录等于目标提交后自动收敛 |
+| 更新后前端不生效 | 前端是**构建期**注入 `NEXT_PUBLIC_API_URL` 的产物：只替换源码不重新 build 前端镜像，页面仍是旧代码。宿主代理的 docker 模式已包含 `compose build`；手工更新别忘了 `--build` |
+| 更新写入的文件属主是 root | 后端容器以 root 跑，写进 `./:/app/src` 的文件在宿主属主为 root，之后普通用户 `git pull`/`git status` 会报 dubious ownership。处理：`git config --global --add safe.directory <仓库>` + `sudo git`，或更新后 `chown -R` 回部署用户（详见 `references/deployment.md`） |

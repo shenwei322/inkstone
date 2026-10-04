@@ -34,6 +34,15 @@ interface SecurityForm {
   lap_on_login: boolean
   lap_on_register: boolean
   lap_on_comment: boolean
+  pow_enabled: boolean
+  pow_on_login: boolean
+  pow_on_register: boolean
+  pow_on_comment: boolean
+  pow_difficulty: number
+  pow_ttl_minutes: number
+  pow_memory_mb: number
+  pow_rounds: number
+  pow_min_events: number
 }
 
 function Toggle({
@@ -131,7 +140,7 @@ export default function AdminSecurityPage() {
         security_block_minutes: toNum(s.security_block_minutes, 15),
         email_code_on_register: toBool(s.email_code_on_register, false),
         email_code_on_login: toBool(s.email_code_on_login, false),
-        captcha_provider: s.captcha_provider === 'lap' ? 'lap' : 'geetest',
+        captcha_provider: s.captcha_provider === 'lap' ? 'lap' : s.captcha_provider === 'pow' ? 'pow' : 'geetest',
         geetest_enabled: toBool(s.geetest_enabled, false),
         geetest_captcha_id: typeof s.geetest_captcha_id === 'string' ? s.geetest_captcha_id : '',
         geetest_captcha_key: '',
@@ -143,6 +152,15 @@ export default function AdminSecurityPage() {
         lap_on_login: toBool(s.lap_on_login, false),
         lap_on_register: toBool(s.lap_on_register, false),
         lap_on_comment: toBool(s.lap_on_comment, false),
+        pow_enabled: toBool(s.pow_enabled, false),
+        pow_on_login: toBool(s.pow_on_login, false),
+        pow_on_register: toBool(s.pow_on_register, false),
+        pow_on_comment: toBool(s.pow_on_comment, false),
+        pow_difficulty: toNum(s.pow_difficulty, 4),
+        pow_ttl_minutes: toNum(s.pow_ttl_minutes, 10),
+        pow_memory_mb: toNum(s.pow_memory_mb, 8),
+        pow_rounds: toNum(s.pow_rounds, 4),
+        pow_min_events: toNum(s.pow_min_events, 3),
       })
     }, 0)
     return () => clearTimeout(t)
@@ -305,12 +323,12 @@ export default function AdminSecurityPage() {
             选择验证码提供方。登录 / 注册 / 发表评论提交时将按所选方案弹窗验证，
             阻挡机器脚本与批量攻击。
           </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <button
               type="button"
               onClick={() => update('captcha_provider', 'geetest')}
               className={`rounded-xl border p-4 text-left transition-colors ${
-                form.captcha_provider !== 'lap'
+                form.captcha_provider === 'geetest'
                   ? 'border-accent bg-accent/5'
                   : 'border-border hover:border-accent/40'
               }`}
@@ -319,10 +337,10 @@ export default function AdminSecurityPage() {
                 <p className="text-sm font-semibold">极验第四代</p>
                 <span
                   className={`flex h-4 w-4 items-center justify-center rounded-full border ${
-                    form.captcha_provider !== 'lap' ? 'border-accent bg-accent' : 'border-border'
+                    form.captcha_provider === 'geetest' ? 'border-accent bg-accent' : 'border-border'
                   }`}
                 >
-                  {form.captcha_provider !== 'lap' && <Check className="h-3 w-3 text-white" />}
+                  {form.captcha_provider === 'geetest' && <Check className="h-3 w-3 text-white" />}
                 </span>
               </div>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -353,9 +371,139 @@ export default function AdminSecurityPage() {
                 Cloudflare Workers，无需商业账号。
               </p>
             </button>
+            <button
+              type="button"
+              onClick={() => update('captcha_provider', 'pow')}
+              className={`rounded-xl border p-4 text-left transition-colors ${
+                form.captcha_provider === 'pow'
+                  ? 'border-accent bg-accent/5'
+                  : 'border-border hover:border-accent/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold">POW（自研，推荐）</p>
+                <span
+                  className={`flex h-4 w-4 items-center justify-center rounded-full border ${
+                    form.captcha_provider === 'pow' ? 'border-accent bg-accent' : 'border-border'
+                  }`}
+                >
+                  {form.captcha_provider === 'pow' && <Check className="h-3 w-3 text-white" />}
+                </span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                零外部依赖：挑战由本站后端签发、计算在访客浏览器本地完成，
+                服务器无需访问任何第三方服务。
+              </p>
+            </button>
           </div>
 
-          {form.captcha_provider === 'lap' ? (
+          {form.captcha_provider === 'pow' ? (
+            <>
+              <div className="mt-4 divide-y divide-border border-t border-border">
+                <Toggle
+                  checked={form.pow_enabled}
+                  onChange={(v) => update('pow_enabled', v)}
+                  label="启用 POW 人机验证"
+                  desc="总开关；关闭后下方场景全部失效"
+                />
+                <Toggle
+                  checked={form.pow_on_login}
+                  onChange={(v) => update('pow_on_login', v)}
+                  label="登录需人机验证"
+                  desc="用户点击登录时先弹窗验证"
+                />
+                <Toggle
+                  checked={form.pow_on_register}
+                  onChange={(v) => update('pow_on_register', v)}
+                  label="注册需人机验证"
+                  desc="抵御批量注册小号"
+                />
+                <Toggle
+                  checked={form.pow_on_comment}
+                  onChange={(v) => update('pow_on_comment', v)}
+                  label="发表评论需人机验证"
+                  desc="评论/发帖提交前先验证"
+                />
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">难度（答案前导零个数）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={6}
+                    value={form.pow_difficulty}
+                    onChange={(e) => update('pow_difficulty', Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    1-6，越大越难。4 约 1-3 秒（推荐），6 需数十秒以上
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">挑战有效期（分钟）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={form.pow_ttl_minutes}
+                    onChange={(e) => update('pow_ttl_minutes', Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    超过有效期未提交需重新领取挑战（一次性消费）
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">本地内存（MB）</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={32}
+                    value={form.pow_memory_mb}
+                    onChange={(e) => update('pow_memory_mb', Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    每次验证在访客浏览器构建并随机访问的内存表，越大越拖慢批量并行（默认 8）
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">表混合轮数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={form.pow_rounds}
+                    onChange={(e) => update('pow_rounds', Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    每轮一次随机查表 + 一次 SHA-256，直接线性拉高单次成本（默认 4）
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">本地交互事件数</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={form.pow_min_events}
+                    onChange={(e) => update('pow_min_events', Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    需采集的鼠标/触摸/按键次数（默认 3；0=关闭该检查，纯算法模式）
+                  </p>
+                </div>
+              </div>
+              <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                说明：自研工作量证明 v2——消耗的都是访客本地资源：内存表（{form.pow_memory_mb}MB × {form.pow_rounds} 轮）
+                拖慢算力集群并行，真人交互信号让纯脚本难以复刻；挑战由本站后端签发、服务端零成本只校验一次。
+                参数签发时快照生效，调整后只影响新挑战。与 Lap 二选一即可，无需密钥配置。
+              </p>
+            </>
+          ) : form.captcha_provider === 'lap' ? (
             <>
               <div className="mt-4 divide-y divide-border border-t border-border">
                 <Toggle

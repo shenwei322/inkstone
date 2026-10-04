@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
+import { inputClass } from '@/lib/ui'
 
 interface Props {
   value: string
@@ -11,6 +12,8 @@ interface Props {
   placeholder?: string
   className?: string
   autoComplete?: string
+  /** 供外部 <label htmlFor> 关联 */
+  id?: string
 }
 
 /**
@@ -26,8 +29,10 @@ export function SecretInput({
   onChange,
   isSet = false,
   placeholder,
-  className = '',
+  // 默认套用全站统一样式：漏传时会渲染成裸 input，无 w-full 会把圆角卡片撑破
+  className = inputClass,
   autoComplete = 'new-password',
+  id,
 }: Props) {
   const [visible, setVisible] = useState(false)
   // 用户是否已开始编辑（聚焦或输入过）
@@ -42,6 +47,7 @@ export function SecretInput({
     <div className="relative">
       <input
         type={visible && showEye ? 'text' : 'password'}
+        id={id}
         value={locked ? '••••••••••••' : value}
         onChange={(e) => {
           if (!editing) setEditing(true)

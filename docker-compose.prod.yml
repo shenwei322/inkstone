@@ -34,9 +34,42 @@ services:
       DB_NAME: ${DB_NAME:-blog_platform}
       JWT_SECRET: ${JWT_SECRET:?请在 .env 设置 JWT_SECRET}
       FRONTEND_URL: ${FRONTEND_URL:-https://blog.shenv.top}
+      ADMIN_URL: ${ADMIN_URL:-https://admin.blog.shenv.top}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://blog.shenv.top}
+      # —— 在线更新（后台 → 系统更新）——
+      # 后端下载并替换源码；重建由宿主更新代理完成：
+      #   deploy/update-agent.sh（Linux） / deploy/update-agent.ps1（Windows）
+      UPDATE_ENABLED: ${UPDATE_ENABLED:-true}
+      UPDATE_REPO_URL: ${UPDATE_REPO_URL:-https://github.com/shenwei234/inkstone}
+      UPDATE_BRANCH: ${UPDATE_BRANCH:-main}
+      # commits（默认，源码包替换源码）/ releases（GitHub Releases 镜像包，docker load 安装）
+      UPDATE_SOURCE: ${UPDATE_SOURCE:-commits}
+      UPDATE_MIRROR: ${UPDATE_MIRROR:-https://gh-proxy.com/https://github.com/{owner}/{name}/archive/{commit}.tar.gz}
+      UPDATE_GITHUB_API: ${UPDATE_GITHUB_API:-https://api.github.com}
+      UPDATE_TOKEN: ${UPDATE_TOKEN:-}
+      UPDATE_LATEST_API: ${UPDATE_LATEST_API:-}
+      UPDATE_COMMITS_API: ${UPDATE_COMMITS_API:-}
+      UPDATE_COMPARE_API: ${UPDATE_COMPARE_API:-}
+      # releases 模式：Release 接口 / 镜像包资产名匹配 / 大小上限 / 安装用 compose / 部署版本记录
+      UPDATE_RELEASES_API: ${UPDATE_RELEASES_API:-}
+      UPDATE_IMAGE_ASSET: ${UPDATE_IMAGE_ASSET:-}
+      UPDATE_IMAGE_MAX_MB: ${UPDATE_IMAGE_MAX_MB:-2048}
+      UPDATE_COMPOSE_FILE: ${UPDATE_COMPOSE_FILE:-}
+      UPDATE_VERSION_FILE: ${UPDATE_VERSION_FILE:-}
+      # 源码目录挂载点（见下方 volumes）：更新会替换这里的源码文件
+      UPDATE_SOURCE_DIR: ${UPDATE_SOURCE_DIR:-/app/src}
+      # 更新工作目录：必须与宿主代理轮询的目录**是同一个**
+      # （见下方 ./data/update 绑定挂载；宿主侧设 INKSTONE_UPDATE_DIR=./data/update 绝对路径）
+      UPDATE_DIR: ${UPDATE_DIR:-/app/data/update}
+      UPDATE_WAITING_AGENT: ${UPDATE_WAITING_AGENT:-true}
     volumes:
       - uploads_data:/app/data
+      # 源码目录：让后端把新版源码写入宿主的源码树，宿主代理再据此重建。
+      # 不需要在线更新时可注释掉（并把 UPDATE_ENABLED 设为 false）。
+      - ./:/app/src
+      # 更新目录：绑定到宿主 ./data/update，宿主代理才能读到待更新清单
+      # （放在命名卷里宿主拿不到路径，代理会永远等不到清单）
+      - ./data/update:/app/data/update
     # 最小权限：Go 静态服务无需任何 capability；被 RCE 时降低影响面
     cap_drop:
       - ALL
