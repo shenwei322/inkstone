@@ -132,6 +132,25 @@ middleware.RequireRole(model.RoleAdmin)
 单源白名单 + credentials。**访客站与独立后台双源**：`main.go` 传 `[]string{cfg.FrontendURL, cfg.AdminURL}`（去重后），后台跨源部署（API 指向另一域名）时才不会被拦；同源反代（默认）无感。
 白名单来自 `FRONTEND_URL`。
 
+### CachePolicy（`middleware/cache.go`）
+
+全站此前没有任何 `Cache-Control`，后果有两端：中间层自行决定缓存行为
+（有的把 `/auth/me` 连 token 一起缓存，换个账号看到上一个人的资料），
+而真正可长缓存的 `/uploads` 反而每次回源。
+
+策略是**默认不缓存 + 白名单长缓存**，不是反过来：
+
+| 路径 | Cache-Control |
+|---|---|
+| `/uploads/*` | `public, max-age=31536000, immutable` |
+| `/articles`、`/categories`、`/tags`、`/feed.xml`、`/sitemap`、`/site-config` | `public, max-age=60, stale-while-revalidate=300` |
+| 其余（`/auth/me`、`/admin/**`、写操作） | `private, no-cache` |
+| 任何 ≥400 响应 | `no-store` |
+
+安全默认可预期：新增接口忘记配置时是"多走一次后端"，不会是"用户看到别人的数据"。
+`/uploads` 敢长缓存是因为文件名带上传时间戳，内容不会原地变；文章正文改了 URL 不变，
+所以**不能**长缓存。handler 已显式设过 `Cache-Control` 时不覆盖（文件下载带 ETag 那条路径）。
+
 ---
 
 ## 核心 Service 说明
@@ -155,6 +174,23 @@ middleware.RequireRole(model.RoleAdmin)
 | `Related(articleID, limit)` | 相关文章（共同标签 ≥2 > 1 > 同分类），只取卡片字段 |
 | `Neighbors(articleID)` | 上一篇（更新的）/ 下一篇（更旧的） |
 | `Restore(id)` / `Purge(id)` / `Trash(page, pageSize)` | 回收站三件套 |
+
+**文章新字段的判定规则**（`article_service.go`）：
+
+| 字段 | 空值/默认 | 特殊规则 |
+|---|---|---|
+| `excerpt` | 空 = 自动从正文生成 | `resolveExcerpt`：作者填了就用作者的，**只有空白的摘要也算没填** |
+| `is_pinned` | false | 排序加在 `is_pinned DESC` 最前；`order=views` 的热门榜**不掺置顶** |
+| `view_password` | 空 = 不设密码 | 存 bcrypt 哈希，`json:"-"`；明文只在请求体出现；上限 32 字符（bcrypt 只取前 72 字节，超长静默失效）；更新时「传空串=清除、不传=保持」 |
+| `scheduled_at` | nil | 仅 `status=scheduled` 有效；**传过去的时刻会被按已发布处理**，不让文章永远等在一个已过去的时刻 |
+
+`ArticleHasPassword` 用于卡片：`articleCardColumns` 用
+`CASE WHEN view_password IS NULL OR view_password = '' THEN false ELSE true END AS has_password`
+算出布尔值，让相关/邻居卡片显示锁标识，而不必把哈希查出来。
+
+**`normalizeArticleStatus` 的三个分支**：draft/published 原样过；
+scheduled 缺时间报错、时间已过则降级为 published；其余未知状态回落 draft。
+回落 draft 而不是报错——一个拼错的状态值不能让新建文章失败。
 
 `service/excerpt.go` 的 `ExcerptFor(content string, maxRunes int)` 生成摘要：
 显式 excerpt 字段（当前模型无此列）> `<p>` 段落拼接（空段跳过）> 全文剥标签，
@@ -211,6 +247,47 @@ func resolveCover(explicit, content string) string {
     return firstImageURL(content)  // 否则提取正文首个 <img src="...">
 }
 ```
+
+### ScheduledPublisher（`service/scheduled_publisher.go`）
+
+每分钟把到点的 `scheduled` 文章改成 `published`。
+
+用轮询而不是数据库定时任务：项目只用 PostgreSQL，没装 pg_cron，
+引入外部调度器会多一个部署依赖。发布延迟最多 1 分钟，博客场景可接受。
+
+依赖定义成 `ArticlePublisher` 接口（`PublishDue(now)`）而非直接吃
+`*ArticleRepository`：单测能打桩，不必为测一个 cron 循环连数据库。
+失败**不退出循环**，下次 tick 重试——发布失败只是文章晚几分钟公开，
+不该让 goroutine 死掉。`Stop()` 可重复调用（channel二次 close 会 panic）。
+
+`PublishDue` 用一条 UPDATE 而非先查再逐条改：逐条改会在两个 tick 之间
+重复发布同一批（扫到的是同一个集合），UPDATE 天然幂等。
+`published_at` 只在为空时写 now——文章可能带着预计发布时间创建，
+那才是它名义上的发布时间。
+
+### RevisionService（`service/revision_service.go`）
+
+文章历史版本。模型见 `model.ArticleRevision`，表 `article_revisions`。
+
+- `Snapshot` 在**保存前**留版（`Update` 路径自动接入）。**失败只忽略不返回错误**：
+  版本历史是增强功能，为它让保存失败是拿次要功能拖垮主要功能。
+- 内容与标题都没变时**不留版**：自动保存周期性触发，留几十版
+  一模一样的记录会把有用版本挤出 50 版上限。
+- `Restore` 是「再存一版新的」而非直接覆盖——先给当前内容留版，
+  否则"恢复到第 2 版"这个操作本身不可逆。
+- `NextVersion` 用 `MAX(version)+1` 而非 `COUNT(*)+1`：删掉中间某一版后，
+  COUNT 会让版本号回退与已有版本撞号。
+- `pruneRevisions` 用一条子查询 DELETE 而非先查列表再逐条删：后者在并发
+  保存时可能把刚写进去的新版本也列进待删集合。
+- `ArticleService` 通过 `SetRevisions(RevisionSnapshotter)` 注入。
+  未注入时全部快照静默跳过——不为了可选功能改 `NewArticleService` 签名。
+  **防御写在调用方**（`snapshot` 里判 nil 与 ID==0），因为接口将来可能换实现，
+  契约该由调用方保证，不必每个实现各写一遍判空。
+
+### ExportImportService（`service/export_import_service.go`）
+
+内容导入导出，与 `BackupService` 全站快照是两套东西（区别见 api.md）。
+分类/标签在导出格式里是**名称**而非 ID——ID 是另一套库的私有值。
 
 ### 人机验证（`geetest_service.go` / `lap_service.go` / `pow_service.go` / `captcha_service.go`）
 

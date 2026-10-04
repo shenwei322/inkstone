@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,21 +25,29 @@ func NewArticleHandler(articles *service.ArticleService, logs *service.LogServic
 }
 
 type articleRequest struct {
-	Title      string   `json:"title" binding:"required"`
-	Content    string   `json:"content" binding:"required"`
-	Status     string   `json:"status"`
-	CategoryID *uint    `json:"category_id"`
-	Tags       []string `json:"tags"`
-	Cover      string   `json:"cover"`
+	Title        string     `json:"title" binding:"required"`
+	Content      string     `json:"content" binding:"required"`
+	Status       string     `json:"status"`
+	CategoryID   *uint      `json:"category_id"`
+	Tags         []string   `json:"tags"`
+	Cover        string     `json:"cover"`
+	Excerpt      string     `json:"excerpt"`
+	IsPinned     bool       `json:"is_pinned"`
+	ViewPassword string     `json:"view_password"`
+	ScheduledAt  *time.Time `json:"scheduled_at"`
 }
 
 type articleUpdateRequest struct {
-	Title      *string   `json:"title"`
-	Content    *string   `json:"content"`
-	Status     *string   `json:"status"`
-	CategoryID **uint    `json:"category_id"`
-	Tags       *[]string `json:"tags"`
-	Cover      *string   `json:"cover"`
+	Title        *string     `json:"title"`
+	Content      *string     `json:"content"`
+	Status       *string     `json:"status"`
+	CategoryID   **uint      `json:"category_id"`
+	Tags         *[]string   `json:"tags"`
+	Cover        *string     `json:"cover"`
+	Excerpt      *string     `json:"excerpt"`
+	IsPinned     *bool       `json:"is_pinned"`
+	ViewPassword *string     `json:"view_password"`
+	ScheduledAt  **time.Time `json:"scheduled_at"`
 }
 
 type articleResponse struct {
@@ -55,6 +64,16 @@ type articleResponse struct {
 	CreatedAt   time.Time     `json:"created_at"`
 	UpdatedAt   time.Time     `json:"updated_at"`
 	Author      authorInfo    `json:"author"`
+	// AuthorID 单独列出而非只放在 author 对象里：stripLockedContent
+	// 要判断"这是不是当前用户自己的文章"，用 author.id 可达同样目的，
+	// 但后台与前台对 author 的序列化要求不同，单列一个字段更直接。
+	AuthorID    uint       `json:"author_id"`
+	Excerpt     string     `json:"excerpt"`
+	IsPinned    bool       `json:"is_pinned"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
+	// HasPassword 只告知"这篇设了访问密码"，绝不下发密码本身。
+	// 前端据此渲染密码输入框。
+	HasPassword bool `json:"has_password"`
 }
 
 type authorInfo struct {
@@ -74,6 +93,18 @@ type tagInfo struct {
 	Slug string `json:"slug"`
 }
 
+// resolveExcerptForResponse 决定响应里返回的摘要。
+//
+// 显式摘要优先；为空时用正文现算一份。这里不在保存时兜底生成并写库，
+// 是因为作者可能只想让某篇文章"列表显示这段、正文里没有"——
+// 写库会把这份意图固化成数据，之后改正文时摘要不跟着变，反而更难维护。
+func resolveExcerptForResponse(a *model.Article) string {
+	if strings.TrimSpace(a.Excerpt) != "" {
+		return a.Excerpt
+	}
+	return service.ExcerptFor(a.Content, 0)
+}
+
 func toArticleResponse(a *model.Article) articleResponse {
 	resp := articleResponse{
 		ID:          a.ID,
@@ -90,6 +121,11 @@ func toArticleResponse(a *model.Article) articleResponse {
 			ID:       a.Author.ID,
 			Username: a.Author.Username,
 		},
+		AuthorID:    a.AuthorID,
+		Excerpt:     resolveExcerptForResponse(a),
+		IsPinned:    a.IsPinned,
+		ScheduledAt: a.ScheduledAt,
+		HasPassword: a.ViewPassword != "",
 	}
 	if a.Category != nil {
 		resp.Category = &categoryInfo{ID: a.Category.ID, Name: a.Category.Name, Slug: a.Category.Slug}
@@ -118,12 +154,16 @@ func (h *ArticleHandler) Create(c *gin.Context) {
 	}
 
 	article, err := h.articles.Create(current.ID, service.ArticleInput{
-		Title:      req.Title,
-		Content:    req.Content,
-		Status:     req.Status,
-		CategoryID: req.CategoryID,
-		TagNames:   req.Tags,
-		Cover:      req.Cover,
+		Title:        req.Title,
+		Content:      req.Content,
+		Status:       req.Status,
+		CategoryID:   req.CategoryID,
+		TagNames:     req.Tags,
+		Cover:        req.Cover,
+		Excerpt:      req.Excerpt,
+		IsPinned:     req.IsPinned,
+		ViewPassword: req.ViewPassword,
+		ScheduledAt:  req.ScheduledAt,
 	})
 	if err != nil {
 		recordOp(h.logs, c, model.LogCategoryArticle, "创建文章", fmt.Sprintf("《%s》", req.Title), false)
@@ -158,12 +198,16 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 	// 正文写入已在 service 层经 bluemonday 消毒；这里不需要人机验证——
 	// 调用者已通过 Auth 鉴权，且编辑器保存草稿的交互不适合插入验证码。
 	article, err := h.articles.Update(uint(id), current.ID, service.ArticleUpdate{
-		Title:      req.Title,
-		Content:    req.Content,
-		Status:     req.Status,
-		CategoryID: req.CategoryID,
-		TagNames:   req.Tags,
-		Cover:      req.Cover,
+		Title:        req.Title,
+		Content:      req.Content,
+		Status:       req.Status,
+		CategoryID:   req.CategoryID,
+		TagNames:     req.Tags,
+		Cover:        req.Cover,
+		Excerpt:      req.Excerpt,
+		IsPinned:     req.IsPinned,
+		ViewPassword: req.ViewPassword,
+		ScheduledAt:  req.ScheduledAt,
 	})
 	if err != nil {
 		recordOp(h.logs, c, model.LogCategoryArticle, "更新文章", fmt.Sprintf("文章 #%d", id), false)
@@ -212,7 +256,10 @@ func (h *ArticleHandler) Delete(c *gin.Context) {
 }
 
 // canViewArticle reports whether the current requester may read the article.
-// Published articles are public; drafts are visible only to their author or an admin.
+//
+// 除 published 外的一切状态（draft / scheduled）都只有作者与管理员可见。
+// scheduled 走这条分支是正确的：定时发布还没到点的文章，
+// 提前 5 分钟把人放进去看到正文不是"小的体验瑕疵"，是发布事故。
 func canViewArticle(c *gin.Context, article *model.Article) bool {
 	if article.Status == model.ArticlePublished {
 		return true
@@ -236,6 +283,15 @@ func (h *ArticleHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
 		return
 	}
+	// 密码校验必须同时覆盖 /:id 与 /slug/:slug 两个入口：
+	// 只挡 slug 入口的话，知道 id 就能直接取到加密文章全文。
+	if !h.articlePasswordOK(c, article) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":         "这篇文章需要访问密码",
+			"need_password": true,
+		})
+		return
+	}
 	_ = h.articles.IncrementViews(uint(id))
 	article.Views++
 	c.JSON(http.StatusOK, gin.H{"article": toArticleResponse(article)})
@@ -252,9 +308,69 @@ func (h *ArticleHandler) GetBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
 		return
 	}
+	// 密码保护：未校验通过时只返回 401 + need_password，不返回正文。
+	// （详见 articlePasswordOK 的说明）
+	if !h.articlePasswordOK(c, article) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":         "这篇文章需要访问密码",
+			"need_password": true,
+		})
+		return
+	}
 	_ = h.articles.IncrementViews(article.ID)
 	article.Views++
 	c.JSON(http.StatusOK, gin.H{"article": toArticleResponse(article)})
+}
+
+// articlePasswordOK 判断当前请求是否有权看这篇设了密码的文章。
+//
+// 作者本人永远免密（他要改自己的文章，不能把自己锁在外面）。
+// 其余人需要带 password 查询参数，用 bcrypt 比对。
+//
+// 刻意不做"会话记住已解锁文章"：那需要在服务端存一份
+// 「用户 × 文章」的解锁表，多一层状态、多一个过期策略，
+// 而收益只是少输一次密码。选择简单方案。
+func (h *ArticleHandler) articlePasswordOK(c *gin.Context, article *model.Article) bool {
+	if article.ViewPassword == "" {
+		return true
+	}
+	// 作者本人（或管理员改文章时）免密
+	if current, ok := middleware.GetCurrentUser(c); ok {
+		if current.ID == article.AuthorID {
+			return true
+		}
+	}
+	return service.CheckViewPassword(article, c.Query("password"))
+}
+
+// UnlockArticle handles GET /articles/slug/:slug/unlock?password=xxx.
+//
+// 与 GetBySlug 的 password 参数等价，单独一个端点的好处是语义明确：
+// 前端"输密码"这一步可以单独 try/catch，不必把「文章取不到」和
+// 「密码错了」两种失败混在一个 catch 里（两者的提示文案不同）。
+func (h *ArticleHandler) UnlockArticle(c *gin.Context) {
+	article, err := h.articles.GetBySlug(c.Param("slug"))
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	if !canViewArticle(c, article) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
+		return
+	}
+	if article.ViewPassword == "" {
+		c.JSON(http.StatusOK, gin.H{"unlocked": true, "has_password": false})
+		return
+	}
+	if current, ok := middleware.GetCurrentUser(c); ok && current.ID == article.AuthorID {
+		c.JSON(http.StatusOK, gin.H{"unlocked": true, "has_password": true})
+		return
+	}
+	if service.CheckViewPassword(article, c.Query("password")) {
+		c.JSON(http.StatusOK, gin.H{"unlocked": true, "has_password": true})
+		return
+	}
+	c.JSON(http.StatusUnauthorized, gin.H{"error": "访问密码不正确"})
 }
 
 // List handles GET /articles with pagination and optional filters.
@@ -298,6 +414,7 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	for i := range articles {
 		items = append(items, toArticleResponse(&articles[i]))
 	}
+	h.stripLockedContent(c, items)
 
 	c.JSON(http.StatusOK, gin.H{
 		"articles":  items,
@@ -305,6 +422,29 @@ func (h *ArticleHandler) List(c *gin.Context) {
 		"page":      page,
 		"page_size": pageSize,
 	})
+}
+
+// stripLockedContent 把未解锁文章的正文从列表响应里抹掉。
+//
+// 为什么必须做：列表接口返回的是完整 Content。如果不处理，访客在首页
+// 拿到文章列表就等于拿到了所有加密文章的正文——密码保护形同虚设。
+// 把 Content 清空并在前端显示"该文章已加密"，标题/封面等元信息保留
+// （否则列表里会凭空少一篇，反而让人以为是数据丢了）。
+//
+// Content 就地改动而非重新构造：items 是值切片，改的是副本，
+// 不会污染 repository 层的数据（下次请求照常取到完整正文）。
+func (h *ArticleHandler) stripLockedContent(c *gin.Context, items []articleResponse) {
+	current, ok := middleware.GetCurrentUser(c)
+	for i := range items {
+		if !items[i].HasPassword {
+			continue
+		}
+		// 作者本人（自己的文章列表）/ 管理员看后台列表时保留正文
+		if ok && current.ID == items[i].AuthorID {
+			continue
+		}
+		items[i].Content = ""
+	}
 }
 
 func parseIntOr(s string, fallback int) int {
@@ -328,6 +468,9 @@ type articleBrief struct {
 	Cover       string     `json:"cover"`
 	Views       int64      `json:"views"`
 	PublishedAt *time.Time `json:"published_at"`
+	// HasPassword 让卡片也能显示锁标识。卡片接口用 Select 指定列，
+	// ViewPassword 不在列里，只能靠查询期计算的布尔值。
+	HasPassword bool `json:"has_password"`
 }
 
 func toArticleBrief(a *model.Article) articleBrief {
@@ -338,6 +481,7 @@ func toArticleBrief(a *model.Article) articleBrief {
 		Cover:       a.Cover,
 		Views:       a.Views,
 		PublishedAt: a.PublishedAt,
+		HasPassword: a.HasPassword || a.ViewPassword != "",
 	}
 }
 

@@ -9,6 +9,10 @@ import (
 const (
 	ArticleDraft     = "draft"
 	ArticlePublished = "published"
+	// ArticleScheduled 表示「等定时发布」。与 draft 的区别：
+	// draft 是作者主动不发布，scheduled 是已决定发布、只等时间到。
+	// 后台列表能据此区分「还没写完」和「等发布中」。
+	ArticleScheduled = "scheduled"
 )
 
 type Article struct {
@@ -27,6 +31,33 @@ type Article struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	Tags        []Tag      `gorm:"many2many:article_tags" json:"tags,omitempty"`
+
+	// Excerpt 是作者手写的摘要，留空时由后端从正文生成（service.ExcerptFor）。
+	// 用它替代「每次都现场剥标签截断」：列表页每篇文章都要摘要，
+	// 现场生成等于把同样的字符串处理重复 N 遍。
+	Excerpt string `gorm:"type:text" json:"excerpt"`
+
+	// IsPinned 置顶。排序时排在同批文章最前，仅影响展示顺序。
+	IsPinned bool `gorm:"index;not null;default:false" json:"is_pinned"`
+
+	// ViewPassword 是文章的访问密码哈希（bcrypt），空表示不设密码。
+	//
+	// 存哈希而不是明文：设了密码的文章，正文依然要通过详情接口取，
+	// 明文密码一旦泄露，所有加密文章同时失守。json:"-" 让它在任何
+	// 响应里都不出现，只通过 has_password 布尔值告知前端「这篇要密码」。
+	ViewPassword string `gorm:"size:100" json:"-"`
+
+	// ScheduledAt 定时发布时间。仅当 status=scheduled 时有效。
+	// 到点由 PublishDue 扫描改为 published。
+	ScheduledAt *time.Time `json:"scheduled_at"`
+
+	// HasPassword 是查询期计算的「是否设了访问密码」，**不落库**
+	// （gorm:"-"）。存在的理由：卡片接口（related / neighbors）用 Select
+	// 指定列，拿不到 view_password 原值；而前端要在卡片上显示锁标识，
+	// 不能为此把哈希查出来再传上去。由 articleCardColumns 的
+	// CASE WHEN 输出，只在卡片路径上有值。
+	HasPassword bool `gorm:"-" json:"-"`
+
 	// DeletedAt 让「删除文章」变成软删除（只写入删除时刻，GORM 自动在
 	// 所有查询里追加 deleted_at IS NULL）。
 	//

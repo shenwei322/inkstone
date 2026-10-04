@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/shenwei/inkstone/backend/internal/model"
 	"gorm.io/gorm"
@@ -112,6 +113,11 @@ func purgeArticleRelations(tx *gorm.DB, id uint) error {
 	if err := tx.Where("article_id = ?", id).Delete(&model.Reaction{}).Error; err != nil {
 		return err
 	}
+	// 历史版本也必须真删：每版都存全文，文章没了还留着几十版正文，
+	// 既占空间又让"彻底删除"名不副实。
+	if err := tx.Where("article_id = ?", id).Delete(&model.ArticleRevision{}).Error; err != nil {
+		return err
+	}
 	return tx.Exec("DELETE FROM article_tags WHERE article_id = ?", id).Error
 }
 
@@ -146,6 +152,42 @@ func (r *ArticleRepository) Restore(id uint) error {
 
 // Purge 彻底删除一篇文章及其全部关联行（不可恢复）。用于回收站里的
 // 「彻底删除」与删除用户时的连带清理。
+// PublishDue 把 scheduled_at <= now 的 scheduled 文章改为 published。
+//
+// 返回实际发布的文章，供调用方写日志（发布是个低频但重要的事件，
+// 没人盯着后台时，日志是唯一的追溯途径）。
+//
+// 两个细节：
+//   - 用一条 UPDATE 完成，不先查再逐条改。逐条改会在两个 tick 之间
+//     重复发布同一篇（扫描到的是同一个集合）， UPDATE 天然幂等。
+//   - published_at 只在为空时写 now：文章可能带着"预计发布时间"创建，
+//     那才是它名义上的发布时间，不该被改成实际发布那一刻。
+func (r *ArticleRepository) PublishDue(now time.Time) ([]model.Article, error) {
+	var due []model.Article
+	if err := r.db.Where("status = ? AND scheduled_at IS NOT NULL AND scheduled_at <= ?",
+		model.ArticleScheduled, now).Find(&due).Error; err != nil {
+		return nil, err
+	}
+	if len(due) == 0 {
+		return nil, nil
+	}
+	ids := make([]uint, 0, len(due))
+	for _, a := range due {
+		ids = append(ids, a.ID)
+	}
+	err := r.db.Model(&model.Article{}).
+		Where("id IN ?", ids).
+		Updates(map[string]any{
+			"status":       model.ArticlePublished,
+			"scheduled_at": nil,
+			"published_at": gorm.Expr("COALESCE(published_at, ?)", now),
+		}).Error
+	if err != nil {
+		return nil, err
+	}
+	return due, nil
+}
+
 func (r *ArticleRepository) Purge(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := purgeArticleRelations(tx, id); err != nil {
@@ -163,6 +205,8 @@ func (r *ArticleRepository) Purge(id uint) error {
 }
 
 // DeleteAny 软删除任意文章（管理员操作，不限作者）。
+// RowsAffected 为 0 时返回 ErrNotFound：管理员点删除时若文章已被删，
+// 前端要提示「文章不存在」，而不是静默显示成功。
 func (r *ArticleRepository) DeleteAny(id uint) error {
 	result := r.db.Delete(&model.Article{}, id)
 	if result.Error != nil {
@@ -172,6 +216,36 @@ func (r *ArticleRepository) DeleteAny(id uint) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// BulkDelete 批量软删除文章，返回实际删除条数。
+//
+// 逐条删除不用事务的话，中途失败会留下「一半删了一半没删」的状态，
+// 管理员无从判断哪些已经没了。这里用一条 UPDATE 天然原子。
+func (r *ArticleRepository) BulkDelete(ids []uint) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := r.db.Where("id IN ?", ids).Delete(&model.Article{})
+	return result.RowsAffected, result.Error
+}
+
+// BulkSetStatus 批量改文章状态，返回受影响条数。
+//
+// 补齐 published_at：把一批文章从草稿/定时改成已发布时，逐条调
+// SetArticleStatus 会为每篇单独 SELECT 一次；一条 UPDATE 搞定。
+// published_at 用 COALESCE 保证已有的发布时间不被改写——
+// 那篇文章是比这批操作更早的真实发布，改写等于伪造时间线。
+func (r *ArticleRepository) BulkSetStatus(ids []uint, status string, now time.Time) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	updates := map[string]any{"status": status, "scheduled_at": nil}
+	if status == model.ArticlePublished {
+		updates["published_at"] = gorm.Expr("COALESCE(published_at, ?)", now)
+	}
+	result := r.db.Model(&model.Article{}).Where("id IN ?", ids).Updates(updates)
+	return result.RowsAffected, result.Error
 }
 
 func (r *ArticleRepository) DeleteByAuthor(authorID uint) error {
@@ -314,8 +388,12 @@ func (r *ArticleRepository) List(q ArticleQuery) ([]model.Article, int64, error)
 
 	page, pageSize := normalizePage(q.Page, q.PageSize)
 	var articles []model.Article
-	order := "articles.published_at DESC NULLS LAST, articles.id DESC"
+	// 置顶优先：pinned 的排在所有未置顶之前。同一置顶级别内再按时间。
+	// 用 is_pinned DESC 而不是拆两次查询——后者会让分页总数算错
+	// （两段各自一页），前端翻到第二页会出现"上一页的置顶又出现"。
+	order := "articles.is_pinned DESC, articles.published_at DESC NULLS LAST, articles.id DESC"
 	if q.OrderBy == "views" {
+		// 热门榜不掺置顶：那是"看谁阅读量高"，插一篇置顶进去会误导读者。
 		order = "articles.views DESC, articles.id DESC"
 	}
 	err := db.Preload("Author").
@@ -334,7 +412,13 @@ func (r *ArticleRepository) List(q ArticleQuery) ([]model.Article, int64, error)
 // articleCardColumns 是「文章卡片」类查询只需要的列集合。related /
 // neighbors 这些只读接口不需要正文（content 可能很大），也不预加载
 // Author / Tags，省掉关联查询与带宽。
-const articleCardColumns = "articles.id, articles.title, articles.slug, articles.cover, articles.views, articles.published_at"
+// articleCardColumns 是卡片字段列表。
+//
+// view_password 只用来判断「这篇有没有设访问密码」（转成 has_password
+// 布尔值），绝不下发哈希本身。相关/邻居卡片点进去可能要输密码，
+// 提前在卡片上显示锁标识，比让人点完才知道要密码好。
+const articleCardColumns = "articles.id, articles.title, articles.slug, articles.cover, articles.views, articles.published_at, " +
+	"CASE WHEN articles.view_password IS NULL OR articles.view_password = '' THEN false ELSE true END AS has_password"
 
 // relatedDefaultLimit / relatedMaxLimit 约束相关文章条目的入参区间：
 // 相关推荐只用于页面侧栏，给太多既渲染不下也会让 SQL 多扫行。
@@ -371,6 +455,7 @@ func normalizeRelatedLimit(limit int) int {
 // 软删除条件，因此 a.deleted_at IS NULL 与 a.status 都在 SQL 里显式声明。
 var relatedSQL = `
 SELECT a.id, a.title, a.slug, a.cover, a.views, a.published_at,
+       CASE WHEN a.view_password IS NULL OR a.view_password = '' THEN false ELSE true END AS has_password,
        (SELECT COUNT(*)
           FROM article_tags t1
           JOIN article_tags t2 ON t2.tag_id = t1.tag_id

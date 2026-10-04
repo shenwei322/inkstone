@@ -16,10 +16,40 @@ var ErrForbidden = errors.New("forbidden")
 type ArticleService struct {
 	articles *repository.ArticleRepository
 	taxonomy *repository.TaxonomyRepository
+	// revisions 可为 nil：版本历史是增强功能，未注入时全部快照调用
+	// 静默跳过（见 snapshot）。不为了一个可选功能改构造签名。
+	revisions RevisionSnapshotter
 }
 
+// RevisionSnapshotter 是 ArticleService 依赖的最小版本历史接口。
+// 定义为接口而不是直接用 *RevisionService：避免两个 service 循环依赖
+// （RevisionService 也要用 ArticleRepository），也让单测能打桩。
+type RevisionSnapshotter interface {
+	Snapshot(article *model.Article, editorID uint, note string)
+}
+
+// NewArticleService 保持原有签名不变（不破坏现有调用方），
+// 版本历史通过 SetRevisions 注入。
 func NewArticleService(articles *repository.ArticleRepository, taxonomy *repository.TaxonomyRepository) *ArticleService {
 	return &ArticleService{articles: articles, taxonomy: taxonomy}
+}
+
+// SetRevisions 注入版本历史能力。未调用时 Snapshot 全部为空操作。
+func (s *ArticleService) SetRevisions(r RevisionSnapshotter) {
+	s.revisions = r
+}
+
+// snapshot 在文章被改动前留一版历史。
+//
+// 防御写在这里而不是依赖 RevisionService.Snapshot 自己判 nil：
+// RevisionSnapshotter 是接口，将来换实现（比如批量版、异步版）时，
+// 这里的调用方仍保证传入的是可用的文章。契约由调用方守住，
+// 不必每个实现各写一遍判空。
+func (s *ArticleService) snapshot(article *model.Article, editorID uint, note string) {
+	if s.revisions == nil || article == nil || article.ID == 0 {
+		return
+	}
+	s.revisions.Snapshot(article, editorID, note)
 }
 
 type ArticleInput struct {
@@ -29,6 +59,12 @@ type ArticleInput struct {
 	CategoryID *uint
 	TagNames   []string
 	Cover      string
+	Excerpt    string
+	IsPinned   bool
+	// ViewPassword 明文传入，由 service 哈希后存储。空串表示不设密码。
+	ViewPassword string
+	// ScheduledAt 定时发布时间，仅在 Status=scheduled 时有效。
+	ScheduledAt *time.Time
 }
 
 type ArticleUpdate struct {
@@ -38,7 +74,16 @@ type ArticleUpdate struct {
 	CategoryID **uint
 	TagNames   *[]string
 	Cover      *string
+	Excerpt    *string
+	IsPinned   *bool
+	// ViewPassword 传空串表示「清除密码」；nil 表示本次未提交、保持原值。
+	ViewPassword *string
+	ScheduledAt  **time.Time
 }
+
+// ErrPasswordTooLong 密码长度上限：bcrypt 只取前 72 字节，超长部分被静默截断，
+// 用户以为设了长密码其实只生效前 72 字节。提前拒绝比"存了但用不了"好。
+var ErrPasswordTooLong = NewValidationError("文章密码最长 32 个字符")
 
 func (s *ArticleService) Create(authorID uint, input ArticleInput) (*model.Article, error) {
 	title := strings.TrimSpace(input.Title)
@@ -52,9 +97,9 @@ func (s *ArticleService) Create(authorID uint, input ArticleInput) (*model.Artic
 		return nil, NewValidationError("内容不能为空")
 	}
 
-	status := input.Status
-	if status != model.ArticleDraft && status != model.ArticlePublished {
-		status = model.ArticleDraft
+	status, err := normalizeArticleStatus(input.Status, input.ScheduledAt)
+	if err != nil {
+		return nil, err
 	}
 
 	if input.CategoryID != nil {
@@ -63,14 +108,24 @@ func (s *ArticleService) Create(authorID uint, input ArticleInput) (*model.Artic
 		}
 	}
 
+	// 密码哈希放在校验分类之后：分类不存在时不该白算一次 bcrypt（慢哈希）。
+	viewPassword, err := hashViewPassword(input.ViewPassword)
+	if err != nil {
+		return nil, err
+	}
+
 	article := &model.Article{
-		AuthorID:   authorID,
-		CategoryID: input.CategoryID,
-		Title:      title,
-		Slug:       s.uniqueSlug(repository.Slugify(title), 0),
-		Content:    SanitizeHTML(input.Content),
-		Status:     status,
-		Cover:      resolveCover(input.Cover, input.Content),
+		AuthorID:     authorID,
+		CategoryID:   input.CategoryID,
+		Title:        title,
+		Slug:         s.uniqueSlug(repository.Slugify(title), 0),
+		Content:      SanitizeHTML(input.Content),
+		Status:       status,
+		Cover:        resolveCover(input.Cover, input.Content),
+		Excerpt:      resolveExcerpt(input.Excerpt, input.Content),
+		IsPinned:     input.IsPinned,
+		ViewPassword: viewPassword,
+		ScheduledAt:  input.ScheduledAt,
 	}
 	if status == model.ArticlePublished {
 		now := time.Now()
@@ -95,6 +150,48 @@ func (s *ArticleService) Create(authorID uint, input ArticleInput) (*model.Artic
 		}
 	}
 	return article, nil
+}
+
+// normalizeArticleStatus 校验状态值，并处理定时发布的落地时间。
+//
+// scheduled 允许传入过去的时刻：作者有时会为了"现在就发"而选一个刚过去的时间。
+// 那种情况直接按已发布处理，避免文章永远等在一个已过去的时刻上——
+// 发布器每分钟扫一次，但没必要让用户等那一分钟。
+func normalizeArticleStatus(status string, scheduledAt *time.Time) (string, error) {
+	switch status {
+	case model.ArticleDraft, model.ArticlePublished:
+		return status, nil
+	case model.ArticleScheduled:
+		if scheduledAt == nil || scheduledAt.IsZero() {
+			return "", NewValidationError("定时发布需要指定发布时间")
+		}
+		if !scheduledAt.After(time.Now()) {
+			return model.ArticlePublished, nil
+		}
+		return model.ArticleScheduled, nil
+	default:
+		return model.ArticleDraft, nil
+	}
+}
+
+// hashViewPassword 把明文密码哈希后存储；空串返回空串（不设密码）。
+func hashViewPassword(plain string) (string, error) {
+	if plain == "" {
+		return "", nil
+	}
+	if len([]rune(plain)) > 32 {
+		return "", ErrPasswordTooLong
+	}
+	return HashPassword(plain)
+}
+
+// CheckViewPassword 校验文章访问密码。
+// 未设密码的文章返回 true（无需密码即可访问）。
+func CheckViewPassword(article *model.Article, plain string) bool {
+	if article.ViewPassword == "" {
+		return true
+	}
+	return CheckPassword(plain, article.ViewPassword)
 }
 
 // uniqueSlug 保证 slug 唯一：若已被其他文章占用，自动追加 -2、-3 … 后缀。
@@ -140,14 +237,41 @@ func (s *ArticleService) Update(articleID, authorID uint, update ArticleUpdate) 
 	if update.Cover != nil {
 		article.Cover = resolveCover(*update.Cover, article.Content)
 	}
+	if update.Excerpt != nil {
+		article.Excerpt = resolveExcerpt(*update.Excerpt, article.Content)
+	}
+	if update.IsPinned != nil {
+		article.IsPinned = *update.IsPinned
+	}
+	if update.ViewPassword != nil {
+		// 传空串 = 清除密码（作者决定不再加密），nil = 本次未提交、保持原值。
+		// 两种语义必须区分，否则前端"改标题不改密码"会把密码清掉。
+		hashed, err := hashViewPassword(*update.ViewPassword)
+		if err != nil {
+			return nil, err
+		}
+		article.ViewPassword = hashed
+	}
+	if update.ScheduledAt != nil {
+		article.ScheduledAt = *update.ScheduledAt
+	}
 	if update.Status != nil {
 		status := *update.Status
-		if status != model.ArticleDraft && status != model.ArticlePublished {
+		switch status {
+		case model.ArticleDraft, model.ArticlePublished:
+		case model.ArticleScheduled:
+			// 改了发布时间却没带 scheduled_at 时沿用原值：编辑器里
+			// 「等一下发布」和「改发布时间」通常是同一个面板里操作的。
+			if article.ScheduledAt == nil {
+				return nil, NewValidationError("定时发布需要指定发布时间")
+			}
+		default:
 			return nil, NewValidationError("无效的状态值")
 		}
 		if article.Status != model.ArticlePublished && status == model.ArticlePublished {
 			now := time.Now()
 			article.PublishedAt = &now
+			article.ScheduledAt = nil
 		}
 		article.Status = status
 	}
@@ -162,6 +286,13 @@ func (s *ArticleService) Update(articleID, authorID uint, update ArticleUpdate) 
 			article.CategoryID = *update.CategoryID
 		}
 	}
+
+	// 保存前留一版历史。必须在改动落库**之前**调用——
+	// 之后 article 已被覆盖，旧内容无从取回。
+	//
+	// 放在这里而不是 handler：任何走 Update 的路径（后台代改、
+	// 将来的 API 客户端）都能自动获得版本历史，不必每个调用方记得。
+	s.snapshot(article, authorID, "保存文章")
 
 	// 标签在事务外解析成行；nil 表示「本次未提交标签字段」，保留原关联
 	var tags []model.Tag

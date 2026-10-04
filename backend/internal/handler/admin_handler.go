@@ -312,6 +312,53 @@ func (h *AdminHandler) SetArticleStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"article": toArticleResponse(article)})
 }
 
+// BulkDeleteArticles handles POST /admin/articles/bulk-delete.
+// Body: {"ids": [1,2,3]}
+func (h *AdminHandler) BulkDeleteArticles(c *gin.Context) {
+	var req struct {
+		IDs []uint `json:"ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请提供要删除的文章 ID 列表"})
+		return
+	}
+	count, err := h.admin.BulkDeleteArticles(req.IDs)
+	if err != nil {
+		recordOp(h.logs, c, model.LogCategoryArticle, "批量删除文章",
+			fmt.Sprintf("%d 篇", len(req.IDs)), false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryArticle, "批量删除文章",
+		fmt.Sprintf("共 %d 篇（进入回收站）", count), true)
+	// 返回 affected 而非回显全部文章：批量操作后前端只需要一个数字
+	// 来刷新计数，回显 N 篇文章的完整对象是白传几 KB 数据。
+	c.JSON(http.StatusOK, gin.H{"affected": count})
+}
+
+// BulkSetArticleStatus handles POST /admin/articles/bulk-status.
+// Body: {"ids": [1,2,3], "status": "published"}
+func (h *AdminHandler) BulkSetArticleStatus(c *gin.Context) {
+	var req struct {
+		IDs    []uint `json:"ids" binding:"required"`
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请提供要操作的文章 ID 列表与目标状态"})
+		return
+	}
+	count, err := h.admin.BulkSetArticleStatus(req.IDs, req.Status)
+	if err != nil {
+		recordOp(h.logs, c, model.LogCategoryArticle, "批量修改文章状态",
+			fmt.Sprintf("%d 篇 → %s", len(req.IDs), req.Status), false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryArticle, "批量修改文章状态",
+		fmt.Sprintf("共 %d 篇 → %s", count, statusLabel(req.Status)), true)
+	c.JSON(http.StatusOK, gin.H{"affected": count})
+}
+
 // ListComments handles GET /admin/comments.
 func (h *AdminHandler) ListComments(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

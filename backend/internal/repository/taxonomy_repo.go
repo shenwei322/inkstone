@@ -68,6 +68,27 @@ func (r *TaxonomyRepository) ListCategoryTree() ([]model.Category, error) {
 	return cats, err
 }
 
+// FindOrCreateCategoryByName 按名称找分类，不存在则创建为顶级分类。
+//
+// 存在的原因：内容导入时，导出包里只有分类**名称**（ID 是另一套数据库的
+// 私有值）。迁移过来的文章要挂上分类，就得按名称找或建。
+//
+// 为什么导入的分类一律建成顶级、不尝试恢复层级：导出格式只带名称，
+// 不描述父子关系。硬猜层级比平铺更危险——猜错会把文章挂到错误的分类下，
+// 而且事后看不出来。需要层级的话由管理员在后台手工调整。
+func (r *TaxonomyRepository) FindOrCreateCategoryByName(name string) (*model.Category, error) {
+	name = trimSpace(name)
+	if name == "" {
+		return nil, ErrInvalidInput
+	}
+	var cat model.Category
+	if err := r.db.Where("name = ?", name).First(&cat).Error; err == nil {
+		return &cat, nil
+	}
+	slug := Slugify(name)
+	return r.CreateCategory(name, slug, 0)
+}
+
 // CreateCategory 创建分类。parentID 为 0 表示顶级。
 func (r *TaxonomyRepository) CreateCategory(name, slug string, parentID uint) (*model.Category, error) {
 	cat := model.Category{Name: name, Slug: slug}
@@ -310,4 +331,73 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// MergeTags 把若干标签合并进 target，返回实际迁移的文章关联数。
+//
+// 这是标签治理的核心操作：站内文章一多，"Go/golang/Go语言" 三个标签
+// 内容完全重叠，各自统计都不准。合并后来源标签被删除，文章关联迁到目标。
+//
+// 难点在 article_tags 的主键是 (article_id, tag_id) 复合主键：
+// 一篇文章如果**同时**打了来源标签和目标标签，直接把 tag_id 改成目标，
+// 就会撞上主键冲突（同一篇文章 + 同一个目标标签已存在）。
+// 因此顺序必须是：先删掉那些会冲突的行，再改写剩余的，最后删来源标签。
+func (r *TaxonomyRepository) MergeTags(targetID uint, sourceIDs []uint) (int64, error) {
+	if len(sourceIDs) == 0 {
+		return 0, ErrInvalidInput
+	}
+	filtered := make([]uint, 0, len(sourceIDs))
+	for _, id := range sourceIDs {
+		if id == 0 || id == targetID {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if len(filtered) == 0 {
+		return 0, ErrInvalidInput
+	}
+	var target model.Tag
+	if err := r.db.First(&target, targetID).Error; err != nil {
+		return 0, ErrNotFound
+	}
+
+	var migrated int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		for _, sourceID := range filtered {
+			var source model.Tag
+			if err := tx.First(&source, sourceID).Error; err != nil {
+				// 来源标签已被删（比如管理员开了两个标签页各删一次）：
+				// 继续处理剩下的，而不是让整批失败。
+				continue
+			}
+
+			// 1. 删掉「这篇文章已经有目标标签」的重复关联。
+			//    不理会这些行的话，第 2 步的 UPDATE 会批量撞主键。
+			dup := tx.Exec(`DELETE FROM article_tags
+			                 WHERE tag_id = ?
+			                   AND article_id IN (SELECT article_id FROM article_tags WHERE tag_id = ?)`,
+				targetID, sourceID)
+			if dup.Error != nil {
+				return dup.Error
+			}
+			migrated += dup.RowsAffected
+
+			// 2. 剩余关联迁到目标标签。
+			moved := tx.Exec("UPDATE article_tags SET tag_id = ? WHERE tag_id = ?", targetID, sourceID)
+			if moved.Error != nil {
+				return moved.Error
+			}
+			migrated += moved.RowsAffected
+
+			// 3. 删除已掏空的来源标签。
+			if err := tx.Delete(&model.Tag{}, sourceID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return migrated, nil
 }

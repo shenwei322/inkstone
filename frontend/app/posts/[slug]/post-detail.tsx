@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { FormEvent, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
@@ -10,6 +10,7 @@ import {
   CalendarDays,
   Eye,
   Heart,
+  Lock,
   MessageSquare,
   Reply as ReplyIcon,
   Star,
@@ -19,12 +20,15 @@ import {
   X,
 } from 'lucide-react'
 import {
+  ApiError,
   deleteComment,
   fetchArticleBySlug,
+  fetchArticleBySlugWithPassword,
   fetchComments,
   fetchReactions,
   postComment,
   toggleReaction,
+  unlockArticle,
 } from '@/lib/api'
 import { proseBody } from '@/lib/ui'
 import { useAuth } from '@/lib/auth-context'
@@ -235,6 +239,72 @@ function CommentBubble({
   )
 }
 
+/**
+ * 加密文章的密码门：详情接口返回 401 + need_password 时渲染，而不是错误页。
+ *
+ * 解锁只负责校验（后端 unlock 端点不记会话），成功后把密码交还父组件，
+ * 由查询层带 password 重新拉正文——否则重新拉到的还是 401，门会原地打转。
+ */
+function ArticlePasswordGate({
+  slug,
+  onUnlocked,
+}: {
+  slug: string
+  onUnlocked: (password: string) => void
+}) {
+  const notify = useNotify()
+  const [password, setPassword] = useState('')
+
+  const unlock = useMutation({
+    mutationFn: () => unlockArticle(slug, password),
+    onSuccess: () => {
+      onUnlocked(password)
+      notify.success('密码正确，正在加载文章')
+    },
+    onError: (e) =>
+      notify.error(e instanceof ApiError ? e.message : '解锁失败，请稍后重试'),
+  })
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!password) {
+      notify.error('请输入访问密码')
+      return
+    }
+    unlock.mutate()
+  }
+
+  return (
+    <Reveal y={0} className="mx-auto max-w-3xl px-4 py-24 text-center">
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent/10">
+        <Lock className="h-8 w-8 text-accent" />
+      </div>
+      <h1 className="mt-6 text-2xl font-bold">这篇文章需要访问密码</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        输入作者设置的访问密码后即可阅读全文
+      </p>
+      <form onSubmit={submit} className="mx-auto mt-8 flex max-w-sm items-center gap-2">
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="请输入访问密码"
+          autoFocus
+          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+        />
+        <button
+          type="submit"
+          disabled={unlock.isPending}
+          {...hoverTapScale}
+          className="shrink-0 rounded-lg bg-accent px-5 py-2.5 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
+        >
+          {unlock.isPending ? '解锁中...' : '解锁'}
+        </button>
+      </form>
+    </Reveal>
+  )
+}
+
 export function PostDetail({ slug }: { slug: string }) {
   const { user } = useAuth()
   const notify = useNotify()
@@ -244,9 +314,18 @@ export function PostDetail({ slug }: { slug: string }) {
   const site = useSiteConfig()
   const captcha = useCaptcha('comment')
 
+  // 已解锁的访问密码（未解锁为 null）。放进 queryKey 是为了解锁后
+  // 重新拉取时**一定**带上它：后端刻意不记「已解锁」会话
+  // （见后端 articlePasswordOK 注释），不带 password 再拉只会又拿到
+  // 401，密码门原地打转。明文只留在浏览器内存，不落 localStorage。
+  const [unlockPassword, setUnlockPassword] = useState<string | null>(null)
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['article', 'slug', slug],
-    queryFn: () => fetchArticleBySlug(slug),
+    queryKey: ['article', 'slug', slug, unlockPassword ?? ''],
+    queryFn: () =>
+      unlockPassword
+        ? fetchArticleBySlugWithPassword(slug, unlockPassword)
+        : fetchArticleBySlug(slug),
   })
 
   const articleId = data?.article.id
@@ -398,6 +477,28 @@ export function PostDetail({ slug }: { slug: string }) {
           <PageLoading minHeight="24rem" hint="加载正文…" />
         </div>
       </div>
+    )
+  }
+
+  // 加密文章未解锁：后端返回 401 + need_password。与「文章不存在」
+  // （404）分开处理——这里渲染密码门，不展示错误页。
+  const needPassword =
+    isError &&
+    error instanceof ApiError &&
+    error.status === 401 &&
+    Boolean((error.data as { need_password?: boolean } | undefined)?.need_password)
+
+  if (needPassword) {
+    return (
+      <ArticlePasswordGate
+        slug={slug}
+        onUnlocked={(pw) => {
+          setUnlockPassword(pw)
+          // 双保险：新的 queryKey 本身就会带密码重新拉取；这里再
+          // invalidate 一次，把无密码那条 401 缓存也清掉。
+          queryClient.invalidateQueries({ queryKey: ['article', 'slug', slug] })
+        }}
+      />
     )
   }
 
@@ -557,11 +658,23 @@ export function PostDetail({ slug }: { slug: string }) {
             </figure>
           )}
 
-          <article
-            ref={contentRef}
-            className={proseBody}
-            dangerouslySetInnerHTML={{ __html: article.content }}
-          />
+          {/* 正文。加密文章未解锁时 content 是空串（列表接口同样会抹掉），
+              这时渲染「该文章已加密」占位卡片，避免正文位置突兀地空白一片 */}
+          {article.content ? (
+            <article
+              ref={contentRef}
+              className={proseBody}
+              dangerouslySetInnerHTML={{ __html: article.content }}
+            />
+          ) : (
+            article.has_password && (
+              <div className="flex flex-col items-center rounded-xl border border-dashed border-border py-16 text-center text-muted-foreground">
+                <Lock className="h-8 w-8" />
+                <p className="mt-3 text-sm font-medium">该文章已加密</p>
+                <p className="mt-1 text-xs">输入访问密码后即可阅读全文</p>
+              </div>
+            )
+          )}
 
           {article.tags && article.tags.length > 0 && (
             <div className="mt-10 flex flex-wrap items-center gap-2 border-t border-border pt-6">

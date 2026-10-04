@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // 密码策略常量。长度上下限对应 bcrypt 的实际约束：bcrypt 只处理前 72
@@ -118,4 +120,26 @@ func CheckPasswordStrength(password, email, username string) error {
 		}
 	}
 	return nil
+}
+
+// HashPassword / CheckPassword 是 bcrypt 的薄封装。
+//
+// 存在的原因：文章访问密码与用户密码用同一个哈希算法，但项目里此前
+// 散落着多处直接调 bcrypt 的代码（auth_service / admin_service）。
+// 加这两个函数是为了让"密码哈希"有单一入口——将来换成 argon2 之类
+// 只改这里，不必逐个文件核对 cost 参数是否一致。
+func HashPassword(plain string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
+// CheckPassword 比对明文与哈希。不匹配返回 false。
+func CheckPassword(plain, hash string) bool {
+	if hash == "" || plain == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
 }

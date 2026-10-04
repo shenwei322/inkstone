@@ -44,6 +44,18 @@ func ExcerptFor(content string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "…"
 }
 
+// resolveExcerpt 决定最终写入 Excerpt 列的值。
+//
+// 作者填了摘要就用作者的（作者最清楚这篇文章讲什么，机器猜的只配当兜底）；
+// 没填则从正文生成。两边的空白都要 TrimSpace，否则"只有一个空格的摘要"
+// 会被当成"作者填过了"，反而丢掉自动生成的结果。
+func resolveExcerpt(explicit, content string) string {
+	if e := strings.TrimSpace(explicit); e != "" {
+		return e
+	}
+	return ExcerptFor(content, defaultExcerptRunes)
+}
+
 // extractParagraphText 用一次线性扫描拼接正文里各 <p> 段的纯文本，
 // 空段跳过。输入为已消毒 HTML，但写法对大小写与带属性的开标签
 // （<p class="x">）都免疫，不依赖 bluemonday 的输出格式。

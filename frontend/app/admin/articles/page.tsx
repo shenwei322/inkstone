@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { RowLoading } from '@/components/page-loader'
-import { PenLine, Trash2 } from 'lucide-react'
+import { Clock, Lock, PenLine, Pin, Trash2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   deleteAdminArticle,
@@ -24,11 +24,24 @@ const tabs = [
 ] as const
 
 function statusBadge(status: Article['status']) {
-  return status === 'published' ? (
-    <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-      已发布
-    </span>
-  ) : (
+  if (status === 'published') {
+    return (
+      <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+        已发布
+      </span>
+    )
+  }
+  if (status === 'scheduled') {
+    // 灰色 badge：scheduled 是「等时间到自动发布」，还没真正上线，
+    // 不与草稿的琥珀色混用——两者的区别是「写没写完」而不是「要不要提醒」
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+        <Clock className="h-3 w-3" />
+        定时发布
+      </span>
+    )
+  }
+  return (
     <span className="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
       草稿
     </span>
@@ -147,19 +160,36 @@ export default function AdminArticlesPage() {
               className="group flex items-center justify-between rounded-2xl border border-border bg-card px-5 py-4 transition-colors hover:border-accent/30"
             >
               <div className="min-w-0">
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <Link
                     href={`/posts/${a.slug}`}
                     className="truncate font-medium transition-colors hover:text-accent"
                   >
                     {a.title}
                   </Link>
+                  {a.is_pinned && (
+                    <Pin
+                      className="h-3.5 w-3.5 shrink-0 text-accent"
+                      aria-label="置顶文章"
+                    />
+                  )}
+                  {a.has_password && (
+                    <Lock
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                      aria-label="已设置访问密码"
+                    />
+                  )}
                   {statusBadge(a.status)}
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   作者 {a.author.username} · 更新于{' '}
                   {new Date(a.updated_at).toLocaleString('zh-CN')}
                 </p>
+                {a.status === 'scheduled' && a.scheduled_at && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    将于 {new Date(a.scheduled_at).toLocaleString('zh-CN')} 自动发布
+                  </p>
+                )}
               </div>
               <div className="ml-4 flex shrink-0 items-center gap-1 text-xs">
                 <button

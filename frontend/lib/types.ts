@@ -34,7 +34,8 @@ export interface Article {
   title: string
   slug: string
   content: string
-  status: 'draft' | 'published'
+  /** draft=作者主动不发布；published=已发布；scheduled=已决定发布、只等时间到 */
+  status: 'draft' | 'published' | 'scheduled'
   cover?: string
   views: number
   category?: TaxonomyItem | null
@@ -43,6 +44,17 @@ export interface Article {
   created_at: string
   updated_at: string
   author: ArticleAuthor
+  /** 作者手写的摘要；留空时后端会在响应里用正文现算一份返回 */
+  excerpt?: string
+  /** 是否置顶（仅管理员可设置）；列表排序时排在同批文章最前 */
+  is_pinned?: boolean
+  /** 定时发布时间（RFC3339）；仅 status='scheduled' 时有效，其余情况为 null */
+  scheduled_at?: string | null
+  /**
+   * 是否设了访问密码。只表示「设没设」——任何响应都不会返回明文密码，
+   * 明文只存在于创建/更新文章的请求体 view_password 字段里。
+   */
+  has_password?: boolean
 }
 
 export interface CategoryCount extends TaxonomyItem {

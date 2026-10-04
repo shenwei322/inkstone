@@ -81,10 +81,20 @@
 |---|---|---|---|
 | GET | `/articles` | 可选 | 列表。Query: `?page=&page_size=&status=&category=&tag=&q=&order=` |
 | GET | `/articles/:id` | 可选 | 详情（会自动 +1 浏览量） |
-| GET | `/articles/slug/:slug` | 可选 | 按 slug 查详情（+1 浏览量） |
+| GET | `/articles/slug/:slug` | 可选 | 按 slug 查详情（+1 浏览量）。**加密文章未带正确 `?password=` 时返回 401 + `need_password`，且不含正文** |
+| GET | `/articles/slug/:slug/unlock` | 公开 | 校验访问密码。`?password=xxx` → `{unlocked, has_password}`。与详情页的 `?password=` 等价，单独端点让前端区分「密码错了」与「文章取不到」 |
 | GET | `/articles/slug/:slug/related` | 公开 | 相关文章推荐。Query: `?limit=`（默认 4，上限 10） |
 | GET | `/articles/slug/:slug/neighbors` | 公开 | 上一篇/下一篇。`{prev, next}` |
 | GET | `/articles/:id/comments` | 公开 | 评论列表 |
+| GET | `/articles/:id/reactions` | 可选 | 点赞/收藏统计（带 token 时返回用户是否已赞） |
+| GET | `/articles/:id/revisions` | 登录（作者） | 文章历史版本列表 |
+| GET | `/articles/:id/revisions/:version` | 登录（作者） | 某一版完整内容 |
+| POST | `/articles/:id/revisions/restore` | 登录（作者） | 恢复到指定版本。Body: `{version}` |
+
+**历史版本**：每次 `Update` 保存前自动留一版（`RevisionService.Snapshot`，
+内容与标题都没变时不留）。上限 `model.MaxRevisionsKept = 50`，超出删最旧的。
+`Restore` 是「再存一版新的」而非直接覆盖——先给当前内容留版，否则误恢复不可逆。
+非作者访问历史返回 **404 而非 403**：不暴露「这篇文章存在但不是你的」。
 | GET | `/articles/:id/reactions` | 可选 | 点赞/收藏统计（带 token 时返回用户是否已赞） |
 | POST | `/articles` | 登录 | 创建。Body: `{title, content, status, category_id?, tags?, cover?, captcha_token?, captcha_answer?}` |
 | PUT | `/articles/:id` | 登录 | 更新（仅作者）。同上字段均可选 |
@@ -125,6 +135,7 @@ gin 不允许同层出现两个不同名的通配段，注册时直接 panic。
 | POST | `/admin/tags` | 管理员 | 创建标签。Body: `{name}` |
 | PUT | `/admin/tags/:id` | 管理员 | 重命名标签。Body: `{name}` |
 | DELETE | `/admin/tags/:id` | 管理员 | 删除标签（同时清理文章关联） |
+| POST | `/admin/tags/merge` | 管理员 | 标签合并。Body: `{target_id, source_ids}`，上限 50 |
 | POST | `/admin/categories` | 管理员 | 创建分类。Body: `{name, slug?, parent_id?}` |
 | PUT | `/admin/categories/:id` | 管理员 | 改名/调整父级。Body: `{name, parent_id?}` |
 | DELETE | `/admin/categories/:id` | 管理员 | 删除分类（有子分类或有关文章时拒绝） |
@@ -133,6 +144,41 @@ gin 不允许同层出现两个不同名的通配段，注册时直接 panic。
 
 **删除分类的拒绝条件**（返回 400 而非级联删除）：分类下还有子分类，或还有文章。
 刻意不做级联——分类被连带清掉文章属不可逆误操作，代价比重试高得多。
+
+**标签合并的顺序不能反**（`TaxonomyRepository.MergeTags`）：
+`article_tags` 的主键是 `(article_id, tag_id)` 复合主键。一篇文章如果**同时**
+打了来源标签和目标标签，直接改 `tag_id` 会撞主键（SQLSTATE 23505）。
+正确顺序：① 删掉「这篇文章已有目标标签」的重复行 → ② 改写剩余行 →
+③ 删来源标签。整个流程在一个事务里，中途失败不留半合并状态。
+
+---
+
+## 内容导入导出 `/admin/system`
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/system/export` | 导出全站内容为 JSON 附件（文章/分类/标签，**不含用户与设置**） |
+| POST | `/admin/system/import` | 导入内容包。Body 为导出的 JSON，上限 32 MB。返回 `{created, updated, skipped}` |
+
+**与 `/admin/system/backups`（全站快照）的区别**：
+
+| | 内容导入导出 | 全站快照 |
+|---|---|---|
+| 用途 | 站点搬迁、内容留档 | 误操作后恢复 |
+| 含用户/设置 | 否 | 是 |
+| 格式 | 可读 JSON（带缩进） | gzip 压缩 |
+| 分类与标签 | **名称** | 原始 ID |
+| 恢复方式 | 可导入 | 刻意不做网页恢复 |
+
+导入规则：
+- 按 slug 判重：已存在则**更新**（幂等，可改完导出文件再导回），不存在则新建
+- **不做删除**——「同步」语义会在用户只想合并两个站时，删掉一边的内容
+- 分类/标签按名称 find-or-create：ID 是另一套数据库的私有值，导出成数字
+  会把读者绑死在原库上
+- 文章属于其他作者时**跳过**而非报错：继续处理同批里属于自己的文章更有用
+- 版本号不匹配直接拒绝（`ErrImportInvalid`），不尽力解析：猜着解析会把
+  新格式按旧结构读，产出静默错位的数据（把 excerpt 读成 title），比失败更难排查
+- 上限 300 篇：每篇都要过 bluemoney 消毒 + slug 查询 + 标签解析
 
 ---
 
@@ -369,17 +415,28 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/articles?page=&page_size=&status=` | 全部文章（含草稿） |
+| GET | `/admin/articles?page=&page_size=&status=` | 全部文章（含草稿、`scheduled`） |
 | GET | `/admin/articles/trash?page=&page_size=` | 回收站（软删除的文章） |
-| PUT | `/admin/articles/:id/status` | 上下架。Body: `{status}` |
+| PUT | `/admin/articles/:id/status` | 上下架。Body: `{status: draft\|published\|scheduled}` |
 | PUT | `/admin/articles/:id/restore` | 从回收站还原 |
 | DELETE | `/admin/articles/:id` | 软删除（进回收站） |
 | DELETE | `/admin/articles/:id/purge` | 彻底删除（清关联，不可恢复） |
+| POST | `/admin/articles/bulk-delete` | 批量软删除。Body: `{ids: [...]}`，上限 200 |
+| POST | `/admin/articles/bulk-status` | 批量改状态。Body: `{ids: [...], status}` |
+
+**gin 路由陷阱**：`bulk-delete` / `bulk-status` 这类静态段必须注册在
+`/articles/:id` **之前**。gin 先命中 `:id`，把 `bulk-delete` 当数字解析失败
+直接返回 400，真正的 handler 永远走不到（不报错、不 panic，只是静默失败）。
 
 **删除语义分层**：
 - `DELETE /articles/:id` = 软删除，只置 `deleted_at`，**不清关联**。还原时评论/点赞还在。
-- `purge` = 真删，此时才清关联。
+- `purge` = 真删，此时才清关联（含历史版本——文章没了还留着几十版全文，
+  既占空间又让「彻底删除」名不副实）。
 - `purgeArticlesByAuthor` 必须 `Unscoped()`：否则已删用户的文章会连同评论一起永久残留在库里。
+
+**批量上限 200**：一条 `UPDATE ... WHERE id IN (...)` 会持锁，
+几千个 id 一次跑完会让这些文章的后台状态在锁定期间都动不了。
+分批对结果无影响。
 
 ### 评论管理
 
@@ -392,6 +449,14 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 
 > 删除父评论时子评论的 `parent_id` 会被置空（提升为顶级），内容不丢。
 > 自引用外键直接删会被 PostgreSQL 拒绝（SQLSTATE 23503）。
+
+**加密文章的防护面**（改密码保护时必须同步，漏一处就白设）：
+- `GET /articles/slug/:slug` 与 `GET /articles/:id` 都要校验——只挡 slug 入口的话，知道 id 就能取到全文
+- `GET /articles` 列表：非作者本人的加密文章 `content` 返回空串（否则首页列表直接泄露全文）
+- `GET /feed.xml`：加密文章只给标题与链接，`content:encoded` 留空
+- 作者本人永久免密（否则作者改不了自己的文章）
+- **相关/邻居卡片**：`articleCardColumns` 带 `CASE WHEN view_password...` 算出 `has_password`，
+  只为让卡片显示锁标识；哈希本身绝不出现在响应里（`Article.ViewPassword` 是 `json:"-"`）
 
 ### 站点设置
 

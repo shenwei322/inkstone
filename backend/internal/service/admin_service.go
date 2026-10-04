@@ -22,6 +22,64 @@ func NewAdminService(users *repository.UserRepository, articles *repository.Arti
 	return &AdminService{users: users, articles: articles}
 }
 
+// maxBulkIDs 限制单次批量操作的条数。
+//
+// 为什么有上限：管理员「全选」后点删除，一次请求可能带上几千个 id。
+// 一条 UPDATE ... WHERE id IN (...) 在 PostgreSQL 里可行，但会长时间
+// 持锁，期间这些文章的后台状态都动不了。分批处理（比如每次 200 条）
+// 既能跑完，也不会把数据库卡住。这里在入口处拒绝超限请求，
+// 让前端直接按 200 条一组提交。
+const maxBulkIDs = 200
+
+// validateBulkIDs 清洗批量操作的 id 列表：去重、丢弃 0、限制条数。
+func validateBulkIDs(ids []uint) ([]uint, error) {
+	if len(ids) == 0 {
+		return nil, NewValidationError("请先选择要操作的文章")
+	}
+	if len(ids) > maxBulkIDs {
+		return nil, NewValidationError("单次最多操作 200 篇文章")
+	}
+	seen := make(map[uint]struct{}, len(ids))
+	out := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue // 前端勾了行但 id 没拿到，忽略该行而非整批失败
+		}
+		if _, dup := seen[id]; dup {
+			continue // 同一篇被选两次，去重避免重复计数
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, NewValidationError("请先选择要操作的文章")
+	}
+	return out, nil
+}
+
+// BulkDeleteArticles 批量软删除文章，返回受影响条数。
+func (s *AdminService) BulkDeleteArticles(ids []uint) (int64, error) {
+	clean, err := validateBulkIDs(ids)
+	if err != nil {
+		return 0, err
+	}
+	return s.articles.BulkDelete(clean)
+}
+
+// BulkSetArticleStatus 批量改文章状态，返回受影响条数。
+func (s *AdminService) BulkSetArticleStatus(ids []uint, status string) (int64, error) {
+	clean, err := validateBulkIDs(ids)
+	if err != nil {
+		return 0, err
+	}
+	switch status {
+	case model.ArticleDraft, model.ArticlePublished, model.ArticleScheduled:
+	default:
+		return 0, NewValidationError("无效的状态值")
+	}
+	return s.articles.BulkSetStatus(clean, status, time.Now())
+}
+
 // DeleteUserWithArticles 删除用户及其全部文章（单事务，保证一致性）。
 // handler 不再分别调用两个 repo——那会产生「文章已删、用户还在」的中间态。
 func (s *AdminService) DeleteUserWithArticles(id uint) error {
@@ -68,8 +126,17 @@ func (s *AdminService) Stats() (*Stats, error) {
 	return st, nil
 }
 
+// SetArticleStatus 管理员直接改文章状态。
+//
+// 接受 scheduled：后台要能把「已过期的定时文章」手动改成已发布
+// （比如定时发布器没跑到，或作者改了主意）。校验放在 service 层而不是
+// 让 repository 直接 Update——这里要顺带处理 published_at 的补齐，
+// 否则会出现 status=published 但 published_at 为 NULL 的脏数据
+// （Neighbors 的 NULLS LAST 只是防御，根因在写入路径）。
 func (s *AdminService) SetArticleStatus(id uint, status string) (*model.Article, error) {
-	if status != model.ArticleDraft && status != model.ArticlePublished {
+	switch status {
+	case model.ArticleDraft, model.ArticlePublished, model.ArticleScheduled:
+	default:
 		return nil, NewValidationError("无效的状态值")
 	}
 	article, err := s.articles.FindByID(id)
@@ -79,6 +146,11 @@ func (s *AdminService) SetArticleStatus(id uint, status string) (*model.Article,
 	if article.Status != model.ArticlePublished && status == model.ArticlePublished && article.PublishedAt == nil {
 		now := time.Now()
 		article.PublishedAt = &now
+	}
+	// 改成已发布或草稿时清掉定时时间：留着会让列表页显示
+	// 「定时发布：xx」而状态却不是 scheduled，读者以为时间设错了。
+	if status != model.ArticleScheduled {
+		article.ScheduledAt = nil
 	}
 	article.Status = status
 	if err := s.articles.Update(article); err != nil {

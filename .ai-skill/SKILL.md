@@ -20,10 +20,12 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 认证 | JWT 双令牌（access 15min / refresh 7d）+ **TokenVersion 代次**（改密码/封禁/改角色即作废旧令牌） |
 | 角色 | `admin` / `user`（RBAC 中间件） |
 | 用户状态 | `active` / `banned` |
-| 文章状态 | `draft` / `published` |
+| 文章状态 | `draft` / `published` / `scheduled`（定时发布，到点由 `ScheduledPublisher` 每分钟扫描转 published） |
 | 评论状态 | `pending` / `approved` / `rejected`（默认 `approved`；`pending` 由后台 `comment_audit` 或敏感词命中触发） |
 | 敏感字段 | SMTP 密码、验证码密钥（API 只返回 `xxx_set` 布尔值，不下发明文） |
 | 软删除 | Article / Page 有 `gorm.DeletedAt`。删除只置 `deleted_at` **不清关联**（还原时评论点赞还在）；彻底清关联只发生在 `purge` |
+| 文章增强 | 摘要（`excerpt` 空则自动生成）、置顶（`is_pinned`，热门榜不掺）、访问密码（`view_password` 存 bcrypt，`json:"-"`）、定时发布（`scheduled_at`）、历史版本（`article_revisions`，上限 50 版） |
+| 缓存策略 | `middleware.CachePolicy()`：默认 `private, no-cache`；`/uploads/*` 长缓存 immutable；文章/分类/标签/feed/sitemap/site-config `max-age=60` + stale-while-revalidate；≥400 一律 `no-store` |
 | 在线更新 | 后台「系统更新」。两套源（`UPDATE_SOURCE`）：默认 `commits`（检查上游提交 → 下载源码镜像包 → 校验 → 备份 → 替换源码 → 宿主代理重建）；`releases`（GitHub Releases：tag 版本号 + 发布说明 + 镜像包资产 → 宿主代理 `docker load` + compose 重建）。代码在 `internal/service/update_*.go`（`update_release.go`  Releases 源）+ `deploy/update-agent.sh` / `.ps1` |
 | 人机验证 | provider 三选一（`captcha_provider`）：`lap`（默认，Cap 的 CF Workers 分支）/ `pow`（自研工作量证明 v2：内存表+本地交互信号，零外部依赖，服务器不通外网/不能用代理也能用）/ `geetest`（极验四代）；场景与强度参数在后台「安全防护」页 |
 | Markdown 渲染 | 编辑前端 `marked` → 保存 HTML（后端 bluemonday 消毒）；预览高亮用 `highlight.js/lib/common`（主题在 `globals.css`，仅前端 DOM 后处理，不入库） |
@@ -229,7 +231,12 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | 树形结构用值切片要从深到浅挂 | `CategoryNode.Children` 是值切片，往父节点 `append` 会产生拷贝。先挂浅层会让后挂的深层子节点写进 map 里的父，而浅层那份拷贝已取走 → 子树丢失。必须按深度**从大到小**挂载 |
 | `*uint` 外键别塞结构体指针 | `Comment.ParentID` 是 `*uint` 不是 `*Comment`。GORM 存的是 id，要用 `parentID := parent.ID; &parentID`，且 nil 父评论必须传 nil（不是 0，0 会指向不存在的记录） |
 | repository 层不能调 service | `NewValidationError`/`CheckPasswordStrength` 都在 service 包。repository 只返回可判定错误（`ErrCategoryCycle` 等），中文文案由 service 映射 |
-| 变量名遮蔽包名 | `mailer := mailer.New(...)` 合法，但遮蔽后**无法再用 `mailer.Xxx`** 调该包其他函数。要么改名 `mailerSvc`，要么把新函数放包内实现 |
+| lucide 图标不吃 title | `<Pin title="x" />` 会 TS 报错：`Property 'title' does not exist`。tooltip 用 `aria-label`（全项目 24 处既有用法都是这个） |
+| 复合主键表做 UPDATE 前先删冲突行 | `article_tags(article_id, tag_id)` 是复合主键。标签合并时直接把 `tag_id` 改成目标会撞 23505，必须先删「该文章已有目标标签」的重复行 |
+| unknown 上不能取属性 | `res.json()` 返回 unknown，`typeof data.error === 'string'` 直接 TS2339。要先 `typeof data === 'object' && 'error' in data` 收窄 |
+| 快照/备份类接口放进「不失败」路径 | `RevisionService.Snapshot` 失败只 log 不返回 error：版本历史是增强功能，为它让文章保存失败是拿次要功能拖垮主要功能 |
+| 恢复不是覆盖而是再存一版 | `RevisionService.Restore` 先给当前内容留版再写旧内容。直接覆盖会让「恢复到第 2 版」这个操作本身不可逆 |
+| 变量遮蔽包名 | `mailer := mailer.New(...)` 合法，但遮蔽后**无法再用 `mailer.Xxx`** 调该包其他函数。要么改名 `mailerSvc`，要么把新函数放包内实现 |
 | GORM `Raw` 手写软删除条件 | `db.Raw(sql).Scan(...)` 没有模型上下文，**不会**自动追加 `deleted_at IS NULL`，必须显式写进 SQL |
 | 评论/事件通知必须是旁路 | `mailer.CommentNotifier` 发送失败只 `log.Printf`，绝不返回 error——否则 SMTP 一挂评论就发不出去 |
 | 动画卡顿四类源 | ①**`width` 动画**每帧 layout 重排（长页面/远程桌面 CPU 合成下卡死）——进度条一律 `origin-left` + `scaleX`；输入框 focus 展宽（如 navbar 搜索框 `w-44 → w-56`）不要写 `transition-all`，改 `transition-[border-color,box-shadow]` 瞬时展宽；②**循环动画空转**——`repeat:-1` 必须走 `createLoop`（页面隐藏自动 pause），多 ring（如 RowLoading 每行一环）合并为单环；③**blur(filter) 元素做 transform 动画**——每帧重绘模糊区域（CPU 合成下极重），装饰光斑只用 `opacity` 呼吸（侧栏倒计时光斑 `blur-xl` 已从 scale 改 opacity）；④**滚动 handler 逐帧查 DOM**——rAF 回调里逐项 `getElementById`+`getBoundingClientRect` 会反复强制同步 layout，headings 等 DOM 在 effect 内缓存（article-toc 已改）。长列表 stagger 总时长 cap 0.5s（`motion.tsx` 已内置） |

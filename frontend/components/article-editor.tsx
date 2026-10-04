@@ -4,7 +4,17 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import gsap from 'gsap'
-import { ArrowLeft, Eye, History, Save, X } from 'lucide-react'
+import {
+  AlignLeft,
+  ArrowLeft,
+  CalendarClock,
+  Eye,
+  History,
+  Lock,
+  Pin,
+  Save,
+  X,
+} from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createArticle,
@@ -15,6 +25,7 @@ import {
   uploadImage,
   updateArticle,
   ApiError,
+  type ArticleInput,
 } from '@/lib/api'
 import type { Article } from '@/lib/types'
 import { PageTransition, Reveal, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
@@ -24,9 +35,25 @@ import { markdownToHtml, htmlToMarkdown } from '@/lib/markdown'
 import { useNotify } from '@/components/toast'
 import { useAuth } from '@/lib/auth-context'
 import { ArticlePreview } from '@/components/article-preview'
+import { inputClass } from '@/lib/ui'
 
 function htmlToText(html: string): string {
   return html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ')
+}
+
+/** ISO 时间串 → datetime-local 输入框需要的本地时间串（YYYY-MM-DDTHH:mm） */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 保存结果提示语：按落库后的状态给不同文案（scheduled 是「等时间到自动发布」） */
+function savedNotice(status: string): string {
+  if (status === 'published') return '文章已发布'
+  if (status === 'scheduled') return '已设置定时发布'
+  return '已保存'
 }
 
 /** 新建文章的本地草稿（防刷新/误关丢失；成功创建或发布后清除） */
@@ -38,6 +65,7 @@ interface LocalDraft {
   categoryId: number | null
   tags: string[]
   cover: string
+  excerpt: string
 }
 
 /** 读取本浏览器缓存的未发布草稿；SSR 或存储不可用时返回 null */
@@ -53,6 +81,7 @@ function readLocalDraft(): LocalDraft | null {
       categoryId: typeof d.categoryId === 'number' ? d.categoryId : null,
       tags: Array.isArray(d.tags) ? d.tags.filter((t): t is string => typeof t === 'string') : [],
       cover: typeof d.cover === 'string' ? d.cover : '',
+      excerpt: typeof d.excerpt === 'string' ? d.excerpt : '',
     }
   } catch {
     return null
@@ -113,6 +142,27 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
   const [tagInput, setTagInput] = useState('')
   const [cover, setCover] = useState(restoredDraft?.cover ?? article?.cover ?? '')
   const [showCover, setShowCover] = useState(Boolean(restoredDraft?.cover ?? article?.cover))
+  // ---------- 高级设置 ----------
+  // 摘要：留空由后端从正文生成（service.resolveExcerpt），提交时空串也发。
+  // 本地草稿恢复时没有这份内容（旧缓存），回落到已发布文章的显式摘要；
+  // 后端自动生成的那份不回显，避免把机器摘要误当作者手写内容再存回去。
+  const [excerpt, setExcerpt] = useState(
+    restoredDraft ? restoredDraft.excerpt : article?.excerpt ?? '',
+  )
+  // 访问密码。密码哈希不可回显，「用户动过没有」只能自己追踪：
+  // 只有 passwordTouched 为 true 时才提交 view_password，否则「改标题
+  // 不改密码」会把密码清掉（后端 undefined=保持原密码，空串=清除）。
+  const [password, setPassword] = useState('')
+  const [passwordTouched, setPasswordTouched] = useState(false)
+  // 「清除密码」即时提交中的禁用态
+  const [clearingPassword, setClearingPassword] = useState(false)
+  // 定时发布：scheduledLocal 存 datetime-local 的本地时间串，提交时才转 RFC3339
+  const [scheduleEnabled, setScheduleEnabled] = useState(article?.status === 'scheduled')
+  const [scheduledLocal, setScheduledLocal] = useState(() =>
+    article?.scheduled_at ? toLocalInput(article.scheduled_at) : '',
+  )
+  // 置顶：仅管理员可见、仅管理员提交（普通用户投稿没有这个入口）
+  const [isPinned, setIsPinned] = useState(article?.is_pinned ?? false)
   const uploadCoverRef = useRef<HTMLInputElement>(null)
   const notify = useNotify()
   const { user } = useAuth()
@@ -152,8 +202,9 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       gsap.to(el, { x: autoSaveEnabled ? 16 : 0, duration: 0.25, ease: 'power2.out' })
     }
   }, [autoSaveEnabled])
-  // 基线快照：与自动保存/本地草稿的 snapshot 同构（含 cover），
-  // 用于判断「是否有未保存更改」；new 模式以恢复的本地草稿为基线
+  // 基线快照：与自动保存/本地草稿的 snapshot 同构（含 cover 与高级设置），
+  // 用于判断「是否有未保存更改」；new 模式以恢复的本地草稿为基线。
+  // 密码刻意不在快照里：明文密码不该在任何比较/缓存里多待一刻。
   const [baseline, setBaseline] = useState(() =>
     JSON.stringify({
       t: restoredDraft?.title ?? article?.title ?? '',
@@ -161,11 +212,27 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       g: restoredDraft?.categoryId ?? article?.category?.id ?? null,
       s: (restoredDraft?.tags ?? (article?.tags ?? []).map((t) => t.name)).join(','),
       v: restoredDraft?.cover ?? article?.cover ?? '',
+      e: (restoredDraft ? restoredDraft.excerpt : (article?.excerpt ?? '')).trim(),
+      n: article?.is_pinned ?? false,
+      sc:
+        article?.status === 'scheduled' && article.scheduled_at
+          ? toLocalInput(article.scheduled_at)
+          : '',
     }),
   )
   // 当前表单快照：与 baseline 比对判断「有没有未保存更改」，用于离开提醒；保存成功后刷新基线。
+  // 高级设置字段也在内——改了摘要/置顶/定时同样算未保存。
   const currentSnapshot = () =>
-    JSON.stringify({ t: title, c: content, g: categoryId, s: tags.join(','), v: cover })
+    JSON.stringify({
+      t: title,
+      c: content,
+      g: categoryId,
+      s: tags.join(','),
+      v: cover,
+      e: excerpt.trim(),
+      n: isPinned,
+      sc: scheduleEnabled ? scheduledLocal : '',
+    })
   const isDirty = currentSnapshot() !== baseline
   const [restoredHint, setRestoredHint] = useState(Boolean(restoredDraft))
 
@@ -194,17 +261,53 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
   }
 
   const isPublished = mode === 'edit' && article?.status === 'published'
+  // 置顶仅管理员可用：useAuth 的 user 在未登录/加载中为 null
+  const isAdmin = user?.role === 'admin'
+
+  // 发布/存草稿的提交体：高级设置字段的统一出口。
+  // view_password 的关键语义：只有用户真正动过输入框（passwordTouched）
+  // 才提交；不提交=后端保持原密码。没动过绝不能被带上空串，
+  // 否则「改标题不改密码」会把密码清掉。
+  const buildBody = (status: string): ArticleInput => {
+    const body: ArticleInput = {
+      title,
+      content,
+      status,
+      category_id: categoryId,
+      tags,
+      cover,
+      // 摘要空串也要发：后端据此从正文重新生成，作者删空即恢复自动摘要
+      excerpt: excerpt.trim(),
+    }
+    if (isAdmin) body.is_pinned = isPinned
+    if (status === 'scheduled' && scheduledLocal) {
+      // datetime-local 给的是本地时间，转 RFC3339 交给后端
+      body.scheduled_at = new Date(scheduledLocal).toISOString()
+    }
+    if (passwordTouched) body.view_password = password
+    return body
+  }
+
+  // 「清除密码」是唯一能让密码被清掉的操作：显式提交空串。
+  // 只是把输入框删空不算——那不走 passwordTouched，保存时根本不发该字段。
+  const clearPassword = async () => {
+    if (mode !== 'edit' || !article) return
+    setClearingPassword(true)
+    try {
+      await updateArticle(article.id, { view_password: '' })
+      queryClient.invalidateQueries({ queryKey: ['article', article.id] })
+      notify.success('访问密码已清除')
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : '清除密码失败')
+    } finally {
+      setClearingPassword(false)
+    }
+  }
 
   const publish = useMutation({
     mutationFn: async () => {
-      const body = {
-        title,
-        content,
-        status: 'published',
-        category_id: categoryId,
-        tags,
-        cover,
-      }
+      // 勾了「定时发布」就落 scheduled，否则照常发布
+      const body = buildBody(scheduleEnabled ? 'scheduled' : 'published')
       if (mode === 'edit' && article) {
         return updateArticle(article.id, body)
       }
@@ -217,10 +320,10 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       setBaseline(currentSnapshot())
       if (mode === 'edit' && article) {
         setViewSlug(res.article.slug)
-        notify.success(res.article.status === 'published' ? '文章已发布' : '已保存', res.article.slug)
+        notify.success(savedNotice(res.article.status), res.article.slug)
       } else {
         clearLocalDraft()
-        notify.success('文章已发布', res.article.slug)
+        notify.success(savedNotice(res.article.status), res.article.slug)
         router.replace(editHref(res.article.id))
       }
     },
@@ -231,14 +334,7 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
   // 新建文章先落库为 draft 并跳转编辑页，之后由自动保存接管（不会直接发布）。
   const saveDraft = useMutation({
     mutationFn: async () => {
-      const body = {
-        title,
-        content,
-        status: 'draft',
-        category_id: categoryId,
-        tags,
-        cover,
-      }
+      const body = buildBody('draft')
       if (mode === 'edit' && article) {
         return updateArticle(article.id, body)
       }
@@ -274,7 +370,16 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
   useEffect(() => {
     if (!autoSaveEnabled) return
     if (mode !== 'edit' || article?.status !== 'draft') return
-    const snapshot = JSON.stringify({ t: title, c: content, g: categoryId, s: tags.join(','), v: cover })
+    const snapshot = JSON.stringify({
+      t: title,
+      c: content,
+      g: categoryId,
+      s: tags.join(','),
+      v: cover,
+      e: excerpt.trim(),
+      n: isPinned,
+      sc: scheduleEnabled ? scheduledLocal : '',
+    })
     if (snapshot === baseline) return
     if (!title.trim() || !htmlToText(content).trim()) return
 
@@ -288,6 +393,11 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
           category_id: categoryId,
           tags,
           cover,
+          excerpt: excerpt.trim(),
+          // 自动保存从不带 view_password：密码变更必须由用户显式保存，
+          // 防抖动静默落库不该有机会改掉它（也不带 scheduled_at——
+          // 定时只在「发布」动作上生效，草稿态不落定时）
+          ...(isAdmin ? { is_pinned: isPinned } : {}),
         })
         setBaseline(snapshot)
         setAutoSavedAt(new Date())
@@ -298,7 +408,7 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       }
     }, 2000)
     return () => clearTimeout(timer)
-  }, [title, content, categoryId, tags, cover, mode, article, autoSaveEnabled, baseline])
+  }, [title, content, categoryId, tags, cover, excerpt, isPinned, isAdmin, scheduleEnabled, scheduledLocal, mode, article, autoSaveEnabled, baseline])
 
   // 新建文章：内容防抖写入本地草稿（刷新/误关/误触返回后可从草稿恢复）
   useEffect(() => {
@@ -308,10 +418,10 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       return
     }
     const timer = setTimeout(() => {
-      writeLocalDraft({ title, markdown, categoryId, tags, cover })
+      writeLocalDraft({ title, markdown, categoryId, tags, cover, excerpt })
     }, 800)
     return () => clearTimeout(timer)
-  }, [mode, title, markdown, categoryId, tags, cover])
+  }, [mode, title, markdown, categoryId, tags, cover, excerpt])
 
   // 有未保存更改时，刷新/关闭页面前弹浏览器确认（Next 客户端路由跳转由链接本身拦截）
   useEffect(() => {
@@ -361,6 +471,11 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
     }
     if (!wordCount) {
       notify.error('先写一点正文，再发布')
+      return
+    }
+    // 后端对 scheduled + 空 scheduled_at 直接 400，这里先拦一道给明确提示
+    if (scheduleEnabled && !scheduledLocal) {
+      notify.error('请选择定时发布时间')
       return
     }
     publish.mutate()
@@ -506,7 +621,8 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
                   setTags([])
                   setCover('')
                   setShowCover(false)
-                  setBaseline(JSON.stringify({ t: '', c: '', g: null, s: '', v: '' }))
+                  setExcerpt('')
+                  setBaseline(JSON.stringify({ t: '', c: '', g: null, s: '', v: '', e: '', n: false, sc: '' }))
                 }}
                 className="shrink-0 rounded-md border border-border px-2 py-1 transition-colors hover:text-red-500"
               >
@@ -655,6 +771,109 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
               </div>
             )}
           </div>
+
+          {/* 高级设置：摘要 / 访问密码 / 定时发布 / 置顶。
+              原生 <details> 折叠，默认收起，不需要额外状态与依赖。
+              置顶块仅管理员渲染——普通用户投稿不给这个入口 */}
+          <details className="mt-3 rounded-lg border border-dashed border-border px-3 py-2">
+            <summary className="list-none cursor-pointer text-xs font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+              高级设置
+            </summary>
+            <div className="mt-3 space-y-5">
+              {/* 摘要：留空由后端从正文生成；后端自动生成的那份不回显，
+                  避免把机器摘要误当作者手写内容再存回去 */}
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium">
+                  <AlignLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                  摘要
+                </label>
+                <textarea
+                  value={excerpt}
+                  onChange={(e) => setExcerpt(e.target.value)}
+                  rows={2}
+                  placeholder="留空则自动从正文生成摘要"
+                  className="w-full resize-y rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+                />
+              </div>
+
+              {/* 访问密码：后端只在请求体里收明文，响应只给 has_password。
+                  密码哈希不可回显，「动没动过」用 passwordTouched 追踪——
+                  没动过就不提交该字段，否则「改标题不改密码」会清掉密码 */}
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-sm font-medium">
+                  <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                  访问密码
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    setPasswordTouched(true)
+                  }}
+                  placeholder="留空表示不设密码"
+                  className={inputClass}
+                />
+                <p className="text-xs text-muted-foreground">文章列表不会泄露已加密文章的正文</p>
+                {article?.has_password && (
+                  <button
+                    type="button"
+                    onClick={clearPassword}
+                    disabled={clearingPassword}
+                    className="rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-red-500/40 hover:text-red-500 disabled:opacity-50"
+                  >
+                    {clearingPassword ? '清除中...' : '清除密码'}
+                  </button>
+                )}
+              </div>
+
+              {/* 定时发布：勾选后才出现时间输入。datetime-local 给的是本地时间，
+                  提交时用 new Date(value).toISOString() 转 RFC3339 */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => setScheduleEnabled(e.target.checked)}
+                    className="h-4 w-4 accent-[color:var(--accent)]"
+                  />
+                  <span className="flex items-center gap-1.5">
+                    <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+                    定时发布
+                  </span>
+                </label>
+                {scheduleEnabled && (
+                  <>
+                    <input
+                      type="datetime-local"
+                      value={scheduledLocal}
+                      onChange={(e) => setScheduledLocal(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-72"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      到时间后自动发布，无需手动操作；选择过去的时间将立即发布
+                    </p>
+                  </>
+                )}
+              </div>
+
+              {/* 置顶：仅管理员可见 */}
+              {isAdmin && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isPinned}
+                    onChange={(e) => setIsPinned(e.target.checked)}
+                    className="h-4 w-4 accent-[color:var(--accent)]"
+                  />
+                  <span className="flex items-center gap-1.5">
+                    <Pin className="h-3.5 w-3.5 text-muted-foreground" />
+                    置顶这篇文章
+                  </span>
+                </label>
+              )}
+            </div>
+          </details>
 
           <div className="mt-6 border-t border-border pt-2">
             <MarkdownEditor

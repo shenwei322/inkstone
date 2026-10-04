@@ -87,10 +87,24 @@ func main() {
 	apiLimiter := middleware.NewSlidingLimiter()
 
 	taxonomySvc := service.NewTaxonomyService(taxonomyRepo)
+	// 内容导入导出（区别于上面的 backupSvc 全站快照）
+	exportSvc := service.NewExportImportService(articleRepo, taxonomyRepo)
+	// 文章历史版本。Snapshotter 注入 ArticleService，让所有走 Update
+	// 的路径自动留版（不必每个调用方记得调）。
+	revisionRepo := repository.NewRevisionRepository(db)
+	revisionSvc := service.NewRevisionService(revisionRepo, articleRepo)
+	articleSvc.SetRevisions(revisionSvc)
+	revisionHandler := handler.NewRevisionHandler(revisionSvc, articleSvc)
 	authHandler := handler.NewAuthHandler(authSvc, emailCodeSvc, captchaSvc, apiLimiter, logSvc)
 	articleHandler := handler.NewArticleHandler(articleSvc, logSvc)
+	// 定时发布扫描器：每分钟把到点的 scheduled 文章改成 published。
+	// 在 goroutine 里跑，进程退出时由 defer 里 Stop() 收尾。
+	scheduledPublisher := service.NewScheduledPublisher(articleRepo)
 	adminHandler := handler.NewAdminHandler(adminSvc, userRepo, articleSvc, articleRepo, commentSvc, logSvc)
 	taxonomyHandler := handler.NewTaxonomyHandler(taxonomyRepo)
+	// 内容导入导出：与 BackupService（全站快照）是两套东西，见
+	// service.ExportImportService 顶部的说明。
+	exportHandler := handler.NewExportHandler(exportSvc, logSvc)
 	// 分类层级（树形增删改）。与标签共用 TaxonomyService / LogService。
 	categoryHandler := handler.NewAdminCategoryHandler(taxonomySvc, logSvc)
 	commentHandler := handler.NewCommentHandler(commentSvc, tokens, captchaSvc, apiLimiter, logSvc)
@@ -163,7 +177,11 @@ func main() {
 		}
 	}
 	router.Use(gin.Logger(), gin.Recovery())
+	// CachePolicy 放在 SecurityHeaders 之后：它在 c.Next() 之后才写头，
+	// 注册顺序不影响生效，但放在中间件链尾部便于以后插入
+	// 只影响 Cache-Control 的中间件（如 ETag 生成）。
 	router.Use(middleware.SecurityHeaders())
+	router.Use(middleware.CachePolicy())
 	router.Use(middleware.TrafficStats(statSvc))
 	// 允许的源：访客站 + 独立管理后台（后台跨源部署时携带 Authorization 请求）
 	allowedOrigins := []string{cfg.FrontendURL}
@@ -361,6 +379,9 @@ func main() {
 			// 通配段，注册时会直接 panic。
 			articles.GET("/slug/:slug/related", articleHandler.RelatedBySlug)
 			articles.GET("/slug/:slug/neighbors", articleHandler.NeighborsBySlug)
+			// 加密文章的解锁校验。与 GetBySlug 的 ?password= 等价，
+			// 单独端点让前端能区分「密码错了」与「文章取不到」。
+			articles.GET("/slug/:slug/unlock", articleHandler.UnlockArticle)
 			articles.GET("/:id/comments", commentHandler.List)
 			articles.GET("/:id/reactions", reactionHandler.Stats)
 
@@ -371,6 +392,12 @@ func main() {
 				// 绕过 Create 的限流（此前 Update 既无限流也无验证码）。
 				authed.PUT("/:id", articleLimit, articleHandler.Update)
 				authed.DELETE("/:id", articleHandler.Delete)
+				// 历史版本挂在 authed 组内：历史含草稿时期的正文，
+				// 公开访问等于绕过"这篇文章还没发"这个前提。
+				// 与 /:id/comments 同层不同静态段，gin 匹配不冲突。
+				authed.GET("/:id/revisions", revisionHandler.List)
+				authed.GET("/:id/revisions/:version", revisionHandler.Get)
+				authed.POST("/:id/revisions/restore", revisionHandler.Restore)
 				authed.POST("/:id/comments", commentLimit, commentHandler.Create)
 				authed.POST("/:id/reactions", reactionHandler.Toggle)
 			}
@@ -395,6 +422,10 @@ func main() {
 			admin.POST("/system/backups", backupHandler.Create)
 			admin.GET("/system/backups/:name/download", backupHandler.Download)
 			admin.DELETE("/system/backups/:name", backupHandler.Delete)
+			// 内容导入导出：与上面的全站快照是两回事
+			// （见 service.ExportImportService 的说明），不共用路径。
+			admin.GET("/system/export", exportHandler.Export)
+			admin.POST("/system/import", exportHandler.Import)
 			admin.GET("/users", adminHandler.ListUsers)
 			admin.POST("/users", adminHandler.CreateUser)
 			admin.PUT("/users/:id/role", adminHandler.UpdateUserRole)
@@ -404,12 +435,20 @@ func main() {
 			admin.DELETE("/users/:id", adminHandler.DeleteUser)
 			admin.GET("/articles", adminHandler.ListArticles)
 			admin.GET("/articles/trash", adminHandler.ListTrashArticles)
+			// 批量操作必须注册在 /articles/:id 之前：gin 匹配到
+			// /articles/bulk-delete 时会先命中 :id，把它当字符串 id
+			// 解析失败返回 400，永远走不到真正的 handler。
+			admin.POST("/articles/bulk-delete", adminHandler.BulkDeleteArticles)
+			admin.POST("/articles/bulk-status", adminHandler.BulkSetArticleStatus)
 			admin.POST("/articles/:id/restore", adminHandler.RestoreArticle)
 			admin.DELETE("/articles/:id/purge", adminHandler.PurgeArticle)
 			admin.PUT("/articles/:id/status", adminHandler.SetArticleStatus)
 			admin.DELETE("/articles/:id", adminHandler.DeleteArticle)
 			admin.POST("/tags", adminTagHandler.Create)
 			admin.PUT("/tags/:id", adminTagHandler.Update)
+			// 合并必须注册在 /tags/:id 之前，理由同文章的 bulk-delete：
+			// gin 会先命中 :id，把 "merge" 当数字解析失败直接返回 400。
+			admin.POST("/tags/merge", adminTagHandler.Merge)
 			admin.DELETE("/tags/:id", adminTagHandler.Delete)
 			// 分类层级：create/update 支持 parent_id，delete 会校验
 			// 「有子分类/有文章」两种情况并返回可读错误
@@ -456,6 +495,12 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router}
+
+	// 定时发布必须在起服务之前 Start：否则启动瞬间堆积的到期文章
+	// 要等下一个 tick（最多 1 分钟）才发布，而那批文章的发布时间已经过了。
+	scheduledPublisher.Start()
+	defer scheduledPublisher.Stop()
+
 	go func() {
 		log.Printf("server listening on :%s (env=%s)", cfg.Port, cfg.AppEnv)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

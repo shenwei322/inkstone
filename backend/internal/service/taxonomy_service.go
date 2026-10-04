@@ -67,6 +67,53 @@ func (s *TaxonomyService) DeleteTag(id uint) error {
 	return nil
 }
 
+// maxMergeTags 限制单次合并的标签数。
+// 合并要在事务里逐条 UPDATE + DELETE，数量过大时事务持有锁的时间过长，
+// 会阻塞同一批文章的后台编辑。分批合并不影响结果。
+const maxMergeTags = 50
+
+// MergeTags 把 sourceIDs 指定的标签全部并入 targetID。
+//
+// 返回迁移的文章关联数（含清掉的重复行）——前端要显示
+// 「已将 N 篇文章的标签迁移到『Go』」，这是管理员确认操作生效的依据。
+//
+// sourceIDs 与 targetID 相同时忽略那一项而非报错：管理界面里
+// 把目标标签也勾进来源是常见误操作，提示「忽略目标标签本身」
+// 比拒绝整批合并更好用。
+func (s *TaxonomyService) MergeTags(targetID uint, sourceIDs []uint) (int64, error) {
+	if targetID == 0 {
+		return 0, NewValidationError("请选择目标标签")
+	}
+	clean := filterMergeSources(targetID, sourceIDs)
+	if len(clean) == 0 {
+		return 0, NewValidationError("请选择要合并的标签")
+	}
+	if len(clean) > maxMergeTags {
+		return 0, NewValidationError("单次最多合并 50 个标签")
+	}
+	return s.taxonomy.MergeTags(targetID, clean)
+}
+
+// filterMergeSources 清洗合并来源列表：丢掉 0、丢掉目标自身、去重。
+//
+// 抽成纯函数是为了能单测：合并在 repository 里要跑 SQL，
+// 而「哪些 id 会被排除」这种规则不该为了测它去连数据库。
+func filterMergeSources(targetID uint, sourceIDs []uint) []uint {
+	seen := make(map[uint]struct{}, len(sourceIDs))
+	out := make([]uint, 0, len(sourceIDs))
+	for _, id := range sourceIDs {
+		if id == 0 || id == targetID {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 // TagName 返回标签名称，供删除前的审计日志记录；取不到时返回空串。
 func (s *TaxonomyService) TagName(id uint) string {
 	tags, err := s.taxonomy.ListTags()

@@ -37,9 +37,12 @@ export function clearTokens() {
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** 响应体原文：错误分支里后端可能附带业务标记（如加密文章的 need_password） */
+  data?: unknown
+  constructor(status: number, message: string, data?: unknown) {
     super(message)
     this.status = status
+    this.data = data
   }
 }
 
@@ -109,13 +112,19 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 
   if (!res.ok) {
     let message = `请求失败 (${res.status})`
+    let data: unknown
     try {
-      const data = await res.json()
-      if (data && typeof data.error === 'string') message = data.error
+      data = await res.json()
+      // unknown 上不能直接取属性，先收窄成"带 error 字段的对象"。
+      // 后端所有错误响应都是 {error: "..."}，取不到就沿用默认文案。
+      if (data && typeof data === 'object' && 'error' in data) {
+        const err = (data as { error?: unknown }).error
+        if (typeof err === 'string') message = err
+      }
     } catch {
       // keep default message
     }
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, message, data)
   }
 
   if (res.status === 204) return undefined as T
@@ -339,29 +348,65 @@ export function fetchArticleBySlug(slug: string) {
   return api<{ article: Article }>(`/articles/slug/${encodeURIComponent(slug)}`)
 }
 
-export function createArticle(input: {
+/**
+ * 带访问密码取文章详情（加密文章解锁后重新拉取用）。
+ *
+ * 后端刻意不做「会话记住已解锁」（见后端 articlePasswordOK 注释），
+ * 每次拉加密文章都要带 password 查询参数——只调 unlock 校验通过后
+ * 再拉一次不带密码的详情，拿到的还是 401。
+ */
+export function fetchArticleBySlugWithPassword(slug: string, password: string) {
+  const qs = new URLSearchParams({ password }).toString()
+  return api<{ article: Article }>(`/articles/slug/${encodeURIComponent(slug)}?${qs}`)
+}
+
+/**
+ * 创建/更新文章的入参（POST /articles、PUT /articles/:id）。
+ *
+ * view_password 只在请求体里以明文出现，任何响应都不返回它。
+ * 更新时两种语义必须区分：**不传该字段**（undefined）＝保持原密码不变；
+ * **传空串**＝清除密码。api() 用 JSON.stringify 序列化，值为 undefined
+ * 的键会被自动省略，所以调用方「没动过就不设置该键」即满足前者。
+ */
+export interface ArticleInput {
   title: string
   content: string
   status: string
   category_id?: number | null
   tags?: string[]
   cover?: string
-}) {
+  /** 作者手写的摘要；传空串表示不手写，由后端从正文生成 */
+  excerpt?: string
+  /** 置顶（仅管理员可设置） */
+  is_pinned?: boolean
+  /** 定时发布时间（RFC3339）；status='scheduled' 时必填 */
+  scheduled_at?: string
+  /** 明文访问密码：不传=保持原密码，空串=清除密码 */
+  view_password?: string
+}
+
+export function createArticle(input: ArticleInput) {
   return api<{ article: Article }>('/articles', { method: 'POST', body: input, auth: true })
 }
 
-export function updateArticle(
-  id: number,
-  input: Partial<{
-    title: string
-    content: string
-    status: string
-    category_id: number | null
-    tags: string[]
-    cover: string
-  }>,
-) {
+export function updateArticle(id: number, input: Partial<ArticleInput>) {
   return api<{ article: Article }>(`/articles/${id}`, { method: 'PUT', body: input, auth: true })
+}
+
+/**
+ * 校验文章访问密码（GET /articles/slug/:slug/unlock?password=xxx）。
+ *
+ * 单独一个端点而不是直接带 password 拉详情，是为了把「密码错了」与
+ * 「文章取不到」两种失败分开：前者是 401 + 「访问密码不正确」，后者
+ * 是 404。前端据此给不同提示，不必混在一个 catch 里猜。
+ *
+ * 匿名可调（不带 auth）：401 时 api() 不会尝试刷新 token，直接抛错。
+ */
+export function unlockArticle(slug: string, password: string) {
+  const qs = new URLSearchParams({ password }).toString()
+  return api<{ unlocked: boolean; has_password: boolean }>(
+    `/articles/slug/${encodeURIComponent(slug)}/unlock?${qs}`,
+  )
 }
 
 // ---------- Engagement API ----------

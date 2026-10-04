@@ -44,6 +44,11 @@ type Article struct {
     Views       int64       // 浏览量
     PublishedAt *time.Time  // 首次发布时写入
     Tags        []Tag       // 多对多，中间表 article_tags
+    Excerpt     string      // 作者手写摘要，留空 = 后端从正文生成
+    IsPinned    bool        // 置顶（列表排最前；order=views 的热门榜不掺）
+    ViewPassword string     // 访问密码的 bcrypt 哈希，空 = 不设密码（json:"-"）
+    ScheduledAt *time.Time  // 定时发布时间，仅 status=scheduled 时有效
+    HasPassword bool        // 查询期计算的布尔值，不落库（gorm:"-"）
     // 软删除：删除只是置 deleted_at，进入回收站可还原；
     // 彻底删除走 Unscoped()。recycle bin 与备份都要能覆盖到。
     DeletedAt gorm.DeletedAt
@@ -52,11 +57,40 @@ type Article struct {
 }
 ```
 
+**文章状态**：`draft` / `published` / `scheduled`。
+`scheduled` 与 draft 的区别是「已决定发布、只等时间到」，后台列表据此区分
+「还没写完」和「等发布中」。`scheduled_at` 传过去时刻会被按已发布处理。
+
 **注意**：
 - `Content` 存 **HTML**（不是 Markdown），前端用 `dangerouslySetInnerHTML` 渲染
 - `Slug` 由 `repository.Slugify(title)` 生成（中文保留）
 - `Cover` 后端 `resolveCover()` 自动处理：显式优先，否则提取正文首个 `<img src="...">`
 - **软删除后关联不清空**：还原时评论/点赞必须还在。彻底清关联只发生在 `Purge`
+- **密码保护必须守住 5 个出口**，漏一个就白设：`GET /slug/:slug`、
+  `GET /:id`、列表的 `content`、RSS 全文，且作者本人免密。详见 api.md
+
+## ArticleRevision（文章历史版本）
+
+```go
+type ArticleRevision struct {
+    ID         uint
+    ArticleID  uint      // 外键 → Article
+    Version    int       // 文章内版本号，从 1 递增
+    Title      string
+    Content    string    // 完整正文，不是摘要
+    Excerpt    string
+    EditorID   uint      // 这次改动的作者（与 AuthorID 分开：管理员代改要能追溯）
+    ChangeNote string    // 改动说明，可空
+    CreatedAt  time.Time
+}
+```
+
+**保留上限**：`model.MaxRevisionsKept = 50`，超出删最旧的。
+每版都存全文，一篇常改的文章几年下来能攒出几十 MB。
+
+**写入时机**：每次 `Update` 保存**前**（此时 `article` 还是旧内容，
+之后就被覆盖）。草稿阶段同样留版——「只在发布时记一版」会让发布前的
+所有编辑无从追溯。内容与标题都没变时不留（自动保存会周期性触发）。
 
 ## Category / Tag（分类与标签）
 

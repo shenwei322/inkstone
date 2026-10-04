@@ -75,7 +75,16 @@ func (h *RSSHandler) Feed(c *gin.Context) {
 		if pub == nil {
 			pub = &a.CreatedAt
 		}
-		plain := stripHTMLTags(a.Content)
+		// 设了访问密码的文章不进 RSS 全文：RSS 是公开订阅源，
+		// 阅读器会缓存内容、聚合站会立即抓取——把加密正文推进 RSS
+		// 等于把密码保护的文直接广播出去。标题与链接照常输出，
+		// 读者点进去仍要输密码。
+		content := a.Content
+		plain := stripHTMLTags(content)
+		if a.ViewPassword != "" {
+			content = ""
+			plain = "（这篇文章设有访问密码，请到站点查看）"
+		}
 		if len([]rune(plain)) > 300 {
 			plain = string([]rune(plain)[:300]) + "..."
 		}
@@ -85,7 +94,7 @@ func (h *RSSHandler) Feed(c *gin.Context) {
 			GUID:        h.frontendURL + "/posts/" + a.Slug,
 			PubDate:     pub.Format(time.RFC1123Z),
 			Description: plain,
-			Content:     a.Content,
+			Content:     content,
 		})
 	}
 

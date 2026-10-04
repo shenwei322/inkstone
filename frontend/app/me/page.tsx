@@ -186,12 +186,20 @@ function MyArticlesTab() {
     queryKey: ['me', 'articles', 'published'],
     queryFn: () => fetchArticles({ page: 1, page_size: 50 }),
   })
+  // scheduled 要单独查：列表接口空 status 只返回已发布，status='draft'
+  // 的查询又不含它。不补这个查询，用户定时发布的文章在「我的文章」
+  // 里根本看不到，也就无从确认它什么时候上线。
+  const scheduledQuery = useQuery({
+    queryKey: ['me', 'articles', 'scheduled'],
+    queryFn: () => fetchArticles({ page: 1, page_size: 50, status: 'scheduled' }),
+  })
 
   const mine = (publishedQuery.data?.articles ?? [])
     .filter((a) => a.author.id === user?.id)
     .concat(draftsQuery.data?.articles ?? [])
+    .concat(scheduledQuery.data?.articles ?? [])
 
-  if (draftsQuery.isLoading || publishedQuery.isLoading) {
+  if (draftsQuery.isLoading || publishedQuery.isLoading || scheduledQuery.isLoading) {
     return <RowLoading rows={3} />
   }
 
@@ -216,10 +224,11 @@ function MyArticlesTab() {
         </div>
       ) : (
         mine.map((article: Article, i) => {
-          // 草稿走带鉴权的 id 预览页（/me/drafts/:id），已发布走公开 slug 页。
+          // 已发布走公开 slug 页；草稿与定时发布都走带鉴权的 id 预览页
+          // （/me/drafts/:id，作者本人免密可看自己的 scheduled 文章）。
           // 草稿复用 /posts/:slug 会因匿名请求拿到 404「文章不存在」。
           const detailHref =
-            article.status === 'draft' ? `/me/drafts/${article.id}` : `/posts/${article.slug}`
+            article.status === 'published' ? `/posts/${article.slug}` : `/me/drafts/${article.id}`
           return (
             <Reveal
               key={article.id}
@@ -229,7 +238,7 @@ function MyArticlesTab() {
               className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
             >
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Link
                     href={detailHref}
                     className="truncate font-medium transition-colors hover:text-accent"
@@ -240,13 +249,17 @@ function MyArticlesTab() {
                     <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">
                       已发布
                     </span>
+                  ) : article.status === 'scheduled' ? (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                      定时发布
+                    </span>
                   ) : (
                     <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
                       草稿
                     </span>
                   )}
                 </div>
-                <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
                     <Eye className="h-3 w-3" />
                     {article.views}
@@ -254,12 +267,17 @@ function MyArticlesTab() {
                   <span>
                     更新于 {new Date(article.updated_at).toLocaleDateString('zh-CN')}
                   </span>
+                  {article.status === 'scheduled' && article.scheduled_at && (
+                    <span>
+                      定于 {new Date(article.scheduled_at).toLocaleString('zh-CN')} 发布
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="ml-4 shrink-0 text-xs text-muted-foreground">
-                {/* 草稿给「预览」、已发布给「查看」，与标题链接同一落点 */}
+                {/* 已发布给「查看」、草稿与定时发布给「预览」，与标题链接同一落点 */}
                 <Link href={detailHref} className="transition-colors hover:text-accent">
-                  {article.status === 'draft' ? '预览' : '查看'}
+                  {article.status === 'published' ? '查看' : '预览'}
                 </Link>
               </div>
             </Reveal>
