@@ -14,6 +14,19 @@ frontend/app/                   # 访客站路由（App Router；含站内后台
 ├── links/page.tsx            # 友情链接页
 ├── posts/[slug]/page.tsx     # 文章详情（正文 + 目录 + 分享 + 回顶）
 ├── p/[slug]/page.tsx         # 独立页面（3 种模板）
+├── search/page.tsx           # 搜索页（?q=，独立 URL 便于 SEO）
+├── archive/page.tsx          # 归档页（按年/月折叠）
+├── categories/page.tsx       # 分类汇总
+├── category/[slug]/page.tsx  # 分类详情
+├── tags/page.tsx             # 标签云
+├── tag/[slug]/page.tsx       # 标签详情
+├── privacy/page.tsx          # 隐私政策
+├── terms/page.tsx            # 用户协议
+├── me/articles/new/page.tsx  # 普通用户投稿入口
+├── me/articles/edit/[id]/    # 普通用户编辑入口
+├── me/drafts/[id]/           # 草稿预览
+├── not-found.tsx             # 404（同时覆盖全应用未匹配 URL）
+├── error.tsx                 # 错误边界（恢复回调 prop 是 retry）
 └── admin/                    # 站内管理后台（19 页）
     ├── layout.tsx            # 侧边栏（fixed 贴视口最左、w-52 全高、顶部避开导航栏 4rem）+ 权限守卫 + 深浅模式；内容区 max-w-5xl，文章新建/编辑路由（/admin/articles/new|edit）放宽 max-w-7xl
     ├── page.tsx              # 概览（统计卡 + 资源监控 + 趋势图）
@@ -21,8 +34,10 @@ frontend/app/                   # 访客站路由（App Router；含站内后台
     ├── articles/             # 文章管理 + 编辑器
     ├── tags/                 # 标签管理
     ├── pages/                # 页面管理
-    ├── comments/             # 评论管理
+    ├── comments/             # 评论管理（含审核）
     ├── files/                # 文件管理
+    ├── trash/                # 回收站（还原 / 彻底删除）
+    ├── backups/              # 备份恢复（刻意不做一键还原）
     ├── sitemap/              # 站点地图（URL 列表 + 统计 + robots 预览）
     ├── links/                # 友情链接
     ├── appearance/           # 外观（菜单/小工具/侧栏位置）
@@ -32,8 +47,26 @@ frontend/app/                   # 访客站路由（App Router；含站内后台
     └── about/                # 关于系统
 
 frontend/components/          # 组件（页面组件单份存放于此）
-frontend/lib/                 # 工具与状态（api.ts / types.ts / auth-context / ui.ts）
+frontend/lib/                 # 工具与状态（api.ts / types.ts / auth-context / ui.ts / seo.ts）
 ```
+
+**新增共用组件**：`components/pagination.tsx`（后台列表分页，`onChange` 同时回传
+page 与 pageSize，调用方不必自己推导「改每页条数要不要回第 1 页」）、
+`components/term-article-list.tsx`（分类/标签详情共用）、`lib/seo.ts`
+（`SITE_URL` / `resolveSlug` / `plainText` / `jsonLdString`）。
+
+**前台分页用「加载更多」而非 `useInfiniteQuery`**：`useQueries` 按页声明式查询 +
+`loadedPages` state，第 1 页的 queryKey 与 SSR prefetch 完全一致，首屏仍命中服务端缓存；
+翻页只是事件回调里的 setState，规避 `react-hooks/set-state-in-effect`。
+
+**派生状态不用 effect 同步**（`app/search/page.tsx` 的做法）：把本地 state 记成
+`{q: string, value: string}`，渲染时比对 `draft.q === q ? draft.value : q`——
+URL 变了而输入框还停在旧词时，直接回用新 q。比 `useEffect(() => setDraft(q), [q])`
+正确，否则触发 ESLint `set-state-in-effect` 报错。
+
+**`article-editor.tsx` 的 `redirectBase` prop**：默认 `/admin`。普通用户从
+`/me/articles/new` 发布成功后会被 `router.replace` 到该前缀下的编辑页。
+不给这个 prop，普通用户发布完正好撞上 `admin/layout.tsx` 的整页拦截。
 
 ---
 

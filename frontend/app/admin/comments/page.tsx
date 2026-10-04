@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Reveal } from '@/components/motion'
@@ -7,15 +8,19 @@ import { RowLoading } from '@/components/page-loader'
 import { MessageSquare, Trash2 } from 'lucide-react'
 import { deleteAdminComment, fetchAdminComments, ApiError } from '@/lib/api'
 import { useNotify } from '@/components/toast'
+import { Pagination } from '@/components/pagination'
 import type { CommentItem } from '@/lib/types'
 
 export default function AdminCommentsPage() {
   const notify = useNotify()
   const queryClient = useQueryClient()
+  // 分页状态。此前 page 写死为 1 且没有翻页 UI，第 51 条评论起在后台完全点不到。
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'comments'],
-    queryFn: () => fetchAdminComments({ page: 1, page_size: 50 }),
+    queryKey: ['admin', 'comments', page, pageSize],
+    queryFn: () => fetchAdminComments({ page, page_size: pageSize }),
   })
 
   const deleteMutation = useMutation({
@@ -101,6 +106,16 @@ export default function AdminCommentsPage() {
           ))}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={data?.total ?? 0}
+        onChange={(p, size) => {
+          setPage(p)
+          setPageSize(size)
+        }}
+      />
     </div>
   )
 }

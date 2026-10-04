@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  PenLine,
   Search,
   Sun,
   User,
@@ -241,6 +242,19 @@ export function Navbar() {
                     <User className="h-4 w-4" />
                   </span>
                   我的账户
+                </Link>
+                {/* 投稿入口对所有登录用户可见：后端 POST /articles 不限角色，
+                    指向 /me/articles/new 而非 /admin/articles/new（后者会把
+                    普通作者整页拦下） */}
+                <Link
+                  href="/me/articles/new"
+                  onClick={() => setMenuOpen(false)}
+                  className={menuLink}
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-foreground">
+                    <PenLine className="h-4 w-4" />
+                  </span>
+                  写文章
                 </Link>
                 {user.role === 'admin' && (
                   <Link href="/admin" onClick={() => setMenuOpen(false)} className={menuLink}>

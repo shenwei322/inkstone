@@ -106,3 +106,35 @@ func (r *ReactionRepository) UserFlags(articleID, userID uint) (liked, favorited
 	}
 	return liked, favorited, nil
 }
+
+// FavoriteArticles 返回某用户收藏的文章，按收藏时间倒序。
+//
+// 收藏按钮此前只能写不能读：Reaction 表里有 favorite 行，却没有任何按用户
+// 聚合的查询，用户点完收藏就再也找不到那篇文章。这里补上读路径。
+//
+// 用 JOIN 而非两步查询：先取收藏再逐篇 FindByID 会有 N+1 次往返，
+// 收藏夹页一次请求就够了。
+func (r *ReactionRepository) FavoriteArticles(userID uint, page, pageSize int) ([]model.Article, int64, error) {
+	base := r.db.Model(&model.Reaction{}).
+		Where("reactions.user_id = ? AND reactions.type = ?", userID, model.ReactionFavorite)
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	var articles []model.Article
+	err := r.db.
+		Joins("JOIN reactions ON reactions.article_id = articles.id").
+		Where("reactions.user_id = ? AND reactions.type = ?", userID, model.ReactionFavorite).
+		Order("reactions.created_at DESC").
+		Preload("Author").
+		Preload("Category").
+		Offset((page - 1) * pageSize).Limit(pageSize).
+		Find(&articles).Error
+	return articles, total, err
+}

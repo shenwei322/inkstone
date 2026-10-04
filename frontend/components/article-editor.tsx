@@ -78,9 +78,19 @@ function clearLocalDraft() {
 interface EditorShellProps {
   mode: 'new' | 'edit'
   article?: Article
+  /**
+   * 保存/删除/返回的落点前缀，默认 '/admin'（后台工作台）。
+   *
+   * 前台投稿页必须传 '/me'：/admin/* 被 admin/layout 按角色整页拦下，
+   * 普通作者发布完被 replace 到后台编辑页，看到的会是权限提示而不是文章。
+   */
+  redirectBase?: string
 }
 
-function EditorShell({ mode, article }: EditorShellProps) {
+function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
+  // 后台与前台共用的一套编辑器，只有"操作完去哪儿"不同
+  const listHref = `${redirectBase ?? '/admin'}/articles`
+  const editHref = (id: number) => `${redirectBase ?? '/admin'}/articles/edit/${id}`
   const router = useRouter()
   const queryClient = useQueryClient()
   // new 模式优先从本地草稿恢复（刷新/误关不丢内容）；恢复的 draft 供 banner 与基线使用
@@ -211,7 +221,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
       } else {
         clearLocalDraft()
         notify.success('文章已发布', res.article.slug)
-        router.replace(`/admin/articles/edit/${res.article.id}`)
+        router.replace(editHref(res.article.id))
       }
     },
     onError: (err) => notify.error(err instanceof ApiError ? err.message : '发布失败，请稍后重试'),
@@ -244,7 +254,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
       } else {
         clearLocalDraft()
         notify.success('草稿已保存，可继续编辑')
-        router.replace(`/admin/articles/edit/${res.article.id}`)
+        router.replace(editHref(res.article.id))
       }
     },
     onError: (err) => notify.error(err instanceof ApiError ? err.message : '保存草稿失败'),
@@ -255,7 +265,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin'] })
       notify.success('文章已删除')
-      router.push('/admin/articles')
+      router.push(listHref)
     },
     onError: (err) => notify.error(err instanceof ApiError ? err.message : '删除失败'),
   })
@@ -410,7 +420,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
         <div className="flex h-14 items-center justify-between px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
-              href="/admin/articles"
+              href={listHref}
               onClick={async (e) => {
                 if (!isDirty) return
                 e.preventDefault()
@@ -420,7 +430,7 @@ function EditorShell({ mode, article }: EditorShellProps) {
                   confirmText: '离开',
                   danger: true,
                 })
-                if (ok) router.push('/admin/articles')
+                if (ok) router.push(listHref)
               }}
               className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
@@ -724,15 +734,21 @@ function EditorShell({ mode, article }: EditorShellProps) {
   )
 }
 
-export function NewArticlePage() {
+export function NewArticlePage({ redirectBase }: { redirectBase?: string } = {}) {
   return (
     <PageTransition>
-      <EditorShell mode="new" />
+      <EditorShell mode="new" redirectBase={redirectBase} />
     </PageTransition>
   )
 }
 
-export function EditArticlePage({ id }: { id: number }) {
+export function EditArticlePage({
+  id,
+  redirectBase,
+}: {
+  id: number
+  redirectBase?: string
+}) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['article', id],
     queryFn: () => fetchArticle(id),
@@ -760,7 +776,12 @@ export function EditArticlePage({ id }: { id: number }) {
 
   return (
     <PageTransition>
-      <EditorShell key={data.article.id} mode="edit" article={data.article} />
+      <EditorShell
+        key={data.article.id}
+        mode="edit"
+        article={data.article}
+        redirectBase={redirectBase}
+      />
     </PageTransition>
   )
 }

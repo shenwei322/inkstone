@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { RowLoading } from '@/components/page-loader'
-import { PenLine } from 'lucide-react'
+import { PenLine, Trash2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   deleteAdminArticle,
@@ -14,6 +14,7 @@ import {
   ApiError,
 } from '@/lib/api'
 import { useNotify } from '@/components/toast'
+import { Pagination } from '@/components/pagination'
 import type { Article } from '@/lib/types'
 
 const tabs = [
@@ -36,6 +37,9 @@ function statusBadge(status: Article['status']) {
 
 export default function AdminArticlesPage() {
   const [status, setStatus] = useState<'' | 'published' | 'draft'>('')
+  // 分页状态。此前 page 写死为 1 且没有翻页 UI，第 51 篇起在后台完全点不到。
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const notify = useNotify()
   const queryClient = useQueryClient()
 
@@ -48,9 +52,16 @@ export default function AdminArticlesPage() {
   }, [status])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'articles', status],
-    queryFn: () => fetchAdminArticles({ page: 1, page_size: 50, status: status || undefined }),
+    queryKey: ['admin', 'articles', status, page, pageSize],
+    queryFn: () => fetchAdminArticles({ page, page_size: pageSize, status: status || undefined }),
   })
+
+  // 筛选条件变化必须回到第 1 页：否则可能停在一个已不存在的页码上，
+  // 表现为"列表空了但总数没变"。
+  const switchStatus = (next: '' | 'published' | 'draft') => {
+    setStatus(next)
+    setPage(1)
+  }
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin'] })
 
@@ -67,7 +78,7 @@ export default function AdminArticlesPage() {
     mutationFn: (id: number) => deleteAdminArticle(id),
     onSuccess: () => {
       invalidate()
-      notify.success('文章已删除')
+      notify.success('文章已移入回收站')
     },
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '删除失败'),
   })
@@ -95,7 +106,7 @@ export default function AdminArticlesPage() {
           {tabs.map((t) => (
             <button
               key={t.key}
-              onClick={() => setStatus(t.key)}
+              onClick={() => switchStatus(t.key)}
               className={`relative rounded-md px-3.5 py-1.5 text-sm transition-colors ${
                 status === t.key ? 'text-white' : 'text-muted-foreground hover:text-foreground'
               }`}
@@ -111,6 +122,13 @@ export default function AdminArticlesPage() {
             </button>
           ))}
             </div>
+            <Link
+              href="/admin/trash"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-accent"
+            >
+              <Trash2 className="h-4 w-4" />
+              回收站
+            </Link>
           </div>
       </div>
 
@@ -166,8 +184,9 @@ export default function AdminArticlesPage() {
                   onClick={async () => {
                     const ok = await notify.confirm({
                       title: `删除「${a.title}」？`,
-                      message: '文章将被永久删除，此操作无法撤销。',
-                      confirmText: '确认删除',
+                      message:
+                        '文章将移入回收站，可在「回收站」页还原；彻底删除会连评论与点赞一起清除，且不可恢复。',
+                      confirmText: '移入回收站',
                       danger: true,
                     })
                     if (ok) deleteMutation.mutate(a.id)
@@ -190,6 +209,16 @@ export default function AdminArticlesPage() {
           )}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={data?.total ?? 0}
+        onChange={(p, size) => {
+          setPage(p)
+          setPageSize(size)
+        }}
+      />
     </div>
   )
 }

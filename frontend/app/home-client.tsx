@@ -2,15 +2,18 @@
 
 import Link from 'next/link'
 import Image from 'next/image'
-import { Suspense, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Eye, PenLine, Search, X } from 'lucide-react'
+import { Suspense, useMemo, useState } from 'react'
+import { useQueries, useQuery } from '@tanstack/react-query'
+import { ChevronDown, Eye, PenLine, Search, X } from 'lucide-react'
 import { fetchArticles, fetchCategories, fetchTags } from '@/lib/api'
-import type { Article, ArticleListResponse } from '@/lib/types'
-import { PageLoading, RowLoading } from '@/components/page-loader'
+import type { Article } from '@/lib/types'
+import { PageLoading, RowLoading, Spinner } from '@/components/page-loader'
 import { PageTransition, StaggerList, StaggerItem, HoverLift, Reveal } from '@/components/motion'
 import { useSiteConfig } from '@/components/site-config-context'
 import { SiteSidebar } from '@/components/site-sidebar'
+
+// 每页条数。与后台各列表页保持同一档位，后端上限是 50。
+const PAGE_SIZE = 20
 
 function ArticleCard({ article }: { article: Article }) {
   const date = article.published_at
@@ -131,17 +134,37 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
   const site = useSiteConfig()
   const widgets = site.widgets.filter((w) => w.type && w.title)
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['articles', 'published', 1, category, tag, q],
-    queryFn: () =>
-      fetchArticles({
-        page: 1,
-        page_size: 20,
-        category: category ?? undefined,
-        tag: tag ?? undefined,
-        q: q ?? undefined,
-      }),
+  // 已加载到第几页。用「页数」而不是「追加的文章数组」：翻页只是 setState，
+  // 数据由下面声明式的一组 query 各自负责，避免在 effect 里同步追加状态。
+  const [loadedPages, setLoadedPages] = useState(1)
+
+  const pageQueries = useQueries({
+    queries: Array.from({ length: loadedPages }, (_, i) => {
+      const page = i + 1
+      return {
+        // queryKey 与 app/page.tsx 的 SSR 预取保持一致（第 1 页），
+        // 首屏才能命中服务端注入的缓存。
+        queryKey: ['articles', 'published', page, category, tag, q],
+        queryFn: () =>
+          fetchArticles({
+            page,
+            page_size: PAGE_SIZE,
+            category: category ?? undefined,
+            tag: tag ?? undefined,
+            q: q ?? undefined,
+          }),
+      }
+    }),
   })
+
+  const articles = pageQueries.flatMap((r) => r.data?.articles ?? [])
+  const total = pageQueries[0]?.data?.total ?? 0
+  const isLoading = pageQueries.some((r) => r.isLoading)
+  const isError = pageQueries.some((r) => r.isError)
+  const error = pageQueries.find((r) => r.isError)?.error ?? null
+  // 只有最后一页还在飞时才算「加载更多中」——前面几页的 refetch 不该让按钮转圈。
+  const isFetchingMore = pageQueries[loadedPages - 1]?.isFetching === true
+  const hasMore = articles.length < total
 
   const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: fetchCategories })
   const tagsQuery = useQuery({ queryKey: ['tags'], queryFn: fetchTags })
@@ -164,7 +187,7 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
                     : ''}
             </h1>
             <span className="text-sm font-normal text-muted-foreground">
-              {data ? `${data.total} 篇` : ''}
+              {total ? `${total} 篇` : ''}
             </span>
           </div>
         )}
@@ -183,8 +206,12 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
                     isLoading={isLoading}
                     isError={isError}
                     error={error}
-                    data={data}
+                    articles={articles}
+                    total={total}
                     hasFilter={hasFilter}
+                    hasMore={hasMore}
+                    isFetchingMore={isFetchingMore}
+                    onLoadMore={() => setLoadedPages((n) => n + 1)}
                   />
                 </div>
               </>
@@ -195,8 +222,12 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
                     isLoading={isLoading}
                     isError={isError}
                     error={error}
-                    data={data}
+                    articles={articles}
+                    total={total}
                     hasFilter={hasFilter}
+                    hasMore={hasMore}
+                    isFetchingMore={isFetchingMore}
+                    onLoadMore={() => setLoadedPages((n) => n + 1)}
                   />
                 </div>
                 <SiteSidebar widgets={widgets} position="right" />
@@ -208,8 +239,12 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
             isLoading={isLoading}
             isError={isError}
             error={error}
-            data={data}
+            articles={articles}
+            total={total}
             hasFilter={hasFilter}
+            hasMore={hasMore}
+            isFetchingMore={isFetchingMore}
+            onLoadMore={() => setLoadedPages((n) => n + 1)}
           />
         )}
       </div>
@@ -221,14 +256,22 @@ function ArticleListSection({
   isLoading,
   isError,
   error,
-  data,
+  articles,
+  total,
   hasFilter,
+  hasMore,
+  isFetchingMore,
+  onLoadMore,
 }: {
   isLoading: boolean
   isError: boolean
   error: Error | null
-  data?: ArticleListResponse
+  articles: Article[]
+  total: number
   hasFilter: boolean
+  hasMore: boolean
+  isFetchingMore: boolean
+  onLoadMore: () => void
 }) {
   return isLoading ? (
     <PageLoading minHeight="10rem" />
@@ -242,12 +285,39 @@ function ArticleListSection({
         {error instanceof Error ? error.message : '请确认后端服务已启动'}
       </p>
     </Reveal>
-  ) : data && data.articles.length > 0 ? (
-    <StaggerList className="grid gap-4">
-      {data.articles.map((article: Article) => (
-        <ArticleCard key={article.id} article={article} />
-      ))}
-    </StaggerList>
+  ) : articles.length > 0 ? (
+    <>
+      <StaggerList className="grid gap-4">
+        {articles.map((article: Article) => (
+          <ArticleCard key={article.id} article={article} />
+        ))}
+      </StaggerList>
+      {/* 加载更多：此前首页写死 page 1 / 20 条且无翻页 UI，第 21 篇起访客
+          永远看不到，sitemap 里的文章形同隐藏。这里把剩余篇数显式写出来，
+          让用户知道还有内容可看。 */}
+      {hasMore && (
+        <div className="mt-8 flex justify-center">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isFetchingMore}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isFetchingMore ? (
+              <>
+                <Spinner className="h-4 w-4" />
+                加载中…
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-4 w-4" />
+                加载更多（还有 {Math.max(total - articles.length, 0)} 篇）
+              </>
+            )}
+          </button>
+        </div>
+      )}
+    </>
   ) : (
     <Reveal
       y={16}

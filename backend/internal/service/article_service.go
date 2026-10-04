@@ -181,12 +181,41 @@ func (s *ArticleService) Delete(articleID, authorID uint) error {
 	return s.articles.Delete(articleID, authorID)
 }
 
+// Restore 从回收站还原一篇文章。软删除期间 slug 仍被占用，还原后即可
+// 重新访问；若期间有人用了相似标题新建文章拿到 -2 后缀，本文的 slug 不变。
+func (s *ArticleService) Restore(articleID uint) error {
+	return s.articles.Restore(articleID)
+}
+
+// Purge 彻底删除一篇文章及其评论/点赞/标签关联，不可恢复。
+func (s *ArticleService) Purge(articleID uint) error {
+	return s.articles.Purge(articleID)
+}
+
+// Trash 返回回收站文章与总数。
+func (s *ArticleService) Trash(page, pageSize int) ([]model.Article, int64, error) {
+	return s.articles.ListTrash(page, pageSize)
+}
+
 func (s *ArticleService) GetByID(id uint) (*model.Article, error) {
 	return s.articles.FindByID(id)
 }
 
 func (s *ArticleService) GetBySlug(slug string) (*model.Article, error) {
 	return s.articles.FindBySlug(slug)
+}
+
+// Related 返回与给定文章相关的其他已发布文章（相关性规则与 SQL 见
+// repository.ArticleRepository.Related）。本层只做参数直传，无需额外校验：
+// limit 的上下界裁剪在 repository 内完成。
+func (s *ArticleService) Related(articleID uint, limit int) ([]model.Article, error) {
+	return s.articles.Related(articleID, limit)
+}
+
+// Neighbors 返回上一篇（更新）与下一篇（更旧）的已发布文章，语义约定见
+// repository.ArticleRepository.Neighbors 的注释。
+func (s *ArticleService) Neighbors(articleID uint) (prev, next *model.Article, err error) {
+	return s.articles.Neighbors(articleID)
 }
 
 func (s *ArticleService) IncrementViews(id uint) error {

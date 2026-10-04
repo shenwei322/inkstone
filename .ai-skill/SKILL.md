@@ -15,13 +15,15 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 当前版本 | `Beta1.27`（`AppVersion` 常量为准，见 `internal/service/system_service.go`） |
 | 后端端口 | `8080`（API 前缀 `/api/v1`） |
 | 前端端口 | `3000`（Next.js App Router，访客站） |
-| 管理后台 | 博客站内 `/admin`（`frontend/app/admin`，21 页全部管理功能） |
+| 管理后台 | 博客站内 `/admin`（`frontend/app/admin`，含回收站与备份恢复） |
 | 数据库 | PostgreSQL 16（GORM AutoMigrate 自动建表） |
 | 认证 | JWT 双令牌（access 15min / refresh 7d）+ **TokenVersion 代次**（改密码/封禁/改角色即作废旧令牌） |
 | 角色 | `admin` / `user`（RBAC 中间件） |
 | 用户状态 | `active` / `banned` |
 | 文章状态 | `draft` / `published` |
+| 评论状态 | `pending` / `approved` / `rejected`（默认 `approved`；`pending` 由后台 `comment_audit` 或敏感词命中触发） |
 | 敏感字段 | SMTP 密码、验证码密钥（API 只返回 `xxx_set` 布尔值，不下发明文） |
+| 软删除 | Article / Page 有 `gorm.DeletedAt`。删除只置 `deleted_at` **不清关联**（还原时评论点赞还在）；彻底清关联只发生在 `purge` |
 | 在线更新 | 后台「系统更新」。两套源（`UPDATE_SOURCE`）：默认 `commits`（检查上游提交 → 下载源码镜像包 → 校验 → 备份 → 替换源码 → 宿主代理重建）；`releases`（GitHub Releases：tag 版本号 + 发布说明 + 镜像包资产 → 宿主代理 `docker load` + compose 重建）。代码在 `internal/service/update_*.go`（`update_release.go`  Releases 源）+ `deploy/update-agent.sh` / `.ps1` |
 | 人机验证 | provider 三选一（`captcha_provider`）：`lap`（默认，Cap 的 CF Workers 分支）/ `pow`（自研工作量证明 v2：内存表+本地交互信号，零外部依赖，服务器不通外网/不能用代理也能用）/ `geetest`（极验四代）；场景与强度参数在后台「安全防护」页 |
 | Markdown 渲染 | 编辑前端 `marked` → 保存 HTML（后端 bluemonday 消毒）；预览高亮用 `highlight.js/lib/common`（主题在 `globals.css`，仅前端 DOM 后处理，不入库） |
@@ -215,6 +217,21 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | GSAP 入场动画被 rAF 节流卡透明 | framer-motion 的 opacity/transform 走 WAAPI（合成器线程），GSAP 是 JS tween 逐帧（rAF）。**远程桌面/浏览器窗口被遮挡时 Chrome 节流 rAF**，`gsap.from({opacity:0})` 会永久停在透明态 → "内容被白色遮挡"（首页/管理表格都踩过）。`components/motion.tsx` 已内置双保险：①全局 patch `gsap.from/fromTo`，凡从透明态起步的 tween 自动注册超时看门狗（1.2s 后强制 clearProps 恢复可见）；②各入场组件自带 `revealFallback` + `clearProps`。**新写动画必须用 `Reveal/InView/useReveal/hoverTapScale`，不要手搓 `gsap.from(el, {opacity:0})`**；悬浮按钮（如 BackToTop）入场直接用 globals.css 的 `.animate-scale-in`（CSS keyframes 走合成器，连 1.2s 看门狗等待都没有），阈值切换还要做滞回（480 显示/320 隐藏）防临界闪烁 |
 | toast 弹窗动画必须 CSS keyframes | `toast.tsx` 曾用 `gsap.from/to` 做 opacity 入场退场，rAF 节流时**卡在 opacity 0.32**——实色卡片半透明糊在右下角 = 「白雾遮挡」（2026-10 实测）。已改为 globals.css 的 `.toast-enter/.toast-leave`（keyframes 走合成器）+ `animationend` 移除 + 600ms 兜底。新增弹窗/浮层动画一律 CSS keyframes，勿再引入 gsap opacity |
 | 列表行动画别写 ref 回调 | `<tr ref={(el) => { gsap.from(el, ...) }}>` 每次父组件重渲染都会重播动画（ref callback 每次渲染都重建）→ 反复闪烁。抽行子组件 + `useReveal(rowRef, ...)`（挂载只播一次），见 `app/admin/users/page.tsx` 的 `UserRow` |
+| gin 同层通配符冲突 | `articles.GET("/:id")` 已存在时**不能**再注册 `articles.GET("/:slug/related")`——gin 不允许同层两个不同名通配段，**注册时直接 panic**（不是 404，是起不来）。按 slug 的二级路由一律挂 `/slug/:slug/...` 前缀 |
+| `useSearchParams` 必须包 Suspense | 没有 Suspense 边界时 Next 构建期报 `useSearchParams() should be wrapped in a suspense boundary`，整个页面退化成客户端渲染，丢掉 SSR 的 SEO 首屏 |
+| 渲染期禁调 `Date.now()` | `react-hooks/purity` 会拦（admin 用户列表判锁定真实踩过）。时间基准改用 `useQuery` 返回的 `dataUpdatedAt`——语义也更准：判定对应的是「这批数据显示时」的状态 |
+| Next 16 的 `params` 是 Promise | 页面组件与 `generateMetadata` 都要 `await params`；`error.tsx` 的恢复回调 prop 叫 **`retry`** 不是 `reset`（写错 TS 不报错，点击时调用 undefined 直接抛） |
+| `error.tsx` 的 reset 是旧 API | 唯一可靠来源是 `frontend/node_modules/next/dist/client/components/error-boundary.d.ts` |
+| 根 `not-found.tsx` 已覆盖全应用 | 不需要启用 experimental `globalNotFound`。用 `global-not-found.tsx` 反而要自己包 `<html>/<body>`、自己引 globals.css，视觉会断裂 |
+| Dockerfile 漏声明 ARG 会静默忽略 | `docker build --build-arg NEXT_PUBLIC_SITE_URL=x` 若 Dockerfile 里没写对应的 `ARG NEXT_PUBLIC_SITE_URL`，传入值被**静默丢弃**、仍用 ENV 默认值。改构建期变量必须同时改 Dockerfile |
+| 原生 `Table().Joins()` 不过滤软删除 | GORM 只在走 `Model(&Article{})` 时才自动追加 `deleted_at IS NULL`。用 `db.Table("categories").Joins("LEFT JOIN articles ...")` 这类原生写法时，回收站里的文章仍会被统计进分类文章数 |
+| `json:"-"` 字段要手动塞进响应 | `User.LockedUntil` 带 `json:"-"`，`/admin/users` 的 `ListUsers` 用显式 `gin.H` 白名单构造响应，不手写 `"locked_until"` 就不下发 → 前端「解锁」按钮永不显示（真实踩过，前端按契约写好了也看不到） |
+| 树形结构用值切片要从深到浅挂 | `CategoryNode.Children` 是值切片，往父节点 `append` 会产生拷贝。先挂浅层会让后挂的深层子节点写进 map 里的父，而浅层那份拷贝已取走 → 子树丢失。必须按深度**从大到小**挂载 |
+| `*uint` 外键别塞结构体指针 | `Comment.ParentID` 是 `*uint` 不是 `*Comment`。GORM 存的是 id，要用 `parentID := parent.ID; &parentID`，且 nil 父评论必须传 nil（不是 0，0 会指向不存在的记录） |
+| repository 层不能调 service | `NewValidationError`/`CheckPasswordStrength` 都在 service 包。repository 只返回可判定错误（`ErrCategoryCycle` 等），中文文案由 service 映射 |
+| 变量名遮蔽包名 | `mailer := mailer.New(...)` 合法，但遮蔽后**无法再用 `mailer.Xxx`** 调该包其他函数。要么改名 `mailerSvc`，要么把新函数放包内实现 |
+| GORM `Raw` 手写软删除条件 | `db.Raw(sql).Scan(...)` 没有模型上下文，**不会**自动追加 `deleted_at IS NULL`，必须显式写进 SQL |
+| 评论/事件通知必须是旁路 | `mailer.CommentNotifier` 发送失败只 `log.Printf`，绝不返回 error——否则 SMTP 一挂评论就发不出去 |
 | 动画卡顿四类源 | ①**`width` 动画**每帧 layout 重排（长页面/远程桌面 CPU 合成下卡死）——进度条一律 `origin-left` + `scaleX`；输入框 focus 展宽（如 navbar 搜索框 `w-44 → w-56`）不要写 `transition-all`，改 `transition-[border-color,box-shadow]` 瞬时展宽；②**循环动画空转**——`repeat:-1` 必须走 `createLoop`（页面隐藏自动 pause），多 ring（如 RowLoading 每行一环）合并为单环；③**blur(filter) 元素做 transform 动画**——每帧重绘模糊区域（CPU 合成下极重），装饰光斑只用 `opacity` 呼吸（侧栏倒计时光斑 `blur-xl` 已从 scale 改 opacity）；④**滚动 handler 逐帧查 DOM**——rAF 回调里逐项 `getElementById`+`getBoundingClientRect` 会反复强制同步 layout，headings 等 DOM 在 effect 内缓存（article-toc 已改）。长列表 stagger 总时长 cap 0.5s（`motion.tsx` 已内置） |
 | render 阶段不能访问 ref | ESLint（react-hooks v6 新规则）报 `react-hooks/refs`：render 体、`useState` lazy initializer、`useRef(初始值)` 里读写 `xxxRef.current` 全部算违规。渲染期要用的派生数据存 `useState`（如编辑器的 baseline/恢复的本地草稿），ref 只用于事件 handler/effect 内的可变引用。DOM 派生数据（如文章目录）可用 `useMemo + DOMParser` 解析 props 里的 HTML 字符串，不触碰 ref |
 | `prose` 类零效果 = Markdown 无样式 | 全站正文/编辑器预览依赖的 `prose` 来自 **@tailwindcss/typography 插件**；没装它（postcss.config 只有 @tailwindcss/postcss）时 `prose/prose-neutral/dark:prose-invert` 全部无效，表格退化成浏览器默认裸表。已在 `globals.css` 用 `@plugin "@tailwindcss/typography"` 引入，并定制 `.prose table` 框线/表头底色/斑马纹 |

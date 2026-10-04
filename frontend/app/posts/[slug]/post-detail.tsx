@@ -11,10 +11,12 @@ import {
   Eye,
   Heart,
   MessageSquare,
+  Reply as ReplyIcon,
   Star,
   Tag as TagIcon,
   SearchX,
   Trash2,
+  X,
 } from 'lucide-react'
 import {
   deleteComment,
@@ -37,6 +39,201 @@ import { useCodeHighlight } from '@/components/code-highlight'
 import { PageTransition, Reveal, hoverTapScale, useReveal } from '@/components/motion'
 import { PageLoading, RowLoading } from '@/components/page-loader'
 import { SiteSidebar } from '@/components/site-sidebar'
+import { SITE_URL, jsonLdString, plainText } from '@/lib/seo'
+import type { CommentItem } from '@/lib/types'
+
+/**
+ * 评论树构建：把后端返回的平铺评论列表整理成「顶级评论 + 其下回复」两级结构。
+ *
+ * 三个必须先想清楚的点：
+ *  1. parent_id 为空 / 0 / undefined 都算顶级——后端历史数据里几种形态都有；
+ *  2. 父评论可能已被删除（后端删父评论时会把子评论的 parent_id 置空提升为
+ *     顶级），上溯不到父节点时把这条当顶级渲染，否则整栋楼会跟着消失；
+ *  3. 楼中楼（回复的回复）统一挂到它的顶级祖先下，保证页面只有两级缩进。
+ *
+ * 上溯带 seen 集合：parent_id 万一因脏数据成环会死循环。
+ */
+function buildCommentTree(
+  list: CommentItem[],
+): { top: CommentItem; replies: CommentItem[] }[] {
+  const byId = new Map<number, CommentItem>()
+  for (const c of list) byId.set(c.id, c)
+
+  // 每条评论所属的顶级祖先 id
+  const topOf = new Map<number, number>()
+  for (const c of list) {
+    const seen = new Set<number>()
+    let cur = c
+    let top = c
+    for (;;) {
+      if (seen.has(cur.id)) break // 脏数据成环：就地停下，cur 即顶级
+      seen.add(cur.id)
+      top = cur
+      const pid = cur.parent_id
+      if (!pid || !byId.has(pid)) break
+      cur = byId.get(pid)!
+    }
+    topOf.set(c.id, top.id)
+  }
+
+  const nodes = new Map<number, { top: CommentItem; replies: CommentItem[] }>()
+  for (const c of list) {
+    const topId = topOf.get(c.id)!
+    let node = nodes.get(topId)
+    if (!node) {
+      node = { top: byId.get(topId)!, replies: [] }
+      nodes.set(topId, node)
+    }
+    if (topId !== c.id) node.replies.push(c)
+  }
+
+  const out = Array.from(nodes.values())
+  // 顶级与楼内回复都按 id 升序：老的在上，符合「盖楼」的阅读习惯
+  for (const n of out) n.replies.sort((a, b) => a.id - b.id)
+  out.sort((a, b) => a.top.id - b.top.id)
+  return out
+}
+
+interface CommentBubbleProps {
+  comment: CommentItem
+  isReply: boolean
+  canDelete: boolean
+  onDelete: (id: number) => void
+  // 内联回复框的开关与内容由父组件持有：回复提交成功后要能统一清空并收起，
+  // 否则过人机验证那一轮异步回来时，输入框还留着上次的文字。
+  replyOpen: boolean
+  replyText: string
+  onOpenReply: (id: number) => void
+  onCloseReply: () => void
+  onReplyTextChange: (value: string) => void
+  onSubmitReply: (parentId: number, text: string) => void
+  replyPending: boolean
+}
+
+function CommentBubble({
+  comment,
+  isReply,
+  canDelete,
+  onDelete,
+  replyOpen,
+  replyText,
+  onOpenReply,
+  onCloseReply,
+  onReplyTextChange,
+  onSubmitReply,
+  replyPending,
+}: CommentBubbleProps) {
+  const notify = useNotify()
+  const submit = () => {
+    if (!replyText.trim()) {
+      notify.error('回复内容不能为空')
+      return
+    }
+    onSubmitReply(comment.id, replyText.trim())
+  }
+
+  return (
+    <div
+      className={
+        isReply
+          ? 'rounded-xl border border-border bg-muted/30 p-3.5 transition-colors hover:border-accent/25 hover:bg-muted/50'
+          : 'group flex gap-3 rounded-xl border border-border bg-muted/40 p-4 transition-colors hover:border-accent/25 hover:bg-muted/60'
+      }
+    >
+      <span
+        className={`flex shrink-0 items-center justify-center rounded-full bg-accent/10 font-bold text-accent ${
+          isReply ? 'h-7 w-7 text-xs' : 'h-9 w-9 text-sm'
+        }`}
+      >
+        {comment.author.username.charAt(0).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-sm font-medium">{comment.author.username}</span>
+          <span className="text-xs text-muted-foreground">
+            {new Date(comment.created_at).toLocaleString('zh-CN')}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => (replyOpen ? onCloseReply() : onOpenReply(comment.id))}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:text-accent"
+              title={replyOpen ? '取消回复' : '回复这条评论'}
+            >
+              {replyOpen ? <X className="h-3.5 w-3.5" /> : <ReplyIcon className="h-3.5 w-3.5" />}
+              {replyOpen ? '取消' : '回复'}
+            </button>
+            {canDelete && (
+              <button
+                onClick={() => {
+                  notify
+                    .confirm({
+                      title: '删除这条评论？',
+                      message: '删除后无法恢复。',
+                      confirmText: '删除',
+                      danger: true,
+                    })
+                    .then((ok) => {
+                      if (ok) onDelete(comment.id)
+                    })
+                }}
+                className="ml-auto text-muted-foreground opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
+                title="删除"
+                aria-label="删除评论"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-relaxed">
+          {comment.content}
+        </p>
+
+        {/* 内联回复框：只对当前展开的那一条渲染，避免 N 个输入框同时存在 */}
+        {replyOpen && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              submit()
+            }}
+            className="mt-3"
+          >
+            <textarea
+              value={replyText}
+              onChange={(e) => onReplyTextChange(e.target.value)}
+              placeholder={`回复 ${comment.author.username}...`}
+              rows={2}
+              maxLength={1000}
+              autoFocus
+              className="w-full resize-y rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+            />
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">回复将公开显示</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onCloseReply}
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={replyPending}
+                  {...hoverTapScale}
+                  className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
+                >
+                  {replyPending ? '发布中...' : '发布回复'}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export function PostDetail({ slug }: { slug: string }) {
   const { user } = useAuth()
@@ -99,11 +296,85 @@ export function PostDetail({ slug }: { slug: string }) {
     onError: (e) => notify.error(e instanceof Error ? e.message : '删除评论失败'),
   })
 
+  // 内联回复框：replyTo 为被回复评论的 id，null 表示没有展开的回复框。
+  // 与 replyText 一起放在组件级，提交成功后统一清空并收起。
+  const [replyTo, setReplyTo] = useState<number | null>(null)
+  const [replyText, setReplyText] = useState('')
+
+  const addReply = useMutation({
+    mutationFn: async (payload: { parentId: number; text: string }) => {
+      // 与发表评论一致：开启人机验证时先弹窗验证，凭证随请求提交
+      const credential = captcha.enabled ? await captcha.run() : undefined
+      return postComment(articleId!, payload.text, {
+        ...credential,
+        parent_id: payload.parentId,
+      })
+    },
+    onSuccess: () => {
+      setReplyTo(null)
+      setReplyText('')
+      queryClient.invalidateQueries({ queryKey: ['comments', articleId] })
+      notify.success('回复已发布')
+    },
+    onError: (e) => {
+      // 用户主动关闭验证框时不打扰（与发表评论保持一致的口径）
+      if (e instanceof Error && e.message === '人机验证已取消') return
+      notify.error(e instanceof Error ? e.message : '回复失败')
+    },
+  })
+
+  const handleSubmitReply = (parentId: number, text: string) => {
+    if (!user) {
+      notify.error('请先登录')
+      router.push('/login')
+      return
+    }
+    addReply.mutate({ parentId, text })
+  }
+
   // 文章目录：挂载后从正文 HTML 提取（SSR 无 document 返回空，避免 hydration 差异）
   const contentRef = useRef<HTMLDivElement>(null)
   const isMounted = useIsMounted()
   const articleHtml = data?.article.content ?? ''
   const tocItems = useMemo(() => (isMounted ? parseToc(articleHtml) : []), [isMounted, articleHtml])
+
+  // Article 结构化数据：让搜索结果能展示标题、作者、发布时间与封面缩略图。
+  //
+  // 两个刻意的安排：
+  //  1. 这个 memo 必须放在下面 isLoading / isError 的提前 return **之前**——
+  //     hooks 不能条件调用，放在 return 之后会直接违反 React 规则；
+  //  2. data 为空时返回 null：那种情况下构造出来的是空壳 schema，
+  //     输出它比不输出更糟（搜索引擎会拿到一篇没有标题的文章）。
+  const jsonLd = useMemo(() => {
+    const a = data?.article
+    if (!a) return null
+    const pageUrl = `${SITE_URL}/posts/${encodeURIComponent(a.slug)}`
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'Article',
+      headline: a.title,
+      description: plainText(a.content, 110),
+      // datePublished 用首次发布时间；草稿没有 published_at 时退回创建时间
+      datePublished: a.published_at ?? a.created_at,
+      dateModified: a.updated_at,
+      author: { '@type': 'Person', name: a.author.username },
+      publisher: { '@type': 'Organization', name: site.siteName },
+      mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
+      ...(a.cover ? { image: [a.cover] } : {}),
+    }
+  }, [data?.article, site.siteName])
+
+  // 平铺评论列表 → 两级树。data.comments 引用在查询未刷新时是稳定的，
+  // 因此这个 memo 不会每次渲染都重建。
+  //
+  // 位置与 jsonLd 同理：必须在下面 isLoading / isError 的提前 return 之前，
+  // 否则就是条件调用 hook。commentsQuery 是否加载完都不影响——
+  // 查询未返回时 comments 为空数组，构树结果为空，渲染逻辑自己会处理。
+  //
+  // comments 本身也用 useMemo 收着：直接写 `?? []` 的话每次渲染都是新数组，
+  // exhaustive-deps 会警告下面的依赖不稳定。
+  const comments = useMemo(() => commentsQuery.data?.comments ?? [], [commentsQuery.data])
+  const commentTree = useMemo(() => buildCommentTree(comments), [comments])
 
   // 正文代码块 hljs 高亮 + 复制按钮（复制成功弹 toast）
   useCodeHighlight(contentRef, articleHtml, {
@@ -158,7 +429,8 @@ export function PostDetail({ slug }: { slug: string }) {
     ? new Date(article.published_at).toLocaleDateString('zh-CN')
     : new Date(article.created_at).toLocaleDateString('zh-CN')
   const reactions = reactionsQuery.data
-  const comments = commentsQuery.data?.comments ?? []
+  // comments / commentTree 已在上方与其他 hook 一起声明（hooks 不能
+  // 放在提前 return 之后），此处不再重复定义。
 
   const requireLogin = () => {
     if (!user) {
@@ -195,6 +467,17 @@ export function PostDetail({ slug }: { slug: string }) {
   return (
     <PageTransition>
       <div className={`mx-auto px-4 py-12 ${layoutClass}`}>
+      {/* 结构化数据。只有成功取到文章才会走到这里（isLoading / isError 分支
+          已提前 return），因此 jsonLd 非空即渲染。
+          注入位置在外层容器内：Google 要求 script 出现在 body 内任意位置均可。 */}
+      {jsonLd && (
+        <script
+          type="application/ld+json"
+          // jsonLdString 已把 < > & 转成 \u 形式，正文里即使含
+          // "</script>" 也不会提前闭合这个标签
+          dangerouslySetInnerHTML={{ __html: jsonLdString(jsonLd) }}
+        />
+      )}
       {showSidebar && site.sidebarPosition === 'left' && (
         <SiteSidebar widgets={widgets} position="left" />
       )}
@@ -406,48 +689,57 @@ export function PostDetail({ slug }: { slug: string }) {
                 还没有评论，来抢沙发吧
               </p>
             ) : (
-              comments.map((comment, i) => (
+              commentTree.map((node, i) => (
                 <Reveal
-                  key={comment.id}
+                  key={node.top.id}
                   delay={i * 0.05}
                   duration={0.3}
-                  className="group flex gap-3 rounded-xl border border-border bg-muted/40 p-4 transition-colors hover:border-accent/25 hover:bg-muted/60"
+                  className="space-y-2.5"
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-bold text-accent">
-                    {comment.author.username.charAt(0).toUpperCase()}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{comment.author.username}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(comment.created_at).toLocaleString('zh-CN')}
-                      </span>
-                      {(user?.id === comment.author.id || user?.role === 'admin') && (
-                        <button
-                          onClick={() => {
-                            notify
-                              .confirm({
-                                title: '删除这条评论？',
-                                message: '删除后无法恢复。',
-                                confirmText: '删除',
-                                danger: true,
-                              })
-                              .then((ok) => {
-                                if (ok) removeComment.mutate(comment.id)
-                              })
+                  <CommentBubble
+                    comment={node.top}
+                    isReply={false}
+                    canDelete={Boolean(
+                      user && (user.id === node.top.author.id || user.role === 'admin'),
+                    )}
+                    onDelete={(id) => removeComment.mutate(id)}
+                    replyOpen={replyTo === node.top.id}
+                    replyText={replyText}
+                    onOpenReply={setReplyTo}
+                    onCloseReply={() => {
+                      setReplyTo(null)
+                      setReplyText('')
+                    }}
+                    onReplyTextChange={setReplyText}
+                    onSubmitReply={handleSubmitReply}
+                    replyPending={addReply.isPending}
+                  />
+                  {/* 楼内回复：左竖线 + 缩进，视觉上挂归属到顶级评论 */}
+                  {node.replies.length > 0 && (
+                    <div className="ml-4 space-y-2.5 border-l-2 border-border pl-4 sm:ml-6">
+                      {node.replies.map((reply) => (
+                        <CommentBubble
+                          key={reply.id}
+                          comment={reply}
+                          isReply
+                          canDelete={Boolean(
+                            user && (user.id === reply.author.id || user.role === 'admin'),
+                          )}
+                          onDelete={(id) => removeComment.mutate(id)}
+                          replyOpen={replyTo === reply.id}
+                          replyText={replyText}
+                          onOpenReply={setReplyTo}
+                          onCloseReply={() => {
+                            setReplyTo(null)
+                            setReplyText('')
                           }}
-                          className="ml-auto text-muted-foreground opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
-                          title="删除"
-                          aria-label="删除评论"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                          onReplyTextChange={setReplyText}
+                          onSubmitReply={handleSubmitReply}
+                          replyPending={addReply.isPending}
+                        />
+                      ))}
                     </div>
-                    <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-relaxed">
-                      {comment.content}
-                    </p>
-                  </div>
+                  )}
                 </Reveal>
               ))
             )}

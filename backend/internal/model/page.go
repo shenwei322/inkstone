@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 const (
 	PageTemplateDefault   = "default"   // 带侧边栏的常规页
@@ -20,6 +24,9 @@ type Page struct {
 	ShowInNav bool      `gorm:"not null;default:false" json:"show_in_nav"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// DeletedAt：与 Article 同理由的软删除。删独立页不写这一列的话，
+	// 误删「关于本站」这种页面只能靠数据库备份找回。
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (p *Page) IsPublished() bool {

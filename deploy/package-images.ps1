@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # InkStone 镜像包打包（Windows / PowerShell）
 #
 # 产物：dist\inkstone-images-<版本>.tar —— GitHub Releases 的镜像包资产。
@@ -16,6 +16,10 @@ param(
     [string]$Version = $(if ($env:INKSTONE_VERSION) { $env:INKSTONE_VERSION } else { 'Beta1.27' }),
     # 前端 API 地址：NEXT_PUBLIC_* 是构建期注入，打进镜像后改不了，按部署域名传
     [string]$ApiUrl = $(if ($env:INKSTONE_PUBLIC_API_URL) { $env:INKSTONE_PUBLIC_API_URL } else { 'https://blog.shenv.top/api/v1' }),
+    # 站点自身地址：NEXT_PUBLIC_SITE_URL 也是构建期注入，用于 canonical / OG / JSON-LD。
+    # 留空的后果是这些地址兜底成 http://localhost:3000，生产环境的 canonical
+    # 会指向 localhost，被搜索引擎当成重复内容而拒绝收录。
+    [string]$SiteUrl = $(if ($env:INKSTONE_PUBLIC_SITE_URL) { $env:INKSTONE_PUBLIC_SITE_URL } else { 'https://blog.shenv.top' }),
     [string]$OutDir = $(if ($env:INKSTONE_DIST_DIR) { $env:INKSTONE_DIST_DIR } else { 'dist' }),
     [switch]$NoLatest
 )
@@ -55,9 +59,10 @@ $backendArgs = @('build', '-t', $backendTags[0], '-f', (Join-Path $backendDir 'D
 foreach ($t in $backendTags[1..$backendTags.Count]) { $backendArgs += @('-t', $t) }
 Invoke-Step "构建后端镜像 $($backendTags -join ' ')" { & docker @backendArgs }
 
-# 2) 前端（NEXT_PUBLIC_API_URL 构建期注入）
+# 2) 前端（NEXT_PUBLIC_API_URL / NEXT_PUBLIC_SITE_URL 构建期注入）
 $frontendArgs = @('build', '-t', $frontendTags[0], '-f', (Join-Path $frontendDir 'Dockerfile'),
-    '--build-arg', "NEXT_PUBLIC_API_URL=$ApiUrl", $frontendDir)
+    '--build-arg', "NEXT_PUBLIC_API_URL=$ApiUrl",
+    '--build-arg', "NEXT_PUBLIC_SITE_URL=$SiteUrl", $frontendDir)
 foreach ($t in $frontendTags[1..$frontendTags.Count]) { $frontendArgs += @('-t', $t) }
 Invoke-Step "构建前端镜像 $($frontendTags -join ' ')" { & docker @frontendArgs }
 

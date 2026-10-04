@@ -43,11 +43,17 @@
 | POST | `/auth/register` | 公开 | 注册。Body: `{email, username, password, captcha_token?, captcha_answer?, email_code?}` |
 | POST | `/auth/login` | 公开 | 登录。Body: `{email, password, captcha_token?, captcha_answer?, email_code?}`。**email 字段可填邮箱或用户名** |
 | POST | `/auth/refresh` | 公开 | 刷新令牌。Body: `{refresh_token}` |
-| POST | `/auth/email-code` | 公开 | 发送邮箱验证码。Body: `{email, purpose: "register"\|"login"}` |
-| GET | `/auth/me` | 登录 | 当前用户信息 |
+| POST | `/auth/email-code` | 公开 | 发送邮箱验证码。Body: `{email, purpose: "register"\|"login"\|"reset_password"}` |
+| GET | `/auth/me` | 登录 | 当前用户信息（含 `totp_enabled`、`locked_until`） |
 | PUT | `/auth/password` | 登录 | 修改密码。Body: `{current_password, new_password}` |
 | PUT | `/auth/profile` | 登录 | 修改用户名。Body: `{username}` |
 | GET | `/auth/my-comments` | 登录 | 我的评论。Query: `?page=&page_size=` |
+| GET | `/auth/my-favorites` | 登录 | 我的收藏夹（`Article[]`，按收藏时间倒序） |
+| POST | `/auth/password/forgot` | 公开 | 忘记密码，发重置码到邮箱。Body: `{email}`。**邮箱不存在也返回成功**（防枚举） |
+| POST | `/auth/password/reset` | 公开 | 重置密码。Body: `{email, code, new_password}`。成功后撤销该用户所有令牌并解锁 |
+| POST | `/auth/2fa/setup` | 登录 | 生成 TOTP 密钥与绑定二维码 URI |
+| POST | `/auth/2fa/confirm` | 登录 | 确认开启 2FA。Body: `{code}` |
+| DELETE | `/auth/2fa` | 登录 | 关闭 2FA。Body: `{password}`。关闭后 `BumpTokenVersion` 让所有令牌失效 |
 
 **注册/登录的验证码规则**：
 - 人机验证按后台 `captcha_provider` + 场景开关决定是否必需；geetest 提交 `lot_number/captcha_output/pass_token/gen_time`，lap 提交 `lap_token`
@@ -55,6 +61,17 @@
 - 验证失败返回 400，提示中文原因
 
 **登录限流**：失败次数超限返回 429；**成功登录会重置计数**。
+
+**账户级锁定**（区别于 IP 限流）：连续 `maxFailedLogins=5` 次密码错误后锁定 `loginLockoutWindow=15 分钟`。
+锁定与限流是两套机制——限流只挡 IP，改 IP 就能绕过；账户锁定跟账号走。
+`locked_until` 在 `/auth/me` 与 `/admin/users` 都会下发。管理员可用 `POST /admin/users/:id/unlock` 提前解锁。
+
+**2FA 两步校验的顺序**：先校验密码，通过后才要求 TOTP。未启用 2FA 的账号完全不受影响。
+需要验证码时返回 401 + `{"need_totp": true}`，**不是**密码错误——前端据此显示验证码输入框。
+`ValidateTOTP(secret, code, counter, burned)` 的 `burned` 记录已用过的 code，防 30 秒窗口内重放。
+
+**验证码防止凭证混用**：`EmailCodeService.Send` 记录 `purpose`，`Verify` 时比对
+`entry.purpose != action`。堵住"用登录验证码去重置密码"。
 
 ---
 
@@ -65,12 +82,14 @@
 | GET | `/articles` | 可选 | 列表。Query: `?page=&page_size=&status=&category=&tag=&q=&order=` |
 | GET | `/articles/:id` | 可选 | 详情（会自动 +1 浏览量） |
 | GET | `/articles/slug/:slug` | 可选 | 按 slug 查详情（+1 浏览量） |
+| GET | `/articles/slug/:slug/related` | 公开 | 相关文章推荐。Query: `?limit=`（默认 4，上限 10） |
+| GET | `/articles/slug/:slug/neighbors` | 公开 | 上一篇/下一篇。`{prev, next}` |
 | GET | `/articles/:id/comments` | 公开 | 评论列表 |
 | GET | `/articles/:id/reactions` | 可选 | 点赞/收藏统计（带 token 时返回用户是否已赞） |
 | POST | `/articles` | 登录 | 创建。Body: `{title, content, status, category_id?, tags?, cover?, captcha_token?, captcha_answer?}` |
 | PUT | `/articles/:id` | 登录 | 更新（仅作者）。同上字段均可选 |
-| DELETE | `/articles/:id` | 登录 | 删除（仅作者） |
-| POST | `/articles/:id/comments` | 登录 | 发表评论。Body: `{content, captcha_token?, captcha_answer?}` |
+| DELETE | `/articles/:id` | 登录 | 软删除（进回收站，不丢评论点赞） |
+| POST | `/articles/:id/comments` | 登录 | 发表评论。Body: `{content, parent_id?, captcha_token?, captcha_answer?}` |
 | POST | `/articles/:id/reactions` | 登录 | 点赞/收藏切换。Body: `{type: "like"\|"favorite"}` |
 
 **关键行为**：
@@ -80,6 +99,18 @@
 - 创建草稿（`status=draft`）**不触发人机验证**，发布才触发
 - `cover` 留空时后端自动提取正文第一张图片的 URL
 
+**路由坑（改动前必读）**：相关/邻居接口必须挂在 `/slug/:slug/...` 前缀下。
+**不能**写成 `GET /articles/:slug/related` —— 同级已有 `articles.GET("/:id")`，
+gin 不允许同层出现两个不同名的通配段，注册时直接 panic。
+
+**related 的相关性排序**：`shared_tags DESC`（与当前文章的共同标签数）天然表达三档
+优先级 —— ≥2 个共同标签 > 1 个 > 0 个（此时 WHERE 保证同分类才会入选）；
+同档内 `published_at DESC NULLS LAST, id DESC`。返回的是卡片字段
+（id/title/slug/cover/views/published_at），**不含 content**，省带宽。
+
+**邻居语义**（中文博客惯例，与英式 prev/next 相反，改动前先读）：
+`prev` = 发布时间**更新**的文章（往前翻），`next` = **更旧**的（往后翻）。
+
 **评论删除**：`DELETE /comments/:id` — 评论作者或管理员可删
 
 ---
@@ -88,13 +119,20 @@
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| GET | `/categories` | 公开 | 分类列表（含文章数） |
+| GET | `/categories` | 公开 | 分类扁平列表（含文章数、`parent_id`） |
+| GET | `/categories/tree` | 公开 | 分类树（层级 + 每类文章数） |
 | GET | `/tags` | 公开 | 标签列表（含文章数） |
 | POST | `/admin/tags` | 管理员 | 创建标签。Body: `{name}` |
 | PUT | `/admin/tags/:id` | 管理员 | 重命名标签。Body: `{name}` |
 | DELETE | `/admin/tags/:id` | 管理员 | 删除标签（同时清理文章关联） |
+| POST | `/admin/categories` | 管理员 | 创建分类。Body: `{name, slug?, parent_id?}` |
+| PUT | `/admin/categories/:id` | 管理员 | 改名/调整父级。Body: `{name, parent_id?}` |
+| DELETE | `/admin/categories/:id` | 管理员 | 删除分类（有子分类或有关文章时拒绝） |
 
 > 文章创建/更新时传 `tags: ["标签名"]` 会自动 find-or-create。
+
+**删除分类的拒绝条件**（返回 400 而非级联删除）：分类下还有子分类，或还有文章。
+刻意不做级联——分类被连带清掉文章属不可逆误操作，代价比重试高得多。
 
 ---
 
@@ -272,8 +310,30 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
 | GET | `/system/info` | 公开 | 系统信息（名称、版本、Go 版本、运行时长、作者、**运行中提交 `commit` / `commit_at` / `commit_source`**） |
-| GET | `/feed.xml` | 公开 | RSS 2.0 订阅源 |
+| GET | `/feed.xml` | 公开 | RSS 2.0 订阅源（**content:encoded 全文**） |
 | GET | `/healthz` | 公开 | 健康检查（Docker healthcheck 用） |
+
+**RSS 输出**：同时给 `description`（300 字纯文本摘要，兼容只读摘要的老阅读器）与
+`content:encoded`（正文全文 HTML）。此前只输出摘要，全文阅读器用户必须跳回站点才能看正文。
+频道标题取后台设置的 `site_name`，站点描述取 `site_description`——此前硬编码 `"InkStone"`，
+改了站点名的站点在阅读器里仍显示 InkStone。
+
+**数据库备份** `GET/POST/DELETE /admin/system/backups`：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/system/backups` | 备份列表（文件名、大小、时间、来源） |
+| POST | `/admin/system/backups` | 立即备份。Body: `{reason}` |
+| GET | `/admin/system/backups/:name/download` | 下载 |
+| DELETE | `/admin/system/backups/:name` | 删除 |
+
+快照格式是 **gzip 压缩的 JSON**（15 张表），保存在 `filepath.Join(dir(UploadDir), "backups")`
+——与数据卷同目录，容器重建后仍保留。`maxBackupFiles=20` 自动清理旧备份。
+写文件用 `0o640`（含密码哈希，不该全局可读）。
+
+> **刻意不做网页端一键恢复**：JSON 快照不是 `pg_restore` 能消费的格式，
+> 灌回生产库会绕过入库校验与 bluemonday 消毒。恢复路径是
+> 「下载 → 宿主人工核对 → 导入」，要数据库级备份请用 `deploy/backup.sh`（pg_dump `-Fc`）。
 
 `commit_source` 取值：`ldflags`（编译期 `-X ...BuildCommit=` 注入，最准）> `deployed`（部署记录
 `data/deployed-commit.json`）> `env`（`INKSTONE_COMMIT`）。三者皆无时 `commit` 为空串。
@@ -294,20 +354,32 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/users?page=&page_size=&q=` | 用户列表（搜索邮箱/用户名） |
+| GET | `/admin/users?page=&page_size=&q=` | 用户列表（搜索邮箱/用户名）。响应含 `locked_until`、`failed_login_count` |
 | POST | `/admin/users` | 创建用户。Body: `{email, username, password, role}` |
 | PUT | `/admin/users/:id` | **修改邮箱/用户名/密码**。Body: `{email?, username?, password?}` |
 | PUT | `/admin/users/:id/role` | 修改角色。Body: `{role}`（不能改自己） |
 | PUT | `/admin/users/:id/status` | 封禁/解封。Body: `{status: "active"\|"banned"}`（不能封自己） |
-| DELETE | `/admin/users/:id` | 删除用户（级联删文章，不能删自己） |
+| DELETE | `/admin/users/:id` | 删除用户（级联真删文章，不能删自己） |
+| POST | `/admin/users/:id/unlock` | 解除登录失败锁定（清 `locked_until` 与失败计数） |
+
+> `locked_until` 必须在 `ListUsers` 的白名单里显式带上：`User.LockedUntil` 的 json 标签是 `-`，
+> 不手动加进 `items` 就不会下发，前端的「解锁」按钮会因拿不到字段而永不显示。
 
 ### 文章管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/admin/articles?page=&page_size=&status=` | 全部文章（含草稿） |
+| GET | `/admin/articles/trash?page=&page_size=` | 回收站（软删除的文章） |
 | PUT | `/admin/articles/:id/status` | 上下架。Body: `{status}` |
-| DELETE | `/admin/articles/:id` | 删除任意文章 |
+| PUT | `/admin/articles/:id/restore` | 从回收站还原 |
+| DELETE | `/admin/articles/:id` | 软删除（进回收站） |
+| DELETE | `/admin/articles/:id/purge` | 彻底删除（清关联，不可恢复） |
+
+**删除语义分层**：
+- `DELETE /articles/:id` = 软删除，只置 `deleted_at`，**不清关联**。还原时评论/点赞还在。
+- `purge` = 真删，此时才清关联。
+- `purgeArticlesByAuthor` 必须 `Unscoped()`：否则已删用户的文章会连同评论一起永久残留在库里。
 
 ### 评论管理
 
@@ -315,6 +387,11 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 |---|---|---|
 | GET | `/admin/comments?page=&page_size=` | 全部评论（含所属文章） |
 | DELETE | `/admin/comments/:id` | 删除评论 |
+| PUT | `/admin/comments/:id/status` | 审核。Body: `{status: "approved"\|"rejected"}` |
+| GET | `/admin/comments/pending-count` | 待审数（侧边栏角标） |
+
+> 删除父评论时子评论的 `parent_id` 会被置空（提升为顶级），内容不丢。
+> 自引用外键直接删会被 PostgreSQL 拒绝（SQLSTATE 23503）。
 
 ### 站点设置
 

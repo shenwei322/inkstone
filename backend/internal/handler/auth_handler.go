@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -44,6 +45,7 @@ type registerRequest struct {
 type loginRequest struct {
 	Email     string `json:"email" binding:"required"`
 	Password  string `json:"password" binding:"required"`
+	TOTPCode  string `json:"totp_code"`
 	EmailCode string `json:"email_code"`
 	service.CaptchaParams
 }
@@ -123,8 +125,18 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, pair, err := h.auth.Login(req.Email, req.Password)
+	user, pair, err := h.auth.Login(service.LoginInput{
+		Identifier: req.Email,
+		Password:   req.Password,
+		TOTPCode:   req.TOTPCode,
+	})
 	if err != nil {
+		// 两步验证缺码时单独标记：前端据此把密码框换成验证码输入框，
+		// 而不是当作一次普通登录失败（否则用户会以为密码错了）。
+		if errors.Is(err, service.ErrTOTPRequired) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "need_totp": true})
+			return
+		}
 		h.logs.Record(service.Entry{
 			Category:  model.LogCategoryAuth,
 			Action:    "登录失败",
@@ -248,11 +260,130 @@ func (h *AuthHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": toUserResponse(user)})
 }
 
+// ============ 忘记密码 ============
+
+type forgotPasswordRequest struct {
+	Email string `json:"email" binding:"required"`
+	service.CaptchaParams
+}
+
+// ForgotPassword handles POST /auth/password/forgot.
+//
+// 无论邮箱是否注册都返回同一条成功提示（枚举防护见
+// AuthService.RequestPasswordReset）。人机验证按 "login" 场景判定——
+// 忘记密码是登录流程的延伸，共用同一个开关最简单也不意外。
+func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	var req forgotPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写邮箱"})
+		return
+	}
+	if err := h.captcha.Verify("login", req.CaptchaParams); err != nil {
+		errorResponse(c, err)
+		return
+	}
+	if err := h.auth.RequestPasswordReset(req.Email); err != nil {
+		recordOp(h.logs, c, model.LogCategoryAuth, "请求重置密码", req.Email, false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryAuth, "请求重置密码", req.Email, true)
+	c.JSON(http.StatusOK, gin.H{"message": "如果该邮箱已注册，我们已发送重置验证码，请查收邮件"})
+}
+
+type resetPasswordRequest struct {
+	Email       string `json:"email" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ResetPassword handles POST /auth/password/reset.
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req resetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写邮箱、验证码和新密码"})
+		return
+	}
+	if err := h.auth.ResetPassword(req.Email, req.Code, req.NewPassword); err != nil {
+		recordOp(h.logs, c, model.LogCategoryAuth, "重置密码", req.Email, false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryAuth, "重置密码", req.Email, true)
+	c.JSON(http.StatusOK, gin.H{"message": "密码已重置，请使用新密码登录"})
+}
+
+// ============ 两步验证（TOTP） ============
+
+type totpCodeRequest struct {
+	Code     string `json:"code" binding:"required"`
+	Password string `json:"password"`
+}
+
+// BeginTOTPSetup handles POST /auth/2fa/setup — 生成密钥并返回 otpauth URI。
+func (h *AuthHandler) BeginTOTPSetup(c *gin.Context) {
+	current, ok := middleware.GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	secret, uri, err := h.auth.BeginTOTPSetup(current.ID)
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"secret": secret, "otpauth_uri": uri})
+}
+
+// ConfirmTOTPSetup handles POST /auth/2fa/confirm — 提交第一个有效码后启用。
+func (h *AuthHandler) ConfirmTOTPSetup(c *gin.Context) {
+	current, ok := middleware.GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req totpCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写验证码"})
+		return
+	}
+	if err := h.auth.ConfirmTOTPSetup(current.ID, req.Code); err != nil {
+		recordOp(h.logs, c, model.LogCategoryAuth, "开启两步验证", "提交的验证码未通过校验", false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryAuth, "开启两步验证", "已为本账号开启两步验证", true)
+	c.JSON(http.StatusOK, gin.H{"message": "两步验证已开启"})
+}
+
+// DisableTOTP handles DELETE /auth/2fa — 需校验当前密码。
+func (h *AuthHandler) DisableTOTP(c *gin.Context) {
+	current, ok := middleware.GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req totpCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写当前密码"})
+		return
+	}
+	if err := h.auth.DisableTOTP(current.ID, req.Password); err != nil {
+		recordOp(h.logs, c, model.LogCategoryAuth, "关闭两步验证", "密码校验未通过", false)
+		errorResponse(c, err)
+		return
+	}
+	recordOp(h.logs, c, model.LogCategoryAuth, "关闭两步验证", "已关闭两步验证", true)
+	c.JSON(http.StatusOK, gin.H{"message": "两步验证已关闭"})
+}
+
 func toUserResponse(u *model.User) gin.H {
 	return gin.H{
-		"id":       u.ID,
-		"email":    u.Email,
-		"username": u.Username,
-		"role":     u.Role,
+		"id":           u.ID,
+		"email":        u.Email,
+		"username":     u.Username,
+		"role":         u.Role,
+		"totp_enabled": u.TOTPEnabled,
+		"locked_until": u.LockedUntil,
 	}
 }

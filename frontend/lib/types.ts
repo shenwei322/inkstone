@@ -3,6 +3,8 @@ export interface User {
   email: string
   username: string
   role: 'admin' | 'user'
+  /** 是否开启两步验证（TOTP）。后端已支持，登录时需要额外提交验证码 */
+  totp_enabled?: boolean
 }
 
 export interface TokenPair {
@@ -56,6 +58,8 @@ export interface CommentItem {
   article_id: number
   article_title?: string
   article_slug?: string
+  /** 父评论 id：null/undefined 表示顶级评论，非空表示回复某条评论（楼中楼） */
+  parent_id?: number | null
   content: string
   created_at: string
   author: {
@@ -140,6 +144,17 @@ export interface AdminUser {
   role: 'admin' | 'user'
   status: 'active' | 'banned'
   created_at: string
+  /**
+   * 登录失败锁定的解除时刻（ISO 时间串），null 表示未锁定。
+   *
+   * 注意：后端 `GET /admin/users` 目前**没有**下发这个字段——
+   * `internal/handler/admin_handler.go` 的 ListUsers 用显式 gin.H 白名单
+   * 逐字段构造响应，其中没有 locked_until；而 `model.User.LockedUntil`
+   * 的 json 标签是 `-`（不下发）。因此列表页现在拿不到它，解锁按钮不会出现。
+   * 这里按「可选字段」声明，后端一旦补上即可生效，无需再改类型。
+   * 已能拿到该字段的地方是 `GET /auth/me`（见 handler.toUserResponse）。
+   */
+  locked_until?: string | null
 }
 
 export interface AdminUserListResponse {

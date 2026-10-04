@@ -317,3 +317,87 @@ func parseIntOr(s string, fallback int) int {
 	}
 	return v
 }
+
+// articleBrief 是相关文章 / 上下篇的轻量卡片字段：只含在别处展示所需的
+// 元信息。不带 content（正文可能几十 KB，卡片用不到），不带 author /
+// tags（related 是匿名可访问的公开接口，没必要为此多跑预加载查询）。
+type articleBrief struct {
+	ID          uint       `json:"id"`
+	Title       string     `json:"title"`
+	Slug        string     `json:"slug"`
+	Cover       string     `json:"cover"`
+	Views       int64      `json:"views"`
+	PublishedAt *time.Time `json:"published_at"`
+}
+
+func toArticleBrief(a *model.Article) articleBrief {
+	return articleBrief{
+		ID:          a.ID,
+		Title:       a.Title,
+		Slug:        a.Slug,
+		Cover:       a.Cover,
+		Views:       a.Views,
+		PublishedAt: a.PublishedAt,
+	}
+}
+
+// articleBriefOrNil 让「一侧不存在」的邻居在 JSON 里输出 null 而不是
+// 一个零值对象——前端要靠 null 判断该不该渲染「没有下一篇」。
+func articleBriefOrNil(a *model.Article) any {
+	if a == nil {
+		return nil
+	}
+	return toArticleBrief(a)
+}
+
+// RelatedBySlug handles GET /articles/slug/:slug/related — 相关文章推荐。
+// 公开可读；草稿按与详情页相同的规则只有作者/管理员能看到（看不到时
+// 统一返回 404，不暴露「这篇草稿存在」）。
+func (h *ArticleHandler) RelatedBySlug(c *gin.Context) {
+	article, err := h.articles.GetBySlug(c.Param("slug"))
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	if !canViewArticle(c, article) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
+		return
+	}
+
+	limit := parseIntQuery(c, "limit", 4)
+	related, err := h.articles.Related(article.ID, limit)
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+
+	items := make([]articleBrief, 0, len(related))
+	for i := range related {
+		items = append(items, toArticleBrief(&related[i]))
+	}
+	c.JSON(http.StatusOK, gin.H{"articles": items})
+}
+
+// NeighborsBySlug handles GET /articles/slug/:slug/neighbors — 上一篇 / 下一篇。
+// prev 是更新的文章（往前翻），next 是更旧的文章（往后翻）。
+func (h *ArticleHandler) NeighborsBySlug(c *gin.Context) {
+	article, err := h.articles.GetBySlug(c.Param("slug"))
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	if !canViewArticle(c, article) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文章不存在"})
+		return
+	}
+
+	prev, next, err := h.articles.Neighbors(article.ID)
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"prev": articleBriefOrNil(prev),
+		"next": articleBriefOrNil(next),
+	})
+}

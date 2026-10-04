@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { GitBranch, Heart, Rss } from 'lucide-react'
+import { FileText, GitBranch, Heart, Rss, ShieldCheck } from 'lucide-react'
 import { useSiteConfig } from '@/components/site-config-context'
 import { MenuIcon } from '@/components/menu-icon'
 import { InView } from '@/components/motion'
@@ -88,6 +88,23 @@ export function SiteFooter() {
                   {item.label}
                 </Link>
               ))}
+              {/* 固定法务入口。刻意不并进上面的 links 数组：那个数组在后台配置了
+                  自定义导航菜单后会被整体替换，隐私政策 / 用户协议就消失了。
+                  法务页面应当始终可达，所以在这里独立渲染。 */}
+              <Link
+                href="/privacy"
+                className="group inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-accent"
+              >
+                <ShieldCheck className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                隐私政策
+              </Link>
+              <Link
+                href="/terms"
+                className="group inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-accent"
+              >
+                <FileText className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                用户协议
+              </Link>
             </div>
           </div>
 

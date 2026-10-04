@@ -7,14 +7,27 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrTagNameTaken 表示标签名（或其 slug）与已有标签冲突。
-var ErrTagNameTaken = errors.New("tag name already taken")
+// ErrTagNameConflict 表示标签名（或其 slug）与已有标签冲突。
+var ErrTagNameConflict = errors.New("tag name already taken")
+
+// 分类结构类错误。repository 层只返回可判定的错误，具体中文提示由
+// service 层映射（分层原则：repository 不认识"用户看得懂的话"）。
+var (
+	ErrCategoryParentMissing = errors.New("parent category not found")
+	ErrCategoryCycle         = errors.New("category would form a cycle")
+	ErrCategoryTooDeep       = errors.New("category would exceed depth limit")
+	ErrCategoryHasChildren   = errors.New("category still has children")
+	ErrCategoryHasArticles   = errors.New("category still has articles")
+)
 
 type CategoryCount struct {
 	ID           uint   `json:"id"`
 	Name         string `json:"name"`
 	Slug         string `json:"slug"`
 	ArticleCount int64  `json:"article_count"`
+	// ParentID 顶级为 0。加这个字段是为了让前台/后台的分类下拉框能
+	// 表达层级（用一个 repository 方法喂两个消费方，不必再查一次）。
+	ParentID uint `json:"parent_id"`
 }
 
 type TagCount struct {
@@ -35,12 +48,136 @@ func NewTaxonomyRepository(db *gorm.DB) *TaxonomyRepository {
 func (r *TaxonomyRepository) ListCategories() ([]CategoryCount, error) {
 	var out []CategoryCount
 	err := r.db.Table("categories").
-		Select("categories.id, categories.name, categories.slug, COUNT(articles.id) as article_count").
-		Joins("LEFT JOIN articles ON articles.category_id = categories.id").
+		Select("categories.id, categories.name, categories.slug, COALESCE(categories.parent_id, 0) as parent_id, COUNT(articles.id) as article_count").
+		// deleted_at 必须显式过滤：这里是原生 Table+Joins 写法，GORM 不会
+		// 自动追加软删除条件（只有走 Model(&Article{}) 才会）。漏掉它的话，
+		// 回收站里的文章仍会被计入分类文章数，用户看到"有 5 篇"却只列出 2 篇。
+		Joins("LEFT JOIN articles ON articles.category_id = categories.id AND articles.deleted_at IS NULL").
 		Group("categories.id").
 		Order("article_count DESC, categories.name ASC").
 		Scan(&out).Error
 	return out, err
+}
+
+// ListCategoryTree 返回全部分类（含 parent_id），用于构建层级树。
+// 返回扁平列表而不在此处建树：建树是纯内存运算，放 service 层更可测，
+// 也让 repository 保持"只取数据"的单一职责。
+func (r *TaxonomyRepository) ListCategoryTree() ([]model.Category, error) {
+	var cats []model.Category
+	err := r.db.Order("name ASC").Find(&cats).Error
+	return cats, err
+}
+
+// CreateCategory 创建分类。parentID 为 0 表示顶级。
+func (r *TaxonomyRepository) CreateCategory(name, slug string, parentID uint) (*model.Category, error) {
+	cat := model.Category{Name: name, Slug: slug}
+	if parentID > 0 {
+		parent, err := r.FindCategoryByID(parentID)
+		if err != nil {
+			return nil, ErrCategoryParentMissing
+		}
+		if parent.ParentID != nil {
+			return nil, ErrCategoryTooDeep
+		}
+		pid := parent.ID
+		cat.ParentID = &pid
+	}
+	if err := r.db.Create(&cat).Error; err != nil {
+		return nil, err
+	}
+	return &cat, nil
+}
+
+// UpdateCategory 更新分类名称与父级。
+//
+// 三个不能允许的改法，都会破坏树的完整性：
+//   - 把父级指向自己 → 成环，遍历 depth 时死循环
+//   - 把父级指向自己的后代 → 同样成环
+//   - 把父级改成一个有父级的分类 → 超出两级子分类上限
+func (r *TaxonomyRepository) UpdateCategory(id uint, name string, parentID uint) (*model.Category, error) {
+	cat, err := r.FindCategoryByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if parentID > 0 {
+		if parentID == id || r.IsDescendant(parentID, id) {
+			return nil, ErrCategoryCycle
+		}
+		parent, err := r.FindCategoryByID(parentID)
+		if err != nil {
+			return nil, ErrCategoryParentMissing
+		}
+		if parent.ParentID != nil {
+			return nil, ErrCategoryTooDeep
+		}
+		pid := parent.ID
+		cat.ParentID = &pid
+	} else {
+		cat.ParentID = nil
+	}
+	cat.Name = name
+	if err := r.db.Save(cat).Error; err != nil {
+		return nil, err
+	}
+	return cat, nil
+}
+
+// IsDescendant 报告 candidate 是否为 ancestor 的后代（含自身）。
+// 用带步数上限的爬父链实现，避免脏数据成环时死循环。
+func (r *TaxonomyRepository) IsDescendant(candidate, ancestor uint) bool {
+	cur := candidate
+	for i := 0; i < model.MaxCategoryDepth*2; i++ {
+		if cur == ancestor {
+			return true
+		}
+		var c model.Category
+		if err := r.db.First(&c, cur).Error; err != nil {
+			return false
+		}
+		if c.ParentID == nil {
+			return false
+		}
+		cur = *c.ParentID
+	}
+	return false
+}
+
+// DeleteCategory 删除分类。
+//
+// 有子分类时直接删除会把子分类变成孤儿（parent_id 悬空），所以：
+//   - 有子分类 → 拒绝删除，提示先处理子分类
+//   - 有关联文章 → 拒绝删除，提示先迁移文章
+//
+// 管理员确实想整体删时，可以在后台先删文章/改分类。这里刻意不做
+// 级联删除：分类被连带清掉文章属于不可逆误操作，代价比重试高得多。
+func (r *TaxonomyRepository) DeleteCategory(id uint) error {
+	if _, err := r.FindCategoryByID(id); err != nil {
+		return err
+	}
+	var children int64
+	if err := r.db.Model(&model.Category{}).Where("parent_id = ?", id).Count(&children).Error; err != nil {
+		return err
+	}
+	if children > 0 {
+		return ErrCategoryHasChildren
+	}
+	var articles int64
+	// model.Article{} 而非裸 Article：软删除字段由 GORM 自动追加条件，
+	// 所以回收站里的文章不计入"占用该分类"，删分类时不会误判。
+	if err := r.db.Model(&model.Article{}).Where("category_id = ?", id).Count(&articles).Error; err != nil {
+		return err
+	}
+	if articles > 0 {
+		return ErrCategoryHasArticles
+	}
+	return r.db.Delete(&model.Category{}, id).Error
+}
+
+// CountCategoryChildren 返回直接子分类数量。
+func (r *TaxonomyRepository) CountCategoryChildren(id uint) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.Category{}).Where("parent_id = ?", id).Count(&n).Error
+	return n, err
 }
 
 func (r *TaxonomyRepository) ListTags() ([]TagCount, error) {
@@ -99,13 +236,13 @@ func (r *TaxonomyRepository) UpdateTag(id uint, name string) (*model.Tag, error)
 	// 否则前端只会看到 500「internal server error」。
 	var clash model.Tag
 	if err := r.db.Where("slug = ? AND id <> ?", slug, id).First(&clash).Error; err == nil {
-		return nil, ErrTagNameTaken
+		return nil, ErrTagNameConflict
 	}
 	tag.Name = name
 	tag.Slug = slug
 	if err := r.db.Save(&tag).Error; err != nil {
 		if uniqueField, ok := uniqueViolationField(err); ok && uniqueField == "slug" {
-			return nil, ErrTagNameTaken
+			return nil, ErrTagNameConflict
 		}
 		return nil, err
 	}

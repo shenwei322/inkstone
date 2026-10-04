@@ -29,6 +29,11 @@ func (s *ReactionService) Toggle(articleID, userID uint, typ model.ReactionType)
 	return s.reactions.Toggle(articleID, userID, typ)
 }
 
+// FavoriteArticles 返回某用户的收藏夹（文章 + 总数），供「个人中心 → 收藏」使用。
+func (s *ReactionService) FavoriteArticles(userID uint, page, pageSize int) ([]model.Article, int64, error) {
+	return s.reactions.FavoriteArticles(userID, page, pageSize)
+}
+
 func (s *ReactionService) Stats(articleID uint, userID uint, hasUser bool) (*repository.ReactionStats, bool, bool, error) {
 	if _, err := s.articles.FindByID(articleID); err != nil {
 		return nil, false, false, err

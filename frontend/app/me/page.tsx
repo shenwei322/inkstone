@@ -11,6 +11,8 @@ import {
   KeyRound,
   Lock,
   MessageSquare,
+  PenLine,
+  Star,
   Trash2,
   UserRoundCog,
 } from 'lucide-react'
@@ -19,6 +21,7 @@ import {
   deleteComment,
   fetchArticles,
   fetchMyComments,
+  fetchMyFavorites,
   updateProfile,
   ApiError,
 } from '@/lib/api'
@@ -194,54 +197,74 @@ function MyArticlesTab() {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">共 {mine.length} 篇</p>
+        {/* 投稿入口指向 /me/articles/new 而不是 /admin/articles/new：
+            admin/layout 会把非 admin 用户整页拦下，普通作者点进去只会看到权限提示 */}
+        <Link
+          href="/me/articles/new"
+          className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 transition-transform hover:scale-105"
+        >
+          <PenLine className="h-4 w-4" />
+          写文章
+        </Link>
+      </div>
+
       {mine.length === 0 ? (
         <div className="rounded-xl border border-dashed p-12 text-center text-muted-foreground">
-          还没有发布过文章
+          还没有写过文章，点右上角「写文章」开始第一篇
         </div>
       ) : (
-        mine.map((article: Article, i) => (
-          <Reveal
-            key={article.id}
-            y={10}
-            delay={i * 0.04}
-            duration={0.3}
-            className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
-          >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Link
-                  href={`/posts/${article.slug}`}
-                  className="truncate font-medium transition-colors hover:text-accent"
-                >
-                  {article.title}
-                </Link>
-                {article.status === 'published' ? (
-                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">
-                    已发布
+        mine.map((article: Article, i) => {
+          // 草稿走带鉴权的 id 预览页（/me/drafts/:id），已发布走公开 slug 页。
+          // 草稿复用 /posts/:slug 会因匿名请求拿到 404「文章不存在」。
+          const detailHref =
+            article.status === 'draft' ? `/me/drafts/${article.id}` : `/posts/${article.slug}`
+          return (
+            <Reveal
+              key={article.id}
+              y={10}
+              delay={i * 0.04}
+              duration={0.3}
+              className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Link
+                    href={detailHref}
+                    className="truncate font-medium transition-colors hover:text-accent"
+                  >
+                    {article.title}
+                  </Link>
+                  {article.status === 'published' ? (
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400">
+                      已发布
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      草稿
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <Eye className="h-3 w-3" />
+                    {article.views}
                   </span>
-                ) : (
-                  <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
-                    草稿
+                  <span>
+                    更新于 {new Date(article.updated_at).toLocaleDateString('zh-CN')}
                   </span>
-                )}
+                </p>
               </div>
-              <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Eye className="h-3 w-3" />
-                  {article.views}
-                </span>
-                <span>
-                  更新于 {new Date(article.updated_at).toLocaleDateString('zh-CN')}
-                </span>
-              </p>
-            </div>
-            <div className="ml-4 shrink-0 text-xs text-muted-foreground">
-              <Link href={`/posts/${article.slug}`} className="transition-colors hover:text-accent">
-                查看
-              </Link>
-            </div>
-          </Reveal>
-        ))
+              <div className="ml-4 shrink-0 text-xs text-muted-foreground">
+                {/* 草稿给「预览」、已发布给「查看」，与标题链接同一落点 */}
+                <Link href={detailHref} className="transition-colors hover:text-accent">
+                  {article.status === 'draft' ? '预览' : '查看'}
+                </Link>
+              </div>
+            </Reveal>
+          )
+        })
       )}
     </div>
   )
@@ -326,10 +349,75 @@ function MyCommentsTab() {
   )
 }
 
+function MyFavoritesTab() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['me', 'favorites'],
+    queryFn: () => fetchMyFavorites({ page: 1, page_size: 50 }),
+  })
+
+  if (isLoading) {
+    return <RowLoading rows={3} />
+  }
+
+  const list = data?.articles ?? []
+  if (list.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed p-12 text-center">
+        <Star className="mx-auto h-8 w-8 text-muted-foreground/50" />
+        <p className="mt-3 text-sm text-muted-foreground">还没有收藏文章</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          在文章页点「收藏」，之后就能在这里快速找回
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {list.map((article, i) => (
+        <Reveal
+          key={article.id}
+          y={10}
+          delay={i * 0.04}
+          duration={0.3}
+          className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
+        >
+          <div className="min-w-0">
+            <Link
+              href={`/posts/${article.slug}`}
+              className="truncate font-medium transition-colors hover:text-accent"
+            >
+              {article.title}
+            </Link>
+            <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Eye className="h-3 w-3" />
+                {article.views}
+              </span>
+              <span>{article.author.username}</span>
+              {/* 后端只返回文章本身，没有"收藏时间"字段，这里展示发布时间，
+                  避免把 created_at 冒充成"收藏于"造成误导 */}
+              <span>
+                发布于{' '}
+                {new Date(article.published_at ?? article.created_at).toLocaleDateString('zh-CN')}
+              </span>
+            </p>
+          </div>
+          <div className="ml-4 shrink-0 text-xs text-muted-foreground">
+            <Link href={`/posts/${article.slug}`} className="transition-colors hover:text-accent">
+              查看
+            </Link>
+          </div>
+        </Reveal>
+      ))}
+    </div>
+  )
+}
+
 export default function MePage() {
   const { user, loading } = useAuth()
   const router = useRouter()
-  const [tab, setTab] = useState<'account' | 'articles' | 'comments'>('account')
+  const [tab, setTab] = useState<'account' | 'articles' | 'comments' | 'favorites'>('account')
 
   useEffect(() => {
     if (!loading && !user) router.push('/login')
@@ -354,6 +442,7 @@ export default function MePage() {
   const tabs = [
     { key: 'account' as const, label: '账户安全', icon: UserRoundCog },
     { key: 'articles' as const, label: '我的文章', icon: FileText },
+    { key: 'favorites' as const, label: '我的收藏', icon: Star },
     { key: 'comments' as const, label: '我的评论', icon: MessageSquare },
   ]
 
@@ -410,7 +499,15 @@ export default function MePage() {
           duration={0.3}
           className="mt-4"
         >
-          {tab === 'account' ? <AccountTab /> : tab === 'articles' ? <MyArticlesTab /> : <MyCommentsTab />}
+          {tab === 'account' ? (
+            <AccountTab />
+          ) : tab === 'articles' ? (
+            <MyArticlesTab />
+          ) : tab === 'favorites' ? (
+            <MyFavoritesTab />
+          ) : (
+            <MyCommentsTab />
+          )}
         </Reveal>
       </div>
     </PageTransition>

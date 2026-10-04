@@ -25,6 +25,13 @@ type Config struct {
 	UploadDir    string
 	FilesDir     string
 
+	// ImageMaxEdge 原图最大边长（像素），0 或负数表示不压缩原图，默认 2560。
+	// 上传图片任一边超过该值时等比压缩到该值以内再落盘。
+	ImageMaxEdge int
+	// ImageThumbEdge 缩略图最大边长（像素），默认 320。
+	// 上传图片时同步生成 _thumb 后缀的缩略图；设为 0 表示关闭缩略图生成。
+	ImageThumbEdge int
+
 	// TrustedProxies 是允许其转发头（X-Forwarded-For / X-Real-IP）被采信的
 	// 代理网段（CIDR）。只有直连对端落在这些网段内，转发头才会被用来判定
 	// 访客 IP——否则一律用 TCP 对端地址。默认覆盖本机与 RFC1918 私网，即
@@ -63,6 +70,18 @@ type Config struct {
 	//
 	// 只在「更新源就是内网自建服务器」时置为 true，并清楚这会关掉上述防护。
 	AllowPrivateHosts bool
+
+	// DisableCaptcha 是应急总开关（INKSTONE_DISABLE_CAPTCHA）。
+	//
+	// 存在的理由：人机验证依赖外部服务（lap 的 CF Workers 实例 / 极验），
+	// 这些服务故障时全站无人能登录，而管理员自己也可能登不进后台去关设置
+	// ——死锁。这个环境变量是逃生舱：绕过 cfg 与后台设置，直接让所有验证
+	// 通过。与后台的 captcha_provider 设置是两层，互不影响。
+	//
+	// 安全代价明确（会关掉全部人机验证），所以：
+	//   - 只在启动日志里醒目告警，不静默；
+	//   - 仅在「外部验证服务不可用」时短暂使用，恢复后立即取消。
+	DisableCaptcha bool
 }
 
 // defaultUpdateMirror 是默认源码包镜像：gh-proxy 的格式是「代理前缀 + 完整 GitHub 地址」，
@@ -102,6 +121,23 @@ func getEnvInt(key string, fallback int64) int64 {
 	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// getEnvIntAllowZero 解析「0 是合法语义」的非负整数环境变量。
+//
+// 与 getEnvInt 的差别只在 0：显式写 0 表示「关闭该功能」（如
+// INKSTONE_IMAGE_THUMB_EDGE=0 关闭缩略图生成），必须与「未配置」区分开。
+// 负值、非数字一律回落默认值，避免拼写错误把功能静默关掉。
+func getEnvIntAllowZero(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
 		return fallback
 	}
 	return n
@@ -181,6 +217,10 @@ func Load() *Config {
 		UploadDir:    uploadDir,
 		FilesDir:     filesDir,
 
+		// 上传图片的自动处理：原图压缩 + 缩略图（见 imageutil 包）。
+		ImageMaxEdge:   getEnvIntAllowZero("INKSTONE_IMAGE_MAX_EDGE", 2560),
+		ImageThumbEdge: getEnvIntAllowZero("INKSTONE_IMAGE_THUMB_EDGE", 320),
+
 		TrustedProxies: parseTrustedProxies(os.Getenv("TRUSTED_PROXIES")),
 
 		UpdateEnabled:      getEnv("UPDATE_ENABLED", "true") == "true",
@@ -207,6 +247,9 @@ func Load() *Config {
 		// 默认 false：下载链路校验实际拨号地址，拒绝内网/回环/元数据地址。
 		// 仅当更新源本身就是内网自建服务器时才显式置 true。
 		AllowPrivateHosts: getEnv("UPDATE_ALLOW_PRIVATE_HOSTS", "false") == "true",
+
+		DisableCaptcha: getEnv("INKSTONE_DISABLE_CAPTCHA", "") == "1" ||
+			strings.EqualFold(strings.TrimSpace(getEnv("INKSTONE_DISABLE_CAPTCHA", "")), "true"),
 	}
 }
 

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   ArrowLeft,
+  Database,
   FileStack,
   FileText,
   FolderOpen,
@@ -21,6 +22,7 @@ import {
   Settings,
   ShieldCheck,
   Tag,
+  Trash2,
   Users,
   X,
 } from 'lucide-react'
@@ -33,6 +35,7 @@ const navItems = [
   { href: '/admin', label: '概览', icon: LayoutDashboard },
   { href: '/admin/users', label: '用户管理', icon: Users },
   { href: '/admin/articles', label: '文章管理', icon: FileText },
+  { href: '/admin/trash', label: '回收站', icon: Trash2 },
   { href: '/admin/tags', label: '标签管理', icon: Tag },
   { href: '/admin/pages', label: '页面管理', icon: FileStack },
   { href: '/admin/comments', label: '评论管理', icon: MessageSquare },
@@ -43,6 +46,7 @@ const navItems = [
   { href: '/admin/security', label: '安全防护', icon: ShieldCheck },
   { href: '/admin/settings', label: '网站管理', icon: Settings },
   { href: '/admin/system-update', label: '系统更新', icon: RefreshCw },
+  { href: '/admin/backups', label: '备份恢复', icon: Database },
   { href: '/admin/logs', label: '网站日志', icon: ScrollText },
   { href: '/admin/about', label: '关于系统', icon: Info },
 ]

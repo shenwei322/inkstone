@@ -37,6 +37,12 @@ func (s *AdminService) UpdateUserRole(id uint, role string) error {
 	return s.users.UpdateRole(id, role)
 }
 
+// UnlockUser 解除账号的登录失败锁定（清零计数 + 清空锁定时刻）。
+// 用户被锁又记不起密码时，除了自己走「忘记密码」，就只有找管理员这一条路。
+func (s *AdminService) UnlockUser(id uint) error {
+	return s.users.UnlockUser(id)
+}
+
 type Stats struct {
 	TotalUsers     int64 `json:"total_users"`
 	TotalArticles  int64 `json:"total_articles"`

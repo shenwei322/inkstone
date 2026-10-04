@@ -17,6 +17,10 @@ set -euo pipefail
 VERSION="${1:-${INKSTONE_VERSION:-Beta1.27}}"
 # 前端 API 地址：NEXT_PUBLIC_* 是构建期注入，打进镜像后改不了，按部署域名传
 API_URL="${INKSTONE_PUBLIC_API_URL:-https://blog.shenv.top/api/v1}"
+# 站点自身地址：canonical / OG / JSON-LD 用。留空会兜底成
+# http://localhost:3000，生产环境 canonical 指向 localhost，
+# 搜索引擎会视作重复内容而拒绝收录。
+SITE_URL="${INKSTONE_PUBLIC_SITE_URL:-https://blog.shenv.top}"
 OUT_DIR="${INKSTONE_DIST_DIR:-dist}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -38,9 +42,10 @@ backend_args=(build -t "inkstone-backend:${VERSION}" -t inkstone-backend:latest
 echo "==> 构建后端镜像 ${BACKEND_TAGS[*]}"
 docker "${backend_args[@]}"
 
-# 2) 前端（NEXT_PUBLIC_API_URL 构建期注入）
+# 2) 前端（NEXT_PUBLIC_API_URL / NEXT_PUBLIC_SITE_URL 构建期注入）
 frontend_args=(build -t "inkstone-frontend:${VERSION}" -t inkstone-frontend:latest
   --build-arg "NEXT_PUBLIC_API_URL=${API_URL}"
+  --build-arg "NEXT_PUBLIC_SITE_URL=${SITE_URL}"
   -f "$REPO_ROOT/frontend/Dockerfile" "$REPO_ROOT/frontend")
 echo "==> 构建前端镜像 ${FRONTEND_TAGS[*]}"
 docker "${frontend_args[@]}"

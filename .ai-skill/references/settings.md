@@ -109,6 +109,30 @@
 | `upload_speed_kb` | `0` | 上传限速 KB/s（0=不限） |
 | `download_speed_kb` | `0` | 下载限速 KB/s（0=不限） |
 
+### 评论治理
+| Key | 默认值 | 说明 |
+|---|---|---|
+| `comment_audit` | `false` | 开启后所有新评论先审后发（`status=pending`） |
+| `comment_words` | `""` | 敏感词表，换行/逗号/分号/竖线分隔。命中则转人工审核（**不直接拒绝**） |
+| `comment_notify` | `false` | 有新评论时邮件通知文章作者（作者自评不发） |
+| `comment_max_depth` | `3` | 嵌套回复最大层级，前端据此渲染缩进 |
+
+**敏感词为什么不直接拒绝**：拒绝会向刷评者暴露"这个词被拦了"，换写法即可绕过。
+转人工审核同样挡得住内容，且不留拦截信号。
+
+**通知是旁路功能**：`mailer.CommentNotifier` 发送失败只 `log.Printf`，
+绝不让评论本身发表失败。SMTP 未配置时静默跳过。
+
+### 图片处理（上传时自动生成）
+由**环境变量**控制（不是后台设置，避免每次上传都查库）：
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `INKSTONE_IMAGE_MAX_EDGE` | `2560` | 原图最大边长（像素）。任一边超过就等比压缩。0/负值 = 不压缩 |
+| `INKSTONE_IMAGE_THUMB_EDGE` | `320` | 缩略图最大边长。0 = 关闭缩略图生成 |
+
+缩略图命名为 `<原文件名>_thumb.<ext>`，与原图同目录；删除文件时按同样规则拼路径清理。
+输入不是图片、WebP、或体积/尺寸超限时**保留原图、只记日志**——处理失败不能让上传失败。
+
 ### 友链自助申请（Beta1.19）
 | Key | 默认值 | 说明 |
 |---|---|---|
@@ -247,3 +271,13 @@ curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/admin/setti
 | 变量 | 作用 |
 |---|---|
 | `INKSTONE_DISABLE_CAPTCHA=1` | 全局停用所有验证码（应急，防锁死） |
+| `INKSTONE_IMAGE_MAX_EDGE` | 原图压缩边长，见「图片处理」节 |
+| `INKSTONE_IMAGE_THUMB_EDGE` | 缩略图边长，见「图片处理」节；设 0 关闭 |
+| `INKSTONE_PUBLIC_API_URL` | 打包镜像时注入前端 `NEXT_PUBLIC_API_URL`（构建期） |
+| `INKSTONE_PUBLIC_SITE_URL` | 打包镜像时注入前端 `NEXT_PUBLIC_SITE_URL`（构建期） |
+
+**`INKSTONE_PUBLIC_SITE_URL` 为什么重要**：canonical 链接、OG、JSON-LD 都从
+`NEXT_PUBLIC_SITE_URL` 取。它是**构建期注入**，未配置时兜底 `http://localhost:3000`，
+生产环境的 canonical 会指向 localhost —— 搜索引擎视作重复内容而拒绝收录，比没有 canonical 更糟。
+`deploy/package-images.{sh,ps1}` 与 `frontend/Dockerfile` 都已声明这个 `ARG`
+（Dockerfile 里漏声明的话，`--build-arg` 会被静默忽略）。

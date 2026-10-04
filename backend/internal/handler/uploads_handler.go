@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shenwei/inkstone/backend/pkg/config"
+	"github.com/shenwei/inkstone/backend/pkg/imageutil"
 )
 
 const maxUploadBytes = 10 << 20 // 10MB
@@ -87,6 +91,69 @@ func (h *UploadsHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 图片后处理：超大原图压缩 + 生成缩略图。
+	// 任何一步失败都只记日志、返回空缩略图地址——原图已经落地，
+	// 不能因为处理失败让用户传不上图。
+	thumbURL := h.processImage(dst, name)
+
 	url := strings.TrimSuffix(h.cfg.AbsoluteUploadBase(), "/") + "/uploads/" + name
-	c.JSON(http.StatusCreated, gin.H{"url": url, "filename": name})
+	c.JSON(http.StatusCreated, gin.H{"url": url, "filename": name, "thumb_url": thumbURL})
+}
+
+// processImage 对刚落地的图片做「压缩 + 缩略图」，返回缩略图可访问 URL。
+//
+// 返回空串表示这一步没做成（非图片、WebP、处理出错、或配置关闭）。
+// 失败只记日志不返回 error：图片处理是增强项，不是上传的前置条件。
+func (h *UploadsHandler) processImage(dst, name string) string {
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		log.Printf("[upload] 读取已上传图片失败 %s: %v", name, err)
+		return ""
+	}
+
+	cfg := h.cfg
+	// 原图压缩：任一边超过上限才处理，已够小的原图保持不动，
+	// 避免无谓的二次有损压缩让画质变差。
+	if cfg.ImageMaxEdge > 0 {
+		resized, err := imageutil.Fit(data, cfg.ImageMaxEdge, cfg.ImageMaxEdge, 0)
+		if err != nil {
+			// 主要是 WebP / 尺寸超限 / 数据损坏。保留原图即可。
+			if !errors.Is(err, imageutil.ErrWebPUnsupported) {
+				log.Printf("[upload] 压缩原图失败 %s: %v", name, err)
+			}
+		} else if !bytes.Equal(resized, data) {
+			// Fit 在「不需要缩放」时返回原数据副本，用 Equal 区分，
+			// 避免把没变化的图又写一遍盘。
+			mode := os.FileMode(0o644)
+			if info, statErr := os.Stat(dst); statErr == nil {
+				mode = info.Mode()
+			}
+			if err := os.WriteFile(dst, resized, mode); err != nil {
+				log.Printf("[upload] 回写压缩图失败 %s: %v", name, err)
+			}
+		}
+	}
+
+	if cfg.ImageThumbEdge <= 0 {
+		return ""
+	}
+	thumb, err := imageutil.Thumbnail(data, cfg.ImageThumbEdge)
+	if err != nil {
+		// WebP 是预期内的「不支持」，不算异常，不必刷错误日志
+		if !errors.Is(err, imageutil.ErrWebPUnsupported) {
+			log.Printf("[upload] 生成缩略图失败 %s: %v", name, err)
+		}
+		return ""
+	}
+
+	// 缩略图命名：photo.jpg → photo_thumb.jpg。
+	// 与原图同目录，删除时按同样规则拼路径清理，不扫目录。
+	ext := filepath.Ext(name)
+	thumbName := strings.TrimSuffix(name, ext) + "_thumb" + ext
+	thumbPath := filepath.Join(filepath.Dir(dst), thumbName)
+	if err := os.WriteFile(thumbPath, thumb, 0o644); err != nil {
+		log.Printf("[upload] 写入缩略图失败 %s: %v", thumbName, err)
+		return ""
+	}
+	return strings.TrimSuffix(h.cfg.AbsoluteUploadBase(), "/") + "/uploads/" + thumbName
 }

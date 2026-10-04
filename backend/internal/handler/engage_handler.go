@@ -53,7 +53,8 @@ func NewCommentHandler(comments *service.CommentService, tokens *service.TokenMa
 }
 
 type createCommentRequest struct {
-	Content string `json:"content" binding:"required"`
+	Content  string `json:"content" binding:"required"`
+	ParentID uint   `json:"parent_id"` // 被回复的评论 ID，空 = 顶级评论
 	service.CaptchaParams
 }
 
@@ -77,7 +78,7 @@ func (h *CommentHandler) Create(c *gin.Context) {
 		errorResponse(c, err)
 		return
 	}
-	comment, err := h.comments.Create(uint(articleID), current.ID, req.Content)
+	comment, err := h.comments.Create(uint(articleID), current.ID, req.ParentID, req.Content, middleware.ClientIP(c))
 	if err != nil {
 		errorResponse(c, err)
 		return
@@ -88,16 +89,29 @@ func (h *CommentHandler) Create(c *gin.Context) {
 			h.limiter.Reset(key)
 		}
 	}
-	c.JSON(http.StatusCreated, gin.H{"comment": toCommentResponse(comment)})
+	resp := toCommentResponse(comment)
+	// 命中敏感词或开了审核时明确告知要等审核——否则用户以为发失败了，
+	// 会反复重复提交。
+	if comment.IsPending() {
+		resp["pending"] = true
+	}
+	c.JSON(http.StatusCreated, gin.H{"comment": resp})
 }
 
 // List handles GET /articles/:id/comments.
+//
+// viewerID 已登录则连自己未过审的评论一起返回：否则作者看不到自己刚发的
+// 审核中评论，会重复提交。
 func (h *CommentHandler) List(c *gin.Context) {
 	articleID, ok := parseUintParam(c, "id", "无效的 ID")
 	if !ok {
 		return
 	}
-	comments, err := h.comments.ListByArticle(uint(articleID))
+	viewerID := uint(0)
+	if current, ok := middleware.GetCurrentUser(c); ok {
+		viewerID = current.ID
+	}
+	comments, err := h.comments.ListByArticle(uint(articleID), viewerID)
 	if err != nil {
 		errorResponse(c, err)
 		return
@@ -170,6 +184,31 @@ func toCommentResponse(cm *model.Comment) gin.H {
 		"created_at":    cm.CreatedAt,
 		"author":        user,
 	}
+}
+
+// MyFavorites handles GET /auth/my-favorites — 当前用户的收藏夹。
+//
+// 收藏按钮此前是「只进不出」的：Toggle 能写入，却没有读取入口，用户点完
+// 就再也找不到收藏的文章。这里把读路径补全，返回结构与文章列表保持一致，
+// 前端可以直接复用列表组件。
+func (h *ReactionHandler) MyFavorites(c *gin.Context) {
+	current, ok := middleware.GetCurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	page := parseIntQuery(c, "page", 1)
+	pageSize := parseIntQuery(c, "page_size", 20)
+	articles, total, err := h.reactions.FavoriteArticles(current.ID, page, pageSize)
+	if err != nil {
+		errorResponse(c, err)
+		return
+	}
+	items := make([]articleResponse, 0, len(articles))
+	for i := range articles {
+		items = append(items, toArticleResponse(&articles[i]))
+	}
+	c.JSON(http.StatusOK, gin.H{"articles": items, "total": total, "page": page, "page_size": pageSize})
 }
 
 type ReactionHandler struct {

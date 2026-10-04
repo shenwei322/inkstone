@@ -152,6 +152,55 @@ middleware.RequireRole(model.RoleAdmin)
 | `Update(id, authorID, ArticleUpdate)` | 更新，校验作者身份 |
 | `List(ArticleQuery)` | 列表，支持分类/标签/搜索/排序筛选 |
 | `IncrementViews(id)` | 浏览量 +1 |
+| `Related(articleID, limit)` | 相关文章（共同标签 ≥2 > 1 > 同分类），只取卡片字段 |
+| `Neighbors(articleID)` | 上一篇（更新的）/ 下一篇（更旧的） |
+| `Restore(id)` / `Purge(id)` / `Trash(page, pageSize)` | 回收站三件套 |
+
+`service/excerpt.go` 的 `ExcerptFor(content string, maxRunes int)` 生成摘要：
+显式 excerpt 字段（当前模型无此列）> `<p>` 段落拼接（空段跳过）> 全文剥标签，
+按 **rune** 截断加「…」（中文不能用字节）。`stripTagsLocally` 是与
+`handler.stripHTMLTags` 逐字节等价的**有意复制**——service 层不能反向依赖 handler 包。
+
+**封面逻辑**（`resolveCover`）：
+```go
+func resolveCover(explicit, content string) string {
+    if cover := strings.TrimSpace(explicit); cover != "" {
+        return cover  // 显式设置优先
+    }
+    return firstImageURL(content)  // 否则提取正文首个 <img src="...">
+}
+```
+
+### CommentService（含审核与嵌套）
+
+`Create(articleID, userID, parentID, content, ip)` 与旧的 `Create(articleID, userID, content)`
+签名不同——**新增了 parentID 与 ip 两个参数**，调用方（handler）需同步。
+`ListByArticle(articleID, viewerID)` 也多了 viewerID：返回 approved 的 + viewer 自己的 pending。
+
+审核判定在 `applyModeration`：`comment_audit` 开启**或**命中敏感词 → `pending`，
+否则 `approved`。敏感词匹配用 `wordSep = [\n\r,，;；|]+` 切分词表——后台 textarea 里
+用户换行还是逗号全凭习惯，不做硬性规定。比对前内容与词都转小写。
+
+通知是旁路：`CommentNotifier` 接口由 `pkg/mailer.CommentNotifier` 实现，
+AuthorID == UserID（作者自评）时跳过，Email 为空时跳过，发送失败只 `log.Printf`。
+
+### imageutil（`pkg/imageutil`）
+
+零第三方依赖（只用标准库 image/jpeg/png/gif）。入口在 `handler/uploads_handler.go`：
+
+```
+写原图 → 超限则覆盖写压缩版 → 生成 *_thumb.<ext>
+```
+
+- `Fit(data, maxW, maxH, quality)`：只缩不放，已在上限内时**原样返回副本**
+  （避免无谓二次有损压缩）。测试用 `bytes.Equal(out, data)` 区分这两种情况
+- `resizeAreaAverage`：区域平均（box filter）缩小，高倍缩小不出锯齿
+- WebP 按魔数可识别（`Kind` 返回 ok=true）但 Fit 明确返回 `ErrWebPUnsupported`
+- 防护：`maxSourceBytes=32MB`、`maxDimension=20000` 像素——都在解码前拦，防 JPEG 解压炸弹
+
+测试见 `pkg/imageutil/imageutil_test.go`。
+**写缩放测试别把「测试自身选错像素」当成产品 bug**：32→8 是精确 4:1，
+目标像素的源区间不会跨过黑白分界；用非整除的缩放比（如 32→7）才能真正验证取的是均值。
 
 **封面逻辑**（`resolveCover`）：
 ```go

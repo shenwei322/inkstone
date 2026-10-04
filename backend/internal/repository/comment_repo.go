@@ -19,13 +19,14 @@ func (r *CommentRepository) Create(comment *model.Comment) error {
 	if err := r.db.Create(comment).Error; err != nil {
 		return err
 	}
-	// Reload with associations populated.
-	return r.db.Preload("User").First(comment, comment.ID).Error
+	// Reload with associations populated. Parent 也要带上：前端渲染盖楼时
+	// 需要知道这条回复指向谁，否则只能显示"回复了一条已删除的评论"。
+	return r.db.Preload("User").Preload("Parent").Preload("Parent.User").First(comment, comment.ID).Error
 }
 
 func (r *CommentRepository) FindByID(id uint) (*model.Comment, error) {
 	var c model.Comment
-	err := r.db.Preload("User").First(&c, id).Error
+	err := r.db.Preload("User").Preload("Parent").Preload("Parent.User").First(&c, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -37,11 +38,31 @@ func (r *CommentRepository) FindByID(id uint) (*model.Comment, error) {
 
 func (r *CommentRepository) ListByArticle(articleID uint) ([]model.Comment, error) {
 	var comments []model.Comment
-	err := r.db.Preload("User").
+	err := r.db.Preload("User").Preload("Parent").Preload("Parent.User").
 		Where("article_id = ?", articleID).
 		Order("created_at ASC").
 		Find(&comments).Error
 	return comments, err
+}
+
+// CountByStatus 返回某状态的评论数（待审核角标用）。
+func (r *CommentRepository) CountByStatus(status string) (int64, error) {
+	var n int64
+	err := r.db.Model(&model.Comment{}).Where("status = ?", status).Count(&n).Error
+	return n, err
+}
+
+// UpdateStatus 改评论审核状态。用 Model().Where().Update() 而不是
+// Save(&comment)——后者会把所有字段写回，并发情况下可能覆盖别人的修改。
+func (r *CommentRepository) UpdateStatus(id uint, status string) error {
+	res := r.db.Model(&model.Comment{}).Where("id = ?", id).Update("status", status)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *CommentRepository) ListAll(page, pageSize int) ([]model.Comment, int64, error) {

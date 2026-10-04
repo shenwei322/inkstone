@@ -115,12 +115,43 @@ func purgeArticleRelations(tx *gorm.DB, id uint) error {
 	return tx.Exec("DELETE FROM article_tags WHERE article_id = ?", id).Error
 }
 
+// Delete 软删除一篇文章（仅作者本人可删）。
+//
+// 注意这里**不再**调用 purgeArticleRelations：软删后文章仍占着 comments /
+// reactions / article_tags 的外键引用，若照旧先清关联，还原文章时那些评论
+// 和点赞已经没了——等于换了一种方式丢数据。彻底清关联只发生在 Purge。
 func (r *ArticleRepository) Delete(id, authorID uint) error {
+	result := r.db.Where("id = ? AND author_id = ?", id, authorID).Delete(&model.Article{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Restore 把软删除的文章还原（清空 deleted_at）。
+func (r *ArticleRepository) Restore(id uint) error {
+	result := r.db.Unscoped().Model(&model.Article{}).Where("id = ?", id).
+		Update("deleted_at", nil)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Purge 彻底删除一篇文章及其全部关联行（不可恢复）。用于回收站里的
+// 「彻底删除」与删除用户时的连带清理。
+func (r *ArticleRepository) Purge(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := purgeArticleRelations(tx, id); err != nil {
 			return err
 		}
-		result := tx.Where("id = ? AND author_id = ?", id, authorID).Delete(&model.Article{})
+		result := tx.Unscoped().Where("id = ?", id).Delete(&model.Article{})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -131,20 +162,16 @@ func (r *ArticleRepository) Delete(id, authorID uint) error {
 	})
 }
 
+// DeleteAny 软删除任意文章（管理员操作，不限作者）。
 func (r *ArticleRepository) DeleteAny(id uint) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := purgeArticleRelations(tx, id); err != nil {
-			return err
-		}
-		result := tx.Delete(&model.Article{}, id)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrNotFound
-		}
-		return nil
-	})
+	result := r.db.Delete(&model.Article{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *ArticleRepository) DeleteByAuthor(authorID uint) error {
@@ -153,12 +180,16 @@ func (r *ArticleRepository) DeleteByAuthor(authorID uint) error {
 	})
 }
 
-// purgeArticlesByAuthor 在给定事务内删除某作者的全部文章及其关联行。
+// purgeArticlesByAuthor 在给定事务内彻底删除某作者的全部文章及其关联行。
 // 抽成可复用函数，以便「删除用户」在**同一事务**里连带清理文章
 // （此前 handler 分两个事务调用，中途失败会留下不一致状态）。
+//
+// 这里必须是 Unscoped 的真删：删除账号本身就是彻底操作，若只软删文章，
+// 这些文章会连同已删除用户的作者引用一起留在库里无法访问，而它们的
+// 评论/点赞行也不会被清理。
 func purgeArticlesByAuthor(tx *gorm.DB, authorID uint) error {
 	var ids []uint
-	if err := tx.Model(&model.Article{}).Where("author_id = ?", authorID).
+	if err := tx.Unscoped().Model(&model.Article{}).Where("author_id = ?", authorID).
 		Pluck("id", &ids).Error; err != nil {
 		return err
 	}
@@ -167,7 +198,32 @@ func purgeArticlesByAuthor(tx *gorm.DB, authorID uint) error {
 			return err
 		}
 	}
-	return tx.Where("author_id = ?", authorID).Delete(&model.Article{}).Error
+	return tx.Unscoped().Where("author_id = ?", authorID).Delete(&model.Article{}).Error
+}
+
+// ListTrash 返回回收站里的文章（已软删除），按删除时间倒序。
+// Unscoped() 绕开 GORM 的 deleted_at IS NULL 过滤，再手动限定非空。
+func (r *ArticleRepository) ListTrash(page, pageSize int) ([]model.Article, int64, error) {
+	db := r.db.Unscoped().Model(&model.Article{}).Where("deleted_at IS NOT NULL")
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	page, pageSize = normalizePage(page, pageSize)
+	var articles []model.Article
+	err := db.Preload("Author").
+		Order("deleted_at DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).
+		Find(&articles).Error
+	return articles, total, err
+}
+
+// CountTrash 返回回收站文章数（后台菜单角标用）。
+func (r *ArticleRepository) CountTrash() (int64, error) {
+	var n int64
+	err := r.db.Unscoped().Model(&model.Article{}).
+		Where("deleted_at IS NOT NULL").Count(&n).Error
+	return n, err
 }
 
 func (r *ArticleRepository) CountAll() (int64, error) {
@@ -273,6 +329,151 @@ func (r *ArticleRepository) List(q ArticleQuery) ([]model.Article, int64, error)
 		return nil, 0, err
 	}
 	return articles, total, nil
+}
+
+// articleCardColumns 是「文章卡片」类查询只需要的列集合。related /
+// neighbors 这些只读接口不需要正文（content 可能很大），也不预加载
+// Author / Tags，省掉关联查询与带宽。
+const articleCardColumns = "articles.id, articles.title, articles.slug, articles.cover, articles.views, articles.published_at"
+
+// relatedDefaultLimit / relatedMaxLimit 约束相关文章条目的入参区间：
+// 相关推荐只用于页面侧栏，给太多既渲染不下也会让 SQL 多扫行。
+const (
+	relatedDefaultLimit = 4
+	relatedMaxLimit     = 10
+)
+
+func normalizeRelatedLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return relatedDefaultLimit
+	case limit > relatedMaxLimit:
+		return relatedMaxLimit
+	default:
+		return limit
+	}
+}
+
+// relatedSQL 用一条语句找出「最相关」的已发布文章，不在 Go 里挨个遍历。
+//
+// 相关性排序由 shared_tags DESC 一次表达，对应的三档优先级：
+//   - shared_tags >= 2：共同标签 2 个及以上，排最前（值越大越靠前）；
+//   - shared_tags = 1 ：共同标签 1 个，其后；
+//   - shared_tags = 0 ：只剩「同分类」这一种可能（WHERE 保证没有共同
+//     标签时必然同分类才会入选），排在最后。
+//
+// 同档内部按 published_at 倒序（NULLS LAST 兼容管理后台改状态时
+// published_at 漏设的脏数据）、再按 id 倒序与列表页保持一致。
+//
+// 用 Raw 而非 Model + Joins：SELECT 列表里要带一个以当前文章为参数的
+// 相关子查询，写进 GORM 的 Select 字符串时占位符的展开顺序不好把控；
+// Raw 的 ? 顺序即调用处参数顺序，最直观。Raw 不会像 Model 那样自动追加
+// 软删除条件，因此 a.deleted_at IS NULL 与 a.status 都在 SQL 里显式声明。
+var relatedSQL = `
+SELECT a.id, a.title, a.slug, a.cover, a.views, a.published_at,
+       (SELECT COUNT(*)
+          FROM article_tags t1
+          JOIN article_tags t2 ON t2.tag_id = t1.tag_id
+         WHERE t1.article_id = ?
+           AND t2.article_id = a.id) AS shared_tags
+  FROM articles a
+ WHERE a.id <> ?
+   AND a.status = ?
+   AND a.deleted_at IS NULL
+   AND (
+        a.category_id = (SELECT category_id FROM articles WHERE id = ? AND deleted_at IS NULL)
+        OR EXISTS (
+             SELECT 1
+               FROM article_tags x1
+               JOIN article_tags x2 ON x2.tag_id = x1.tag_id
+              WHERE x1.article_id = ?
+                AND x2.article_id = a.id
+           )
+       )
+ ORDER BY shared_tags DESC, a.published_at DESC NULLS LAST, a.id DESC
+ LIMIT ?`
+
+// Related 返回与给定文章最相关的若干篇（limit 篇），不含自己。取不够
+// limit 篇就少返回（例如文章没有标签也没有分类，或站内文章很少）。
+//
+// shared_tags 列只是为了 ORDER BY 引用计算别名，Article 模型里没有对应
+// 字段，Scan 时 GORM 会直接忽略未匹配的列。
+func (r *ArticleRepository) Related(articleID uint, limit int) ([]model.Article, error) {
+	limit = normalizeRelatedLimit(limit)
+	articles := make([]model.Article, 0, limit)
+	err := r.db.Raw(relatedSQL,
+		articleID,              // shared_tags 子查询：当前文章
+		articleID,              // a.id <> ?
+		model.ArticlePublished, // a.status = ?
+		articleID,              // 同分类子查询：当前分类
+		articleID,              // EXISTS：当前文章
+		limit,                  // LIMIT
+	).Scan(&articles).Error
+	if err != nil {
+		return nil, err
+	}
+	return articles, nil
+}
+
+// Neighbors 返回给定文章在「已发布文章按 published_at 倒序」序列中的
+// 上一篇（更新的）与下一篇（更旧的），任一不存在时对应返回 nil。
+//
+// 「上一篇 / 下一篇」的语义（中文博客惯例，与英式 prev/next 相反，
+// 改动命名或顺序前先读这段）：
+//   - prev（上一篇）= 序列中排在前面的文章 = 发布时间**更新**的文章，
+//     即「往前翻」看到的下一篇。published_at 倒序排列时，它落在当前
+//     文章右侧更大的时间区间（published_at 相等时 id 更大者也算）。
+//   - next（下一篇）= 序列中排在后面的文章 = 发布时间**更旧**的文章，
+//     即「往后翻」看到的下一篇。
+//
+// published_at 为空的文章（草稿或后台改状态漏设时间）没有时间轴位置，
+// 直接返回两个 nil。已软删的当前文章返回 ErrNotFound。
+//
+// 实现为两条 LIMIT 1 的轻量查询：整表按 published_at 排序再切片会把
+// 全部文章读进内存，博客文章量上来后（数千篇纯文本 + 每篇几 KB 正文）
+// 那是几十 MB 的无谓传输。
+func (r *ArticleRepository) Neighbors(articleID uint) (prev, next *model.Article, err error) {
+	var current model.Article
+	if err := r.db.Select("articles.published_at").Take(&current, articleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
+	}
+	at := current.PublishedAt
+	if at == nil {
+		return nil, nil, nil
+	}
+
+	// prev：比当前文章「新」的已发布文章中最近的一篇。
+	var prevArticle model.Article
+	if err := r.db.Select(articleCardColumns).
+		Where("articles.status = ? AND (articles.published_at > ? OR (articles.published_at = ? AND articles.id > ?))",
+			model.ArticlePublished, at, at, articleID).
+		Order("articles.published_at ASC, articles.id ASC").
+		Limit(1).
+		Find(&prevArticle).Error; err != nil {
+		return nil, nil, err
+	}
+	if prevArticle.ID != 0 {
+		prev = &prevArticle
+	}
+
+	// next：比当前文章「旧」的已发布文章中最近的一篇。
+	var nextArticle model.Article
+	if err := r.db.Select(articleCardColumns).
+		Where("articles.status = ? AND (articles.published_at < ? OR (articles.published_at = ? AND articles.id < ?))",
+			model.ArticlePublished, at, at, articleID).
+		Order("articles.published_at DESC, articles.id DESC").
+		Limit(1).
+		Find(&nextArticle).Error; err != nil {
+		return nil, nil, err
+	}
+	if nextArticle.ID != 0 {
+		next = &nextArticle
+	}
+
+	return prev, next, nil
 }
 
 func normalizePage(page, pageSize int) (int, int) {

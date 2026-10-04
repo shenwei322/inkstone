@@ -1,7 +1,7 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { UserPlus } from 'lucide-react'
+import { Unlock, UserPlus } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import gsap from 'gsap'
 import { easeOut, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
@@ -11,6 +11,7 @@ import {
   deleteAdminUser,
   fetchAdminUsers,
   setUserStatus,
+  unlockUser,
   updateAdminUserRole,
   updateAdminUser,
   ApiError,
@@ -20,6 +21,7 @@ import { useNotify } from '@/components/toast'
 import { SecretInput } from '@/components/secret-input'
 import { Modal } from '@/components/modal'
 import { inputClass } from '@/lib/ui'
+import { Pagination } from '@/components/pagination'
 import type { AdminUser } from '@/lib/types'
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -281,11 +283,19 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AdminUser | null>(null)
+  // 分页状态。此前 page 写死为 1 且没有翻页 UI，第 51 个用户起在后台完全点不到。
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const debouncedSearch = useDebounce(search, 400)
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'users', debouncedSearch],
-    queryFn: () => fetchAdminUsers({ page: 1, page_size: 50, q: debouncedSearch || undefined }),
+  // 用 query 自己的 dataUpdatedAt（拿到数据的时刻）作为时间基准，
+  // 而非渲染期的 Date.now()——后者违反 react-hooks/purity。
+  // 语义上也更准：判断的是「这批数据显示时是否已锁定」，长时间开着页面时
+  // 用户看到的判定仍然对应他们读到的那批数据，不会突然变成"未锁定"。
+  // 0 表示还没有数据，那种情况下这行代码所在的数据分支根本不会渲染。
+  const { data, isLoading, dataUpdatedAt } = useQuery({
+    queryKey: ['admin', 'users', debouncedSearch, page, pageSize],
+    queryFn: () => fetchAdminUsers({ page, page_size: pageSize, q: debouncedSearch || undefined }),
   })
 
   const invalidate = () => {
@@ -320,6 +330,15 @@ export default function AdminUsersPage() {
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '删除失败'),
   })
 
+  const unlockMutation = useMutation({
+    mutationFn: (id: number) => unlockUser(id),
+    onSuccess: () => {
+      invalidate()
+      notify.success('已解除该账号的登录锁定')
+    },
+    onError: (e) => notify.error(e instanceof ApiError ? e.message : '解锁失败'),
+  })
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -332,7 +351,11 @@ export default function AdminUsersPage() {
         <div className="flex flex-wrap items-center gap-2">
           <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value)
+              // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
+              setPage(1)
+            }}
             placeholder="搜索邮箱或用户名..."
             className="w-full min-w-0 rounded-lg border border-border bg-card px-3.5 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-56"
           />
@@ -353,6 +376,10 @@ export default function AdminUsersPage() {
         </div>
       ) : (
         <div className="mt-6 overflow-x-auto rounded-xl border border-border bg-card">
+          {/* 判断「是否仍在锁定期」需要当前时间。在渲染表格时取一次并传给
+              每一行，而不是让每行各自调 Date.now()——后者违反
+              react-hooks/purity（纯函数约束），且行间取到的时刻不同会
+              造成同一列表里状态不一致。 */}
           <table className="w-full min-w-[680px] whitespace-nowrap text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -371,11 +398,13 @@ export default function AdminUsersPage() {
                   u={u}
                   index={i}
                   isSelf={u.id === me?.id}
-                  pending={roleMutation.isPending || statusMutation.isPending || deleteMutation.isPending}
+                  now={dataUpdatedAt}
+                  pending={roleMutation.isPending || statusMutation.isPending || deleteMutation.isPending || unlockMutation.isPending}
                   onRoleChange={(id, role) => roleMutation.mutate({ id, role })}
                   onStatusChange={(id, status) => statusMutation.mutate({ id, status })}
                   onEdit={(target) => setEditTarget(target)}
                   onDelete={(id) => deleteMutation.mutate(id)}
+                  onUnlock={(id) => unlockMutation.mutate(id)}
                 />
               ))}
               {(data?.users.length ?? 0) === 0 && (
@@ -389,6 +418,16 @@ export default function AdminUsersPage() {
           </table>
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={data?.total ?? 0}
+        onChange={(p, size) => {
+          setPage(p)
+          setPageSize(size)
+        }}
+      />
 
       {editTarget && (
         <EditUserDialog
@@ -416,26 +455,43 @@ function UserRow({
   u,
   index,
   isSelf,
+  now,
   pending,
   onRoleChange,
   onStatusChange,
   onEdit,
   onDelete,
+  onUnlock,
 }: {
   u: AdminUser
   index: number
   isSelf: boolean
+  now: number
   pending: boolean
   onRoleChange: (id: number, role: 'admin' | 'user') => void
   onStatusChange: (id: number, status: 'active' | 'banned') => void
   onEdit: (u: AdminUser) => void
   onDelete: (id: number) => void
+  onUnlock: (id: number) => void
 }) {
   const notify = useNotify()
   const rowRef = useRef<HTMLTableRowElement>(null)
   // 逐行淡入上移；行数多时收敛总时长（封顶 0.3s），避免长列表入场拖沓
   useReveal(rowRef, { y: 10, duration: 0.35, delay: Math.min(index * 0.04, 0.3) })
   const banned = u.status === 'banned'
+  // 是否仍处于登录失败锁定中：locked_until 是「解除锁定的时刻」，晚于现在才算锁定。
+  //
+  // 【当前限制】后端 GET /admin/users 没有下发 locked_until（详见 lib/types.ts 中
+  // AdminUser.locked_until 的注释），因此这个值实际恒为 undefined、解锁按钮在
+  // 列表里不会出现。按钮与判断逻辑先按契约写好：后端一旦在 ListUsers 的白名单里
+  // 补上该字段，这里无需改动即自动生效。管理员现在可以走「编辑用户 → 重置密码」
+  // 作为替代（服务端重置密码会解除锁定）。
+  //
+  // 时间基准由调用方（列表页）在查询成功后一次性算好传进来，而不是在渲染时
+  // 调 Date.now()——react-hooks/purity 会拦后者，且每次渲染都取时间也
+  // 会在长时间停留在页面上时给出不一致的结果。
+  const lockedUntil = u.locked_until ? new Date(u.locked_until).getTime() : null
+  const locked = lockedUntil != null && lockedUntil > now
 
   return (
     <tr
@@ -493,6 +549,25 @@ function UserRow({
       </td>
       <td className="px-5 py-3.5 text-right">
         <div className="inline-flex items-center gap-1">
+          {locked && (
+            <button
+              onClick={async () => {
+                const ok = await notify.confirm({
+                  title: `解除用户「${u.username}」的登录锁定？`,
+                  message:
+                    '该账号因连续登录失败被暂时锁定。解除后可立即重试登录，失败计数会一并清零。',
+                  confirmText: '解除锁定',
+                })
+                if (ok) onUnlock(u.id)
+              }}
+              disabled={isSelf || pending}
+              title="该账号因连续登录失败被锁定"
+              className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs text-amber-600 transition-colors hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-30 dark:text-amber-400"
+            >
+              <Unlock className="h-3.5 w-3.5" />
+              解锁
+            </button>
+          )}
           {banned ? (
             <button
               onClick={() => onStatusChange(u.id, 'active')}

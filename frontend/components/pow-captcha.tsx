@@ -195,7 +195,10 @@ export function usePowCaptcha(scene: CaptchaScene) {
       cancelled = true
       cancelledRef.current = true
     }
-  }, [open, closeDialog])
+  // scene 参与 fetchPowChallenge(scene)：后端把挑战绑定到场景上，换场景必须
+  // 重新领挑战。放进依赖数组，否则组件复用时仍会用旧场景的挑战、
+  // 被后端判为跨场景挪用而失败。
+  }, [open, closeDialog, scene])
 
   // 弹窗打开时锁 body 滚动 + ESC 关闭（与全站 Modal / lap 弹窗体验一致）
   useEffect(() => {

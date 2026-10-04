@@ -213,7 +213,7 @@ export function fetchPowChallenge(scene?: string) {
 }
 
 /** 发送邮箱验证码 */
-export function sendEmailCode(email: string, purpose: 'register' | 'login') {
+export function sendEmailCode(email: string, purpose: 'register' | 'login' | 'reset_password') {
   return api<{ message: string }>('/auth/email-code', {
     method: 'POST',
     body: { email, purpose },
@@ -234,10 +234,12 @@ export function register(
   })
 }
 
+// totp_code 只在账号开启了两步验证时提交；后端会在密码正确后要求它，
+// 并以 need_totp 标记告诉前端"还差一步"。
 export function login(
   email: string,
   password: string,
-  extra?: { email_code?: string } & CaptchaCredential,
+  extra?: { email_code?: string; totp_code?: string } & CaptchaCredential,
 ) {
   return api<AuthResponse>('/auth/login', {
     method: 'POST',
@@ -245,8 +247,59 @@ export function login(
   })
 }
 
+/** 忘记密码：申请重置验证码。邮箱未注册时后端同样返回成功（防枚举）。 */
+export function requestPasswordReset(email: string, extra?: CaptchaCredential) {
+  return api<{ message: string }>('/auth/password/forgot', {
+    method: 'POST',
+    body: { email, ...extra },
+  })
+}
+
+/** 用邮箱验证码重置密码。成功后所有已登录设备都会失效。 */
+export function resetPassword(email: string, code: string, newPassword: string) {
+  return api<{ message: string }>('/auth/password/reset', {
+    method: 'POST',
+    body: { email, code, new_password: newPassword },
+  })
+}
+
 export function fetchMe() {
   return api<{ user: User }>('/auth/me', { auth: true })
+}
+
+/** 两步验证：生成密钥并返回 otpauth URI（供渲染二维码）。 */
+export function beginTOTPSetup() {
+  return api<{ secret: string; otpauth_uri: string }>('/auth/2fa/setup', {
+    method: 'POST',
+    auth: true,
+  })
+}
+
+/** 两步验证：提交扫码后看到的第一个码，通过则启用。 */
+export function confirmTOTPSetup(code: string) {
+  return api<{ message: string }>('/auth/2fa/confirm', {
+    method: 'POST',
+    body: { code },
+    auth: true,
+  })
+}
+
+/** 两步验证：关闭（需当前密码）。 */
+export function disableTOTP(password: string) {
+  return api<{ message: string }>('/auth/2fa', {
+    method: 'DELETE',
+    body: { password },
+    auth: true,
+  })
+}
+
+/** 我的收藏夹。 */
+export function fetchMyFavorites(params: { page?: number; page_size?: number } = {}) {
+  const search = new URLSearchParams()
+  if (params.page) search.set('page', String(params.page))
+  if (params.page_size) search.set('page_size', String(params.page_size))
+  const qs = search.toString()
+  return api<ArticleListResponse>(`/auth/my-favorites${qs ? `?${qs}` : ''}`, { auth: true })
 }
 
 // ---------- Articles API ----------
@@ -339,10 +392,11 @@ export function fetchComments(articleId: number | string) {
   return api<{ comments: CommentItem[] }>(`/articles/${articleId}/comments`)
 }
 
+// parentId 为空表示顶级评论；非空表示回复某条评论（嵌套回复/盖楼）。
 export function postComment(
   articleId: number | string,
   content: string,
-  extra?: CaptchaCredential,
+  extra?: CaptchaCredential & { parent_id?: number },
 ) {
   return api<{ comment: CommentItem }>(`/articles/${articleId}/comments`, {
     method: 'POST',
@@ -1131,4 +1185,99 @@ export function rejectLinkApplication(id: number, reason: string) {
 /** 删除申请记录 */
 export function deleteLinkApplication(id: number) {
   return api<void>(`/admin/link-applications/${id}`, { method: 'DELETE', auth: true })
+}
+
+// ---------- 回收站 ----------
+
+export interface TrashArticle {
+  id: number
+  title: string
+  slug: string
+  status: string
+  deleted_at: string
+  author: { id: number; username: string }
+}
+
+export function fetchArticleTrash(params: { page?: number; page_size?: number } = {}) {
+  const search = new URLSearchParams()
+  if (params.page) search.set('page', String(params.page))
+  if (params.page_size) search.set('page_size', String(params.page_size))
+  const qs = search.toString()
+  return api<{ articles: TrashArticle[]; total: number; page: number; page_size: number }>(
+    `/admin/articles/trash${qs ? `?${qs}` : ''}`,
+    { auth: true },
+  )
+}
+
+/** 从回收站还原文章 */
+export function restoreArticle(id: number) {
+  return api<{ message: string }>(`/admin/articles/${id}/restore`, {
+    method: 'POST',
+    auth: true,
+  })
+}
+
+/** 彻底删除文章（连评论与点赞一起清除，不可恢复） */
+export function purgeArticle(id: number) {
+  return api<void>(`/admin/articles/${id}/purge`, { method: 'DELETE', auth: true })
+}
+
+// ---------- 备份与恢复 ----------
+
+export interface BackupFile {
+  name: string
+  size: number
+  created_at: string
+  reason: string
+}
+
+export function fetchBackups() {
+  return api<{ backups: BackupFile[]; total: number; total_size: number }>('/admin/system/backups', {
+    auth: true,
+  })
+}
+
+export function createBackup(reason?: string) {
+  return api<{ backup: BackupFile }>('/admin/system/backups', {
+    method: 'POST',
+    body: { reason },
+    auth: true,
+  })
+}
+
+export function deleteBackup(name: string) {
+  return api<void>(`/admin/system/backups/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    auth: true,
+  })
+}
+
+// 备份文件是 gzip 二进制，blob 下载要走独立 fetch + Bearer，
+// 不能走 api()（它只 res.json()，见 skill 里记录的同类坑）。
+export async function downloadBackup(name: string): Promise<void> {
+  const token = getAccessToken()
+  const res = await fetch(
+    `${API_BASE}/admin/system/backups/${encodeURIComponent(name)}/download`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  )
+  if (!res.ok) throw new Error('下载备份失败')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+// ---------- 用户管理（管理员） ----------
+
+/** 解除账号的登录失败锁定 */
+export function unlockUser(id: number) {
+  return api<{ message: string }>(`/admin/users/${id}/unlock`, {
+    method: 'POST',
+    auth: true,
+  })
 }

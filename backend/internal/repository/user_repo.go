@@ -2,7 +2,9 @@ package repository
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shenwei/inkstone/backend/internal/model"
@@ -113,6 +115,25 @@ func (r *UserRepository) FindByLogin(identifier string) (*model.User, error) {
 func (r *UserRepository) FindByID(id uint) (*model.User, error) {
 	var user model.User
 	err := r.db.First(&user, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByEmail 只按邮箱精确查找（忽略大小写）。忘记密码流程需要它：
+// FindByLogin 接受邮箱或用户名，会把"用户名恰好等于别人的邮箱"这种情况
+// 也匹配上，重置密码必须只认邮箱这一条身份标识。
+func (r *UserRepository) FindByEmail(email string) (*model.User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, ErrNotFound
+	}
+	var user model.User
+	err := r.db.Where("LOWER(email) = ?", email).First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -281,4 +302,110 @@ func (r *UserRepository) Delete(id uint) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// RecordFailedLogin 递增某账号的登录失败计数，达到阈值时写入锁定时刻。
+// 返回 true 表示"本次失败触发了锁定"（调用方可据此给出不同提示）。
+//
+// 用 SQL 表达式自增而非 Go 侧读-改-写：并发失败会互相覆盖，计数偏小。
+// 计数与锁定在同一事务内完成，避免"计数已达阈值但锁没写上"的窗口
+// （那会让下一次失败才触发锁定，等于多送一次免费尝试）。
+func (r *UserRepository) RecordFailedLogin(id uint, threshold int, lockout time.Duration) (bool, error) {
+	if threshold < 1 {
+		threshold = 1
+	}
+	if lockout <= 0 {
+		lockout = time.Minute
+	}
+	var locked bool
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.User{}).Where("id = ?", id).
+			Update("failed_login_count", gorm.Expr("failed_login_count + 1")).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&model.User{}).Where("id = ?", id).
+			Select("failed_login_count").Scan(&count).Error; err != nil {
+			return err
+		}
+		if count < int64(threshold) {
+			return nil
+		}
+		locked = true
+		return tx.Model(&model.User{}).Where("id = ?", id).
+			Updates(map[string]any{
+				"failed_login_count": 0,
+				"locked_until":       time.Now().Add(lockout),
+			}).Error
+	})
+	return locked, err
+}
+
+// ResetLoginState 登录成功后清零失败计数并解除锁定。
+func (r *UserRepository) ResetLoginState(id uint) error {
+	return r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"failed_login_count": 0,
+			"locked_until":       nil,
+		}).Error
+}
+
+// UnlockUser 是管理员手动解除账号锁定（清零计数 + 清空锁定时刻）。
+func (r *UserRepository) UnlockUser(id uint) error {
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"failed_login_count": 0,
+			"locked_until":       nil,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateTOTP 写入两步验证密钥与开关。enabled=false 表示"密钥已生成但尚未
+// 启用"——绑定流程的中间态，用户提交一个有效码后才由 EnableTOTP 真正开启。
+func (r *UserRepository) UpdateTOTP(id uint, secret string, enabled bool) error {
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"totp_secret":  secret,
+			"totp_enabled": enabled,
+			"burned_codes": "",
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// MarkTOTPCodeUsed 记录一个已消费的 TOTP 时间步（counter=unix秒/30）。
+// burned 以逗号分隔保存最近若干步，超出保留窗口的旧值由本方法顺手清理，
+// 避免这个字段无限增长。重放窗口与 TTL 一致，故保留个数很少。
+func (r *UserRepository) MarkTOTPCodeUsed(id uint, counter int64) error {
+	var u model.User
+	if err := r.db.Select("id", "burned_codes").Where("id = ?", id).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	// 只保留当前步及之后的记录；更早的步已超出重放窗口，无需再比对。
+	kept := make([]string, 0, 8)
+	for _, part := range strings.Split(u.BurnedCodes, ",") {
+		if part == "" {
+			continue
+		}
+		if n, err := strconv.ParseInt(part, 10, 64); err == nil && n >= counter {
+			kept = append(kept, part)
+		}
+	}
+	kept = append(kept, strconv.FormatInt(counter, 10))
+	return r.db.Model(&model.User{}).Where("id = ?", id).
+		Update("burned_codes", strings.Join(kept, ",")).Error
 }

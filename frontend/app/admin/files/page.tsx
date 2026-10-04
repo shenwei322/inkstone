@@ -31,6 +31,7 @@ import { useNotify } from '@/components/toast'
 import { PageLoading, RowLoading } from '@/components/page-loader'
 import { PageTransition, Reveal, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { formatSize, inputClass } from '@/lib/ui'
+import { Pagination } from '@/components/pagination'
 
 function FileTypeIcon({ mime, name }: { mime: string; name: string }) {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -145,6 +146,9 @@ export default function AdminFilesPage() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
+  // 分页状态。此前 page 写死为 1 且没有翻页 UI，第 51 个文件起在后台完全点不到。
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [progress, setProgress] = useState<number | null>(null)
   const [dragging, setDragging] = useState(false)
   const [copiedId, setCopiedId] = useState<number | null>(null)
@@ -167,8 +171,8 @@ export default function AdminFilesPage() {
   }, [progress])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'files', query],
-    queryFn: () => fetchFiles({ page: 1, page_size: 50, q: query || undefined }),
+    queryKey: ['admin', 'files', query, page, pageSize],
+    queryFn: () => fetchFiles({ page, page_size: pageSize, q: query || undefined }),
   })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'files'] })
@@ -251,7 +255,11 @@ export default function AdminFilesPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') setQuery(search)
+                if (e.key === 'Enter') {
+                  setQuery(search)
+                  // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
+                  setPage(1)
+                }
               }}
               placeholder="搜索文件名，回车"
               className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-52"
@@ -385,6 +393,16 @@ export default function AdminFilesPage() {
           ))}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={data?.total ?? 0}
+        onChange={(p, size) => {
+          setPage(p)
+          setPageSize(size)
+        }}
+      />
 
       <div className="mt-6">
         <TransferSettings />

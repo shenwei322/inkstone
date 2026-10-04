@@ -44,8 +44,11 @@ type Article struct {
     Views       int64       // 浏览量
     PublishedAt *time.Time  // 首次发布时写入
     Tags        []Tag       // 多对多，中间表 article_tags
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
+    // 软删除：删除只是置 deleted_at，进入回收站可还原；
+    // 彻底删除走 Unscoped()。recycle bin 与备份都要能覆盖到。
+    DeletedAt gorm.DeletedAt
+    CreatedAt time.Time
+    UpdatedAt time.Time
 }
 ```
 
@@ -53,14 +56,18 @@ type Article struct {
 - `Content` 存 **HTML**（不是 Markdown），前端用 `dangerouslySetInnerHTML` 渲染
 - `Slug` 由 `repository.Slugify(title)` 生成（中文保留）
 - `Cover` 后端 `resolveCover()` 自动处理：显式优先，否则提取正文首个 `<img src="...">`
+- **软删除后关联不清空**：还原时评论/点赞必须还在。彻底清关联只发生在 `Purge`
 
 ## Category / Tag（分类与标签）
 
 ```go
 type Category struct {
-    ID   uint
-    Name string   // 唯一索引
-    Slug string   // 唯一索引
+    ID        uint
+    Name      string   // 唯一索引
+    Slug      string   // 唯一索引
+    ParentID  *uint    // 层级（树形），nil = 顶级
+    Parent    *Category
+    Children  []Category
     CreatedAt, UpdatedAt time.Time
 }
 
@@ -77,6 +84,10 @@ type Tag struct {
 
 **自动创建**：文章提交 `tags: ["Go", "后端"]` 时，`FindOrCreateTags` 按 slug 查找，不存在则创建。
 
+**分类层级上限**：`model.MaxCategoryDepth = 3`（顶级 + 两级子分类）。限制理由：更深的层级会让后台选择器与前台面包屑都难用。`TaxonomyRepository.UpdateCategory` 会拒绝三种破坏性改法——父级指向自己、父级指向自己的后代、父级本身还有父级。
+
+**树构建位置**：在 `service.TaxonomyService.CategoryTree()`（纯内存运算、可单测），不在 repository。脏数据（`parent_id` 悬空或成环）一律提升为顶级，保证节点不会从列表里消失。
+
 ## Comment（评论）
 
 ```go
@@ -86,13 +97,24 @@ type Comment struct {
     Article   *Article
     UserID    uint       // 外键 → User
     User      User
-    ParentID  *uint      // 预留嵌套（当前 UI 未使用）
+    ParentID  *uint      // 被回复的评论，nil = 顶级
     Content   string     // text
+    Status    string     // "pending" | "approved" | "rejected"，默认 approved
+    IP        string     // 操作者 IP（json:"-"），审核时追溯用
     CreatedAt, UpdatedAt time.Time
 }
 ```
 
 **权限**：评论作者本人或管理员可删除（`CommentService.Delete(id, userID, isAdmin)`）。
+
+**审核状态**（`model.CommentPending/Approved/Rejected`）：
+- `approved` 是默认，直接公开
+- `pending` 由两个条件触发：后台开了 `comment_audit`，或内容命中敏感词表 `comment_words`
+- **敏感词命中不直接拒绝**：拒绝会向刷评者暴露"这个词被拦了"，换写法即可绕过；转人工审核同样挡得住内容，且不留信号
+- 公开列表只返回 `approved` + **当前登录用户自己**的 `pending`（否则作者以为评论丢了会重复提交）
+
+**嵌套回复**：`POST /articles/:id/comments` 接收 `parent_id`。跨文章回复会被拒绝（会把两条无关讨论拼在一起）。删除父评论时，回复的 `parent_id` 置空——提升为顶级，内容不丢。
+
 
 ## Reaction（点赞/收藏）
 

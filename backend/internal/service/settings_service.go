@@ -105,6 +105,12 @@ const (
 	// 友情链接页面显示内容（后台 → 安全防护旁边的友链管理页编辑，/site-config 下发）
 	SettingFriendLinksTitle = "friend_links_title" // 页面标题（默认「友情链接」）
 	SettingFriendLinksIntro = "friend_links_intro" // 页面介绍文案（空 = 不显示介绍段）
+
+	// 评论治理
+	SettingCommentAudit    = "comment_audit"     // "true"/"false" 开启后评论需管理员审核才公开（默认 false）
+	SettingCommentWords    = "comment_words"     // 敏感词表，换行或逗号分隔；命中则转人工审核而非直接拒绝
+	SettingCommentNotify   = "comment_notify"    // "true"/"false" 有新评论时邮件通知文章作者
+	SettingCommentMaxDepth = "comment_max_depth" // 嵌套回复最大层级（默认 3，前端按此渲染缩进）
 )
 
 var settingDefaults = map[string]string{
@@ -132,6 +138,13 @@ var settingDefaults = map[string]string{
 	SettingSecurityCommentMax:   "30",
 	SettingSecurityAPIMax:       "600",
 	SettingSecurityBlockMinutes: "15",
+
+	// 评论治理默认值：默认不审核（个人博客敞开发言更自然），敏感词为空，
+	// 通知关闭（避免 SMTP 未配置时尝试发信刷错误日志）。
+	SettingCommentAudit:    "false",
+	SettingCommentWords:    "",
+	SettingCommentNotify:   "false",
+	SettingCommentMaxDepth: "3",
 
 	SettingEmailCodeOnRegister: "false",
 	SettingEmailCodeOnLogin:    "false",

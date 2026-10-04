@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -40,12 +41,21 @@ func main() {
 	reactionRepo := repository.NewReactionRepository(db)
 
 	settingsSvc := service.NewSettingsService(db)
-	mailer := mailer.New(settingsSvc)
+	// mailer 变量名与 mailer 包同名：Go 允许（包名只在无局部变量遮蔽处可见），
+	// 但遮蔽后就无法再用 mailer.Xxx 调包级函数。因此评论通知器在这里直接构造，
+	// 而 CommentNotifier 自身放在 mailer 包内实现。
+	mailerSvc := mailer.New(settingsSvc)
 
-	authSvc := service.NewAuthService(userRepo, tokens, settingsSvc)
+	// EmailCodeService 必须先于 AuthService 创建：忘记密码/重置密码链路
+	// 由 AuthService 直接调用它发信与校验，构造函数需要这个引用。
+	emailCodeSvc := service.NewEmailCodeService(settingsSvc, mailerSvc)
+
+	authSvc := service.NewAuthService(userRepo, tokens, settingsSvc, emailCodeSvc)
 	articleSvc := service.NewArticleService(articleRepo, taxonomyRepo)
 	adminSvc := service.NewAdminService(userRepo, articleRepo)
-	commentSvc := service.NewCommentService(commentRepo, articleRepo)
+	// 评论通知走独立实现，让 CommentService 不依赖 mailer 包。
+	commentNotifier := mailer.NewCommentNotifier(mailerSvc, cfg.FrontendURL)
+	commentSvc := service.NewCommentService(commentRepo, articleRepo, settingsSvc, commentNotifier)
 	reactionSvc := service.NewReactionService(reactionRepo, articleRepo)
 
 	pageRepo := repository.NewPageRepository(db)
@@ -66,7 +76,10 @@ func main() {
 	logRepo := repository.NewOperationLogRepository(db)
 	logSvc := service.NewLogService(logRepo)
 
-	emailCodeSvc := service.NewEmailCodeService(settingsSvc, mailer)
+	// 数据备份：快照落在 <UPLOAD_DIR>/../backups，与数据卷同处一个目录，
+	// 容器重建后仍保留在生产编排的绑定挂载里。
+	backupSvc := service.NewBackupService(db, filepath.Join(filepath.Dir(filepath.Clean(cfg.UploadDir)), "backups"))
+
 	geetestSvc := service.NewGeetestService(settingsSvc)
 	lapSvc := service.NewLapService(settingsSvc)
 	powSvc := service.NewPowService(settingsSvc)
@@ -78,11 +91,13 @@ func main() {
 	articleHandler := handler.NewArticleHandler(articleSvc, logSvc)
 	adminHandler := handler.NewAdminHandler(adminSvc, userRepo, articleSvc, articleRepo, commentSvc, logSvc)
 	taxonomyHandler := handler.NewTaxonomyHandler(taxonomyRepo)
+	// 分类层级（树形增删改）。与标签共用 TaxonomyService / LogService。
+	categoryHandler := handler.NewAdminCategoryHandler(taxonomySvc, logSvc)
 	commentHandler := handler.NewCommentHandler(commentSvc, tokens, captchaSvc, apiLimiter, logSvc)
 	reactionHandler := handler.NewReactionHandler(reactionSvc)
-	rssHandler := handler.NewRSSHandler(articleSvc, cfg.FrontendURL)
+	rssHandler := handler.NewRSSHandler(articleSvc, cfg.FrontendURL, settingsSvc)
 	sitemapHandler := handler.NewSitemapHandler(articleSvc, pageSvc, taxonomyRepo, cfg.FrontendURL)
-	settingsHandler := handler.NewSettingsHandler(settingsSvc, mailer, emailCodeSvc, captchaSvc, logSvc)
+	settingsHandler := handler.NewSettingsHandler(settingsSvc, mailerSvc, emailCodeSvc, captchaSvc, logSvc)
 	lapProxyHandler := handler.NewLapProxyHandler(settingsSvc)
 	powHandler := handler.NewPowHandler(powSvc)
 	pageHandler := handler.NewPageHandler(pageSvc, logSvc)
@@ -92,8 +107,18 @@ func main() {
 	fileHandler := handler.NewFileHandler(fileSvc, cfg.PublicAPIURL, logSvc)
 	statHandler := handler.NewStatHandler(statSvc)
 	logHandler := handler.NewLogHandler(logSvc)
+	backupHandler := handler.NewBackupHandler(backupSvc, logSvc)
 	emailCodeHandler := handler.NewEmailCodeHandler(emailCodeSvc)
 	adminTagHandler := handler.NewAdminTagHandler(taxonomySvc, logSvc)
+
+	// 应急放行人机验证（INKSTONE_DISABLE_CAPTCHA）。默认关闭；显式开启时
+	// 必须在启动日志里说清楚，否则运维会以为防护还在。
+	if cfg.DisableCaptcha {
+		captchaSvc.SetDisabled(true)
+		log.Printf("[warn] INKSTONE_DISABLE_CAPTCHA 已生效：全部人机验证被绕过，请仅在外部验证服务故障时短暂使用")
+	} else {
+		captchaSvc.SetDisabled(false)
+	}
 
 	// 在线更新：检查上游提交、下载镜像包、替换源码、触发重建
 	updateSvc := service.NewUpdateService(cfg, logSvc)
@@ -273,18 +298,31 @@ func main() {
 			auth.POST("/email-code", registerLimit, emailCodeHandler.Send)
 			auth.POST("/login", loginLimit, authHandler.Login)
 			auth.POST("/refresh", authHandler.Refresh)
+			// 忘记密码：走注册同级限流（默认 20/小时），防邮件轰炸。
+			// 邮箱不存在时也返回成功提示，因此限流是这里唯一的批量探测防线。
+			auth.POST("/password/forgot", registerLimit, authHandler.ForgotPassword)
+			auth.POST("/password/reset", registerLimit, authHandler.ResetPassword)
 			auth.GET("/me", middleware.Auth(tokens, userStatusOK), authHandler.Me)
 			authAuthed := api.Group("/auth", middleware.Auth(tokens, userStatusOK))
 			{
 				authAuthed.PUT("/password", authHandler.ChangePassword)
 				authAuthed.PUT("/profile", authHandler.UpdateProfile)
 				authAuthed.GET("/my-comments", commentHandler.MyComments)
+				authAuthed.GET("/my-favorites", reactionHandler.MyFavorites)
+				// 两步验证：setup/confirm 不限流（已登录 + 一次性），
+				// disable 需校验当前密码，爆破空间由密码本身把守。
+				authAuthed.POST("/2fa/setup", authHandler.BeginTOTPSetup)
+				authAuthed.POST("/2fa/confirm", authHandler.ConfirmTOTPSetup)
+				authAuthed.DELETE("/2fa", authHandler.DisableTOTP)
 			}
 		}
 
 		api.GET("/system/info", systemHandler.Info)
 
 		api.GET("/categories", taxonomyHandler.ListCategories)
+		// 分类树（带层级与每类文章数）。与 /categories 的扁平列表分开：
+		// 后者服务后台管理，这个服务前台导航。
+		api.GET("/categories/tree", categoryHandler.ListTree)
 		api.GET("/tags", taxonomyHandler.ListTags)
 		api.GET("/site-config", settingsHandler.SiteConfig)
 		// Lap（工作量证明验证码）同源代理：访客浏览器不直连 workers.dev，
@@ -316,6 +354,13 @@ func main() {
 			articles.GET("", articleHandler.List)
 			articles.GET("/:id", articleHandler.Get)
 			articles.GET("/slug/:slug", articleHandler.GetBySlug)
+			// 相关文章推荐与上一篇/下一篇。
+			//
+			// 必须挂在 /slug/:slug 前缀下，不能写成 /articles/:slug/related：
+			// 同级已有 articles.GET("/:id")，gin 不允许同层出现两个不同名的
+			// 通配段，注册时会直接 panic。
+			articles.GET("/slug/:slug/related", articleHandler.RelatedBySlug)
+			articles.GET("/slug/:slug/neighbors", articleHandler.NeighborsBySlug)
 			articles.GET("/:id/comments", commentHandler.List)
 			articles.GET("/:id/reactions", reactionHandler.Stats)
 
@@ -345,20 +390,38 @@ func main() {
 			admin.GET("/logs/overview", logHandler.Overview)
 			admin.GET("/logs/stats", logHandler.Stats)
 			admin.GET("/logs/export", logHandler.Export)
+			// 备份与恢复：下载的是 gzip JSON 快照；恢复流程见 BackupHandler 注释。
+			admin.GET("/system/backups", backupHandler.List)
+			admin.POST("/system/backups", backupHandler.Create)
+			admin.GET("/system/backups/:name/download", backupHandler.Download)
+			admin.DELETE("/system/backups/:name", backupHandler.Delete)
 			admin.GET("/users", adminHandler.ListUsers)
 			admin.POST("/users", adminHandler.CreateUser)
 			admin.PUT("/users/:id/role", adminHandler.UpdateUserRole)
 			admin.PUT("/users/:id", adminHandler.UpdateUser)
 			admin.PUT("/users/:id/status", adminHandler.UpdateUserStatus)
+			admin.POST("/users/:id/unlock", adminHandler.UnlockUser)
 			admin.DELETE("/users/:id", adminHandler.DeleteUser)
 			admin.GET("/articles", adminHandler.ListArticles)
+			admin.GET("/articles/trash", adminHandler.ListTrashArticles)
+			admin.POST("/articles/:id/restore", adminHandler.RestoreArticle)
+			admin.DELETE("/articles/:id/purge", adminHandler.PurgeArticle)
 			admin.PUT("/articles/:id/status", adminHandler.SetArticleStatus)
 			admin.DELETE("/articles/:id", adminHandler.DeleteArticle)
 			admin.POST("/tags", adminTagHandler.Create)
 			admin.PUT("/tags/:id", adminTagHandler.Update)
 			admin.DELETE("/tags/:id", adminTagHandler.Delete)
+			// 分类层级：create/update 支持 parent_id，delete 会校验
+			// 「有子分类/有文章」两种情况并返回可读错误
+			admin.POST("/categories", categoryHandler.Create)
+			admin.PUT("/categories/:id", categoryHandler.Update)
+			admin.DELETE("/categories/:id", categoryHandler.Delete)
 			admin.GET("/comments", adminHandler.ListComments)
 			admin.DELETE("/comments/:id", adminHandler.DeleteComment)
+			// 评论审核：通过 / 驳回。敏感词命中或开启先审后发时，
+			// 新评论处于 pending 状态，只有这里能放它公开。
+			admin.PUT("/comments/:id/status", adminHandler.SetCommentStatus)
+			admin.GET("/comments/pending-count", adminHandler.PendingCommentCount)
 			admin.GET("/settings", settingsHandler.Get)
 			admin.PUT("/settings", settingsHandler.Update)
 			admin.POST("/settings/test-mail", settingsHandler.TestMail)

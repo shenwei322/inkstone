@@ -194,7 +194,7 @@ function TagsWidget({ limit, title }: { limit?: number; title: string }) {
           {tags.map((t) => (
             <Link
               key={t.id}
-              href={`/?tag=${t.slug}`}
+              href={`/tag/${t.slug}`}
               className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent"
             >
               {t.name}
@@ -216,7 +216,7 @@ function SearchWidget({ title }: { title: string }) {
         onSubmit={(e) => {
           e.preventDefault()
           const input = (e.currentTarget.elements.namedItem('q') as HTMLInputElement) ?? null
-          if (input) window.location.href = input.value.trim() ? `/?q=${encodeURIComponent(input.value.trim())}` : '/'
+          if (input) window.location.href = input.value.trim() ? `/search?q=${encodeURIComponent(input.value.trim())}` : '/search'
         }}
         className="relative"
       >

@@ -155,7 +155,7 @@ export default function AdminTagsPage() {
               ) : (
                 <>
                   <Link
-                    href={`/?tag=${tag.slug}`}
+                    href={`/tag/${tag.slug}`}
                     className="min-w-0 flex-1 truncate text-sm font-medium transition-colors hover:text-accent"
                   >
                     {tag.name}

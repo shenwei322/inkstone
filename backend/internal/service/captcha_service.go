@@ -27,11 +27,21 @@ type CaptchaService struct {
 	geetest  *GeetestService
 	lap      *LapService
 	pow      *PowService
+	// disabled 是应急总开关（来自 INKSTONE_DISABLE_CAPTCHA）。置位时所有
+	// 场景直接放行，用于外部验证服务故障、管理员被挡在门外的抢救场景。
+	disabled bool
 }
 
 func NewCaptchaService(settings *SettingsService, geetest *GeetestService, lap *LapService, pow *PowService) *CaptchaService {
 	return &CaptchaService{settings: settings, geetest: geetest, lap: lap, pow: pow}
 }
+
+// SetDisabled 打开/关闭应急放行。由 main.go 依据 INKSTONE_DISABLE_CAPTCHA
+// 在启动时调用一次，并通过日志让运维明确知道当前是裸奔状态。
+func (s *CaptchaService) SetDisabled(v bool) { s.disabled = v }
+
+// Disabled 报告应急放行是否生效（/system/info 会把它暴露给后台）。
+func (s *CaptchaService) Disabled() bool { return s.disabled }
 
 // Provider 返回当前启用的 provider，未配置或非法值回退极验（保持旧行为）。
 func (s *CaptchaService) Provider() string {
@@ -50,8 +60,11 @@ func (s *CaptchaService) Provider() string {
 }
 
 // Required 判断某个场景是否开启了人机验证（按当前 provider 分发，
-// 供 handler 层在业务校验前决定是否强制）。
+// 供 handler 层在业务校验前决定是否强制）。应急放行时一律返回 false。
 func (s *CaptchaService) Required(action string) bool {
+	if s.disabled {
+		return false
+	}
 	switch s.Provider() {
 	case CaptchaProviderLap:
 		return s.lap.Required(action)
@@ -64,9 +77,11 @@ func (s *CaptchaService) Required(action string) bool {
 
 // PublicConfig 下发到前台的人机验证配置：provider 选择器 + 各 provider
 // 的公开配置（均不含密钥）。前台只渲染/初始化当前 provider 那套。
+// 应急放行时附带 disabled 标记，前端据此彻底跳过验证组件渲染。
 func (s *CaptchaService) PublicConfig() map[string]any {
 	return map[string]any{
 		"provider": s.Provider(),
+		"disabled": s.disabled,
 		"geetest":  s.geetest.PublicConfig(),
 		"lap":      s.lap.PublicConfig(),
 		"pow":      s.pow.PublicConfig(),
@@ -74,7 +89,12 @@ func (s *CaptchaService) PublicConfig() map[string]any {
 }
 
 // Verify 校验一次人机验证凭证（按当前 provider 分发到具体服务）。
+// 应急放行置位时直接返回 nil——这是唯一能让管理员在外部验证服务全挂时
+// 仍能登录后台的通道。
 func (s *CaptchaService) Verify(action string, p CaptchaParams) error {
+	if s.disabled {
+		return nil
+	}
 	switch s.Provider() {
 	case CaptchaProviderLap:
 		return s.lap.Verify(action, p.LapToken)

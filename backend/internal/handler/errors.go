@@ -19,6 +19,10 @@ func errorResponse(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": validationErr.Message})
 	case errors.Is(err, service.ErrInvalidCredentials):
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrTOTPInvalid):
+		// 两步验证码错误：401 但带 need_totp，让前端停留在验证码输入步
+		// 而不是退回密码步（用户会以为密码错了）。
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "need_totp": true})
 	case errors.Is(err, service.ErrUserBanned):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrRegistrationClosed):
