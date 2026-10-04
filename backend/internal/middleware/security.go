@@ -112,39 +112,9 @@ func (l *SlidingLimiter) cleanupLoop() {
 
 // ---------- 中间件 ----------
 
-// ClientIP resolves the caller address (honours X-Forwarded-For for proxies).
-func ClientIP(c *gin.Context) string {
-	if fwd := c.GetHeader("X-Forwarded-For"); fwd != "" {
-		if i := indexByte(fwd, ','); i > 0 {
-			return trimSpaces(fwd[:i])
-		}
-		return trimSpaces(fwd)
-	}
-	if real := c.GetHeader("X-Real-IP"); real != "" {
-		return trimSpaces(real)
-	}
-	return c.ClientIP()
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpaces(s string) string {
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
-}
+// 访客 IP 解析见 clientip.go（ClientIP / RemoteIP / SetTrustedProxies）。
+// 旧实现无条件采信客户端自带的 X-Forwarded-For，可被逐请求伪造以作废全部
+// IP 限流；现已改为「仅当直连对端属于可信代理网段时才读转发头」。
 
 // RateLimitConfig describes a per-IP request budget.
 type RateLimitConfig struct {

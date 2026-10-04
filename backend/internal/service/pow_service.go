@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,18 +22,32 @@ import (
 //  4. 后端  同参数重建内存表重算校验 + signal 格式/时间窗校验，
 //     通过后挑战立即作废（一次性消费）
 //
-// 相对 v1（纯 SHA-256 循环）的升级——消耗的都是用户本地资源、且难以在
-// 服务端机房批量复刻：
-//   - 内存带宽：每次验证实打实构建并随机访问 memoryMB 大小的表，
-//     GPU/ASIC 集群的并行优势被内存带宽瓶颈大幅削弱；
-//   - 本地交互信号：真人设备自然产生鼠标/触摸/按键流，纯 HTTP 脚本
-//     （curl/requests）必须额外复刻整套信号构造逻辑才能过格式校验；
-//   - 动态参数：memoryMB / rounds / minEvents 由后台随时调整，challenge
-//     签发时快照，改参数立即对新挑战生效、不影响进行中的验证。
+// 防护能力（经 pow_intercept_test.go 实测，不要高估）：
+//
+//	真正有效的只有两条——
+//	  - 一次性挑战：重放已消费的 challenge 一律拒绝（实测拦截率 100%）；
+//	  - 工作量成本：难度 d 下每次尝试命中率 1/16^d，攻击者的成本随算力
+//	    投入线性下降。投入正好等于期望尝试数时成功率约 63%，3 倍才算 95%。
+//	    这是条软曲线，挡不住有算力的攻击者，只能抬高门槛。
+//
+//	不要指望的两条——
+//	  - signal（本地交互信号）：只做格式与时间窗校验，而脚本刚请求过
+//	    challenge，本来就大致知道签发时间，填当前时间即可构造出合法 signal。
+//	    实测「脚本解题 + 合成 signal」的拦截率为 0%。它只是让真人多点一下鼠标
+//	    的 UX 门槛，不是防机器人手段，不要在文档里当作防护能力宣传。
+//	  - 内存表：表是「每挑战建一次」，不进入候选 nonce 的搜索循环，因此
+//	    对攻击者的搜索成本几乎没有影响；而服务端每次校验都要重建一遍，
+//	    成本几乎 100% 落在自己身上。默认已调成 1MB / 12 轮——
+//	    小表省服务端，多轮（乘在每个候选上）才是抬高攻击者成本的那一项。
+//	    GPU/ASIC 并行求解在现有构造下没有被真正削弱。
+//
+//	动态参数：memoryMB / rounds / minEvents 由后台随时调整，challenge
+//	签发时快照，改参数立即对新挑战生效、不影响进行中的验证。
 //
 // 设计约束：
 //   - challenge 存内存（单实例部署的本项目 backend 只有一个实例），重启全部
 //     失效——后果只是用户重新验证一次，不影响正确性；多副本部署需换共享存储；
+//   - 挑战与签发它的场景绑定（见 IssueFor / Verify）：跨场景挪用一律拒绝；
 //   - 开关语义与 lap/geetest 对称：场景未开启一律放行，绝不锁死用户。
 type PowService struct {
 	settings *SettingsService
@@ -51,6 +66,13 @@ type powChallenge struct {
 	minEvents  int
 	ttl        time.Duration
 	issuedAt   time.Time
+
+	// scene 是签发该挑战的业务场景（login/register/comment/...）。
+	// 挑战只在签发它的场景可用：否则可以为代价最低的场景（例如评论）
+	// 批量签发挑战，再拿去打登录接口，把 PoW 成本与实际攻击目标解耦。
+	// 实测跨场景挪用原先拦截率为 0%，绑定后为 100%。
+	// 空串表示「未绑定」（兼容旧调用方与测试），此时不做场景校验。
+	scene string
 }
 
 // POW 参数边界与池上限。
@@ -155,7 +177,28 @@ func (s *PowService) PublicConfig() map[string]any {
 // Issue 签发一个新挑战（32 字节随机数十六进制），并把当前本地资源参数快照
 // 进记录——验证时以快照为准，后台改参数不影响进行中的挑战。
 // 挑战池满时返回错误（调用方转 503，前端提示稍后重试）。
+//
+// 不绑定场景（scene 为空），仅供不区分场景的调用方与测试使用；
+// handler 请用 IssueFor，把挑战钉在具体业务场景上。
 func (s *PowService) Issue() (challenge string, difficulty, memoryMB, rounds, minEvents, ttlSeconds int, err error) {
+	return s.IssueFor("")
+}
+
+// IssueFor 签发一个绑定到指定业务场景的挑战。
+//
+// 绑定是必要的：签发接口是统一的 /pow/challenge，若挑战不记场景，
+// powChallengeHexLen 是签发的 challenge 十六进制长度：32 字节随机数
+// 经 hex 编码后恒为 64 字符。Verify 用它来提前拒绝畸形输入。
+const powChallengeHexLen = 64
+
+// isHexDigit 判断单个 ASCII 十六进制字符。
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// 攻击者可以用最便宜的场景批量领取挑战，再拿去打登录等更敏感的场景。
+// 详见 powChallenge.scene 的注释。
+func (s *PowService) IssueFor(scene string) (challenge string, difficulty, memoryMB, rounds, minEvents, ttlSeconds int, err error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", 0, 0, 0, 0, 0, err
@@ -175,12 +218,18 @@ func (s *PowService) Issue() (challenge string, difficulty, memoryMB, rounds, mi
 		minEvents:  s.MinEvents(),
 		ttl:        s.TTL(),
 		issuedAt:   now,
+		scene:      normalizePowScene(scene),
 	}
 	s.challenges[challenge] = rec
 	s.gcLocked(now)
 
 	// 服务端自己也要能用快照参数完成一次重算（与前台严格一致）
 	return challenge, rec.difficulty, rec.memMB, rec.rounds, rec.minEvents, int(rec.ttl.Seconds()), nil
+}
+
+// normalizePowScene 把场景名归一化，避免大小写/空白差异造成误判。
+func normalizePowScene(scene string) string {
+	return strings.ToLower(strings.TrimSpace(scene))
 }
 
 // Verify 校验一次 POW v2 凭证 {challenge, nonce, signal}。
@@ -199,10 +248,28 @@ func (s *PowService) Verify(action string, challenge, nonce, signal string) erro
 	if len(nonce) > 128 {
 		return NewValidationError("人机验证参数异常")
 	}
+	// challenge 必须是签发时的 64 位十六进制。此前只 TrimSpace、不限长，
+	// 超长串会进 map 查找（string key 全量哈希，O(n) CPU）；顺带把格式异常的
+	// 输入提前挡掉，而不是让它一路走到 takeChallenge 才判失效。
+	if len(challenge) != powChallengeHexLen {
+		return NewValidationError("人机验证参数异常")
+	}
+	for i := 0; i < len(challenge); i++ {
+		if !isHexDigit(challenge[i]) {
+			return NewValidationError("人机验证参数异常")
+		}
+	}
 
 	// 一次性消费：按快照参数取出记录（TTL 过期同样视为失效）
 	rec, ok := s.takeChallenge(challenge)
 	if !ok {
+		return NewValidationError("人机验证已失效，请重新验证")
+	}
+
+	// 场景绑定校验：挑战只能在签发它的场景使用。
+	// 注意 takeChallenge 已经把它删掉了——即使这里拒绝，挑战也不会被复用，
+	// 跨场景尝试同样要付出一次完整的求解成本。
+	if rec.scene != "" && rec.scene != normalizePowScene(action) {
 		return NewValidationError("人机验证已失效，请重新验证")
 	}
 
@@ -213,8 +280,11 @@ func (s *PowService) Verify(action string, challenge, nonce, signal string) erro
 		}
 	}
 
-	// 同参数重放本地资源计算（内存表 + 多轮查表混合），校验前导零
-	digest := powDigest(challenge, nonce, rec.memMB, rec.rounds)
+	// 同参数重放本地资源计算（内存表 + 多轮查表混合），校验前导零。
+	// 表通过池复用，避免每次校验都新分配一整张表。
+	table := acquirePowTable(rec.memMB, challenge)
+	digest := digestWithTable(challenge, nonce, table, rec.rounds)
+	releasePowTable(table)
 	if !leadingZeros(digest, rec.difficulty) {
 		return NewValidationError("人机验证未通过，请重试")
 	}
@@ -284,10 +354,20 @@ func (x *powXorshift128) next() uint32 {
 //	rounds 轮：idx = (BE32(h[0:4]) ^ (r*0x9E3779B9)) % TABLE_LEN
 //	           h  = SHA-256(h || BE32(table[idx]))
 //
-// 每次验证都完整重建 memoryMB 大小的表并随机访问——本地内存带宽成本在此。
+// 注意：本函数每次都会重建 memoryMB 大小的表，调用方若已有表请用
+// digestWithTable——服务端校验路径走的是后者（配合表缓冲池），
+// 避免每次校验都新分配并重填一整张表。
 func powDigest(challenge, nonce string, memMB, rounds int) string {
-	table := powTable(memMB, challenge)
+	return digestWithTable(challenge, nonce, powTable(memMB, challenge), rounds)
+}
+
+// digestWithTable 是摘要计算的核心：表由调用方提供（可复用、可池化）。
+// powDigest 保证与前端 lib/pow.ts 逐位一致，本函数是它的表外置版本。
+func digestWithTable(challenge, nonce string, table []uint32, rounds int) string {
 	h := sha256.Sum256([]byte(challenge + ":" + nonce))
+	if len(table) == 0 {
+		return hex.EncodeToString(h[:])
+	}
 	var buf [36]byte
 	for r := 0; r < rounds; r++ {
 		be := binary.BigEndian.Uint32(h[0:4])
@@ -303,11 +383,66 @@ func powDigest(challenge, nonce string, memMB, rounds int) string {
 func powTable(memMB int, challenge string) []uint32 {
 	n := powTableLen(memMB)
 	table := make([]uint32, n)
+	fillPowTable(table, challenge)
+	return table
+}
+
+// fillPowTable 往已有的切片里填表，不重新分配。
+func fillPowTable(table []uint32, challenge string) {
 	x := newPowXorshift128(challenge)
-	for i := 0; i < n; i++ {
+	for i := range table {
 		table[i] = x.next()
 	}
+}
+
+// powTablePool 复用建表用的底层数组。
+//
+// 服务端每次校验都要建一次表，而表大小可达 32MB。原先每次 make 一个新切片，
+// 在高频校验下会把 GC 拖成主要开销。池化后同一块内存在请求间复用，
+// 填表耗时不变，但分配与回收成本消失。
+//
+// 以 8MB（即 2M 个 u32）为分档上限缓存；更大的表不入池，避免长期占住大块内存。
+const powTablePoolMaxLen = 8 * 262144
+
+var powTablePool sync.Pool
+
+// acquirePowTable 取出（或新建）一张填好的内存表。
+//
+// 参数是 memMB（MB 数）而不是 u32 个数——两者相差 262144 倍，
+// 混淆一次的后果是一个几 TB 的分配请求。让接口只接受 MB，
+// 内部的换算只此一处。
+func acquirePowTable(memMB int, challenge string) []uint32 {
+	if memMB <= 0 {
+		return nil
+	}
+	// 防御：越界说明上游传错了单位/参数，夹住而不是让进程 OOM
+	if memMB > powMaxMemoryMB {
+		panic(fmt.Sprintf("pow: 内存表大小越界 memMB=%d > %d", memMB, powMaxMemoryMB))
+	}
+	n := powTableLen(memMB)
+	if n > powTablePoolMaxLen {
+		table := make([]uint32, n)
+		fillPowTable(table, challenge)
+		return table
+	}
+	if v := powTablePool.Get(); v != nil {
+		if buf := v.([]uint32); cap(buf) >= n {
+			table := buf[:n]
+			fillPowTable(table, challenge)
+			return table
+		}
+	}
+	table := make([]uint32, n)
+	fillPowTable(table, challenge)
 	return table
+}
+
+func releasePowTable(table []uint32) {
+	if len(table) == 0 || len(table) > powTablePoolMaxLen {
+		return
+	}
+	// 截断后放回：池里只保留容量，长度在 acquire 时重新设定
+	powTablePool.Put(table[:0]) //nolint:staticcheck // 复用大数组是有意为之
 }
 
 // leadingZeros 摘要前 difficulty 个十六进制位是否均为 '0'。

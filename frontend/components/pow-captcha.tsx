@@ -6,6 +6,7 @@ import { CheckCircle2, Cpu, MousePointer, ShieldCheck } from 'lucide-react'
 import { fetchPowChallenge, type CaptchaCredential } from '@/lib/api'
 import { useSiteConfig } from './site-config-context'
 import { useIsMounted } from '@/lib/use-mounted'
+import { createDeferred } from '@/lib/deferred'
 import { solvePow } from '@/lib/pow'
 
 export type CaptchaScene = 'login' | 'register' | 'comment'
@@ -13,6 +14,8 @@ export type CaptchaScene = 'login' | 'register' | 'comment'
 interface Pending {
   resolve: (v: CaptchaCredential) => void
   reject: (e: Error) => void
+  /** 自身 Promise：run() 被并发调用时复用它，避免覆盖后永远不 settle */
+  promise: Promise<CaptchaCredential>
 }
 
 /** 本地交互事件单条：`{m|k|t}:{unix_ms}:{x}:{y}` */
@@ -134,7 +137,8 @@ export function usePowCaptcha(scene: CaptchaScene) {
 
     void (async () => {
       try {
-        const ch = await fetchPowChallenge()
+        // 带上场景：后端会把挑战绑定到该场景，跨场景挪用一律失效
+        const ch = await fetchPowChallenge(scene)
         if (cancelled) return
         // 第一阶段：本地交互信号（min_events=0 时跳过，进入纯算法模式）
         let signal = ''
@@ -213,16 +217,26 @@ export function usePowCaptcha(scene: CaptchaScene) {
     }
   }, [open, closeDialog])
 
-  const run = useCallback(
-    () =>
-      new Promise<CaptchaCredential>((resolve, reject) => {
-        cancelledRef.current = false
-        pendingRef.current = { resolve, reject }
-        setSignalLeft(pow.min_events)
-        setOpen(true)
-      }),
-    [pow.min_events],
-  )
+  const run = useCallback(() => {
+    // 并发调用必须复用同一个 pending。
+    //
+    // 此前这里直接 `pendingRef.current = { resolve, reject }`，若弹窗已经
+    // 打开时用户又点了一次提交，后一次会**覆盖**前一次的 pending：被覆盖的
+    // 那个 Promise 永远不 resolve 也不 reject，它的 await 永久挂起——
+    // 表现为提交按钮卡在 loading 状态、再也点不动，只能刷新页面。
+    //
+    // 现在把 promise 一起存进 pending，重复调用直接拿到同一个 Promise，
+    // 两个 await 由同一次验证明证/失败一起唤醒。
+    const existing = pendingRef.current
+    if (existing) return existing.promise
+
+    const d = createDeferred<CaptchaCredential>()
+    pendingRef.current = { resolve: d.resolve, reject: d.reject, promise: d.promise }
+    cancelledRef.current = false
+    setSignalLeft(pow.min_events)
+    setOpen(true)
+    return d.promise
+  }, [pow.min_events])
 
   const waitingSignal = signalLeft > 0 && progress < 0
   // 进度条用 scaleX（origin-left）而非 width：避免每帧触发 layout 重排。

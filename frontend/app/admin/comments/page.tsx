@@ -93,6 +93,7 @@ export default function AdminCommentsPage() {
                 disabled={deleteMutation.isPending}
                 className="shrink-0 rounded-md p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
                 title="删除"
+                aria-label={comment.article_title ? `删除《${comment.article_title}》下的评论` : '删除评论'}
               >
                 <Trash2 className="h-4 w-4" />
               </button>

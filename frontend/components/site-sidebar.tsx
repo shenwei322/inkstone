@@ -8,6 +8,19 @@ import { useMediaQuery } from '@/lib/use-media-query'
 import type { SidebarWidget } from '@/components/site-config-context'
 
 /**
+ * 小工具的稳定 React key。
+ *
+ * 不能用数组下标：后台「外观」页支持上移/下移重排小工具，用 index 作 key
+ * 会让 React 在重排后复用错误的组件实例，内部 state（时钟 tick、天气缓存）
+ * 跟着错位。这里用「配置内容 + 只读序号」派生：内容相同的重复小工具
+ * 再用序号区分，正常情况内容变化即视为另一个组件。
+ */
+function widgetKey(w: SidebarWidget, index: number): string {
+  const content = `${w.type}|${w.title ?? ''}|${w.content ?? ''}|${w.city ?? ''}|${w.date ?? ''}`
+  return `${content}|${index}`
+}
+
+/**
  * 站点侧边栏（小工具）。
  * - 桌面（lg+）：与原布局完全一致的 sticky 侧边栏，不做任何改动。
  * - 手机（<lg）：默认隐藏，屏幕边缘一个「侧边栏」浮动按钮，点击后从对应侧滑出抽屉。
@@ -39,7 +52,7 @@ export function SiteSidebar({
     return (
       <aside className={`h-fit space-y-4 lg:sticky lg:top-24${left ? ' lg:order-first' : ''}`}>
         {widgets.map((w, i) => (
-          <WidgetRenderer key={`${w.type}-${i}`} widget={w} />
+          <WidgetRenderer key={widgetKey(w, i)} widget={w} />
         ))}
       </aside>
     )
@@ -93,7 +106,7 @@ export function SiteSidebar({
         </div>
         <div className="space-y-4">
           {widgets.map((w, i) => (
-            <WidgetRenderer key={`${w.type}-${i}`} widget={w} />
+            <WidgetRenderer key={widgetKey(w, i)} widget={w} />
           ))}
         </div>
       </Presence>

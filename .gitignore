@@ -42,3 +42,6 @@ Thumbs.db
 *.bak
 *~
 /logs/
+
+# ===== 构建产物 / 发布物（镜像包由 GitHub Release 分发，不入库）=====
+/dist/

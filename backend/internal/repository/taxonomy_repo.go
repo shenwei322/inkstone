@@ -7,6 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrTagNameTaken 表示标签名（或其 slug）与已有标签冲突。
+var ErrTagNameTaken = errors.New("tag name already taken")
+
 type CategoryCount struct {
 	ID           uint   `json:"id"`
 	Name         string `json:"name"`
@@ -91,9 +94,19 @@ func (r *TaxonomyRepository) UpdateTag(id uint, name string) (*model.Tag, error)
 	if err := r.db.First(&tag, id).Error; err != nil {
 		return nil, ErrNotFound
 	}
+	slug := Slugify(name)
+	// 改名撞上已存在的 slug 时，uniqueIndex 会抛 23505；映射成可读错误，
+	// 否则前端只会看到 500「internal server error」。
+	var clash model.Tag
+	if err := r.db.Where("slug = ? AND id <> ?", slug, id).First(&clash).Error; err == nil {
+		return nil, ErrTagNameTaken
+	}
 	tag.Name = name
-	tag.Slug = Slugify(name)
+	tag.Slug = slug
 	if err := r.db.Save(&tag).Error; err != nil {
+		if uniqueField, ok := uniqueViolationField(err); ok && uniqueField == "slug" {
+			return nil, ErrTagNameTaken
+		}
 		return nil, err
 	}
 	return &tag, nil
@@ -106,8 +119,12 @@ func (r *TaxonomyRepository) DeleteTag(id uint) error {
 		return ErrNotFound
 	}
 	if err := r.db.Model(&tag).Association("Articles").Clear(); err != nil {
-		// 关联表可能不存在于模型定义中，退化为直接清理连接表
-		r.db.Exec("DELETE FROM article_tags WHERE tag_id = ?", id)
+		// 关联表可能不存在于模型定义中，退化为直接清理连接表。
+		// 这里必须检查错误：此前返回值被丢弃，清理失败会静默留下
+		// article_tags 孤儿行，导致标签统计虚高。
+		if execErr := r.db.Exec("DELETE FROM article_tags WHERE tag_id = ?", id).Error; execErr != nil {
+			return execErr
+		}
 	}
 	if err := r.db.Delete(&tag).Error; err != nil {
 		return err

@@ -24,6 +24,44 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
+// bootstrapAdminLockKey 是「空库首个用户授予 admin」这一判定的互斥键。
+// 只需全库唯一，用一个固定魔数即可。
+const bootstrapAdminLockKey int64 = 0x696E6B73746F6E65 // "inkstone"
+
+// CreateFirstAdmin 在**同一事务**内完成「空库则授予 admin」的判定与插入。
+//
+// 为什么需要它：Register 原先用两次独立的 users.Count()——一次判注册开关、
+// 一次定角色。空库上两个并发注册会读到同一个 count==0，于是**双双被授予
+// admin**，构成权限提升。把「计数 → 定角色 → 插入」放进同一事务并持有
+// pg_advisory_xact_lock，任一时刻只有一个请求能做出这个判定；锁随事务释放。
+func (r *UserRepository) CreateFirstAdmin(user *model.User) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", bootstrapAdminLockKey).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&model.User{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			user.Role = model.RoleAdmin
+		} else {
+			user.Role = model.RoleUser
+		}
+		err := tx.Create(user).Error
+		if err != nil {
+			// 与 Create 保持一致的唯一冲突映射
+			if uniqueField, ok := uniqueViolationField(err); ok {
+				if uniqueField == "username" {
+					return ErrUsernameTaken
+				}
+				return ErrEmailTaken
+			}
+		}
+		return err
+	})
+}
+
 func (r *UserRepository) Create(user *model.User) error {
 	err := r.db.Create(user).Error
 	if err != nil {
@@ -113,7 +151,13 @@ func (r *UserRepository) List(page, pageSize int, query string) ([]model.User, i
 }
 
 func (r *UserRepository) UpdateRole(id uint, role string) error {
-	res := r.db.Model(&model.User{}).Where("id = ?", id).Update("role", role)
+	// 同时自增令牌代次：降级后旧令牌里的 admin 角色不再可用
+	// （Auth 中间件已改为以库中角色为准，这里是纵深防御 + 兼容旧令牌）。
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"role":          role,
+			"token_version": gorm.Expr("token_version + 1"),
+		})
 	if res.Error != nil {
 		return res.Error
 	}
@@ -124,7 +168,13 @@ func (r *UserRepository) UpdateRole(id uint, role string) error {
 }
 
 func (r *UserRepository) UpdateStatus(id uint, status string) error {
-	res := r.db.Model(&model.User{}).Where("id = ?", id).Update("status", status)
+	// 封禁时自增令牌代次，让被封禁账号的 refresh 令牌立即不可用
+	// （access 令牌由 Auth 中间件的每请求校验拦截）。
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"status":        status,
+			"token_version": gorm.Expr("token_version + 1"),
+		})
 	if res.Error != nil {
 		return res.Error
 	}
@@ -143,6 +193,61 @@ func (r *UserRepository) UpdatePasswordHash(id uint, hash string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdatePasswordHashAndRevoke 改密码并自增 TokenVersion，使该用户已签发的
+// 全部令牌（access 与 refresh）立即失效。
+//
+// 用表达式 `token_version + 1` 交给数据库自增，避免「读-改-写」竞态导致
+// 两次并发修改只加一次。
+func (r *UserRepository) UpdatePasswordHashAndRevoke(id uint, hash string) error {
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"password_hash": hash,
+			"token_version": gorm.Expr("token_version + 1"),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// BumpTokenVersion 仅自增令牌代次（封禁 / 降级 / 强制下线时调用）。
+func (r *UserRepository) BumpTokenVersion(id uint) error {
+	res := r.db.Model(&model.User{}).Where("id = ?", id).
+		Update("token_version", gorm.Expr("token_version + 1"))
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteWithArticles 在同一事务内删除该用户的全部文章与其账号。
+//
+// 此前 handler 先调 articleRepo.DeleteByAuthor 再调 users.Delete，是两个独立
+// 事务：第二步失败会留下「文章已全删、用户还在」的不一致状态。
+// 事务内先确认用户存在，让「用户不存在」能返回 404 而不是误删文章。
+func (r *UserRepository) DeleteWithArticles(id uint) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.User{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		// 按外键依赖顺序清理：评论/点赞/标签关联 → 文章
+		if err := purgeArticlesByAuthor(tx, id); err != nil {
+			return err
+		}
+		return tx.Delete(&model.User{}, id).Error
+	})
 }
 
 func (r *UserRepository) UpdateUsername(id uint, username string) error {

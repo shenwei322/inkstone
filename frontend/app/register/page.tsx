@@ -3,14 +3,14 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
 import gsap from 'gsap'
-import { fetchSiteConfig, type CaptchaCredential } from '@/lib/api'
+import { type CaptchaCredential } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import { ApiError } from '@/lib/api'
 import { useSiteConfig } from '@/components/site-config-context'
 import { EmailCodeInput } from '@/components/email-code-input'
 import { useCaptcha } from '@/components/captcha'
+import { PageLoading } from '@/components/page-loader'
 import { Reveal, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
 import { inputClass } from '@/lib/ui'
 
@@ -20,8 +20,10 @@ export default function RegisterPage() {
   const router = useRouter()
   const captcha = useCaptcha('register')
   const [emailCode, setEmailCode] = useState('')
-  const configQuery = useQuery({ queryKey: ['site-config'], queryFn: fetchSiteConfig })
-  const registrationOpen = configQuery.data?.allow_registration !== false
+  // 复用全局站点配置（SiteConfigProvider）而不是再发一次 /site-config：
+  // 此前这里自己 useQuery，既重复请求，又因首帧 data 为 undefined 而
+  // 把 allow_registration 误判为 true（关闭注册时先渲染出表单再突然替换）。
+  const registrationOpen = site.allowRegistration
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -81,6 +83,16 @@ export default function RegisterPage() {
     { id: 'username', label: '用户名', type: 'text', value: username, set: setUsername, placeholder: '2-32 个字符', auto: 'username', min: 2, max: 32 },
     { id: 'password', label: '密码', type: 'password', value: password, set: setPassword, placeholder: '至少 8 个字符', auto: 'new-password', min: 8, max: 72 },
   ]
+
+  // 配置未就绪时先显示加载态：否则会按默认值（开放注册）先渲染出表单，
+  // 等配置回来再整页替换成「暂未开放注册」，造成布局跳变与无效填写。
+  if (!site.loaded) {
+    return (
+      <div className="flex min-h-full items-center justify-center px-4 py-16">
+        <PageLoading minHeight="12rem" hint="正在加载…" />
+      </div>
+    )
+  }
 
   if (!registrationOpen) {
     return (

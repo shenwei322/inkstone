@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -449,14 +450,15 @@ func (s *UpdateService) maxImageBytes() int64 {
 }
 
 // downloadImageAsset 流式下载镜像包到 UPDATE_DIR/images/，边下边算 SHA-256，
-// 写完后与 Release 资产声明的 size 对账（ asset 给了 size 才校验）。
-func (s *UpdateService) downloadImageAsset(ctx context.Context, version string, asset ReleaseAssetBrief, report func(progress int, message string)) (path string, size int64, sum string, err error) {
+// 写完后依次与 Release 资产声明的 size、以及信任根（UPDATE_CHECKSUM 或
+// checksums.txt）对账。
+func (s *UpdateService) downloadImageAsset(ctx context.Context, version string, rel ReleaseBrief, asset ReleaseAssetBrief, report func(progress int, message string)) (res downloadResult, verified bool, err error) {
 	if err := os.MkdirAll(s.imageDir(), 0o755); err != nil {
-		return "", 0, "", err
+		return downloadResult{}, false, err
 	}
 	dest := filepath.Join(s.imageDir(), sanitizeFileName(version)+"-"+sanitizeFileName(asset.Name))
 	report(20, "下载镜像包："+redactURL(asset.URL))
-	res, err := s.client.download(ctx, asset.URL, dest, func(done, total int64) {
+	d, err := s.client.download(ctx, asset.URL, dest, func(done, total int64) {
 		if total <= 0 {
 			total = asset.Size
 		}
@@ -472,19 +474,155 @@ func (s *UpdateService) downloadImageAsset(ctx context.Context, version string, 
 		report(progress, message)
 	})
 	if err != nil {
-		return "", 0, "", err
+		return downloadResult{}, false, err
 	}
-	if asset.Size > 0 && res.Bytes != asset.Size {
-		_ = os.Remove(res.Path)
-		return "", 0, "", fmt.Errorf("镜像包大小与 Release 资产不一致：期望 %d 字节，实际 %d 字节", asset.Size, res.Bytes)
+	if asset.Size > 0 && d.Bytes != asset.Size {
+		_ = os.Remove(d.Path)
+		return downloadResult{}, false, fmt.Errorf("镜像包大小与 Release 资产不一致：期望 %d 字节，实际 %d 字节", asset.Size, d.Bytes)
 	}
-	report(76, "镜像包下载完成，开始安装")
-	return res.Path, res.Bytes, res.SHA256, nil
+	// 信任根校验：有期望值就必须一致，否则拒绝安装（防镜像被污染）
+	expected, haveExpected := s.expectedChecksum(ctx, rel, asset.Name)
+	ok, verr := verifyChecksum(d.SHA256, expected)
+	if verr != nil {
+		_ = os.Remove(d.Path)
+		return downloadResult{}, false, verr
+	}
+	if haveExpected && ok {
+		report(76, "镜像包下载完成，SHA-256 校验通过")
+	} else {
+		report(76, "镜像包下载完成（未找到校验值，未经完整性校验）")
+	}
+	return d, ok, nil
 }
 
 // imageDir 是镜像包的存放目录（UPDATE_DIR/images）。
 func (s *UpdateService) imageDir() string {
 	return filepath.Join(s.cfg.UpdateDir, "images")
+}
+
+// ---------------------------------------------------------------------------
+// 下载内容校验（信任根）
+//
+// 背景：默认镜像 https://gh-proxy.com/... 是第三方公共服务，而下载地址里
+// 相当一部分来自上游 API 响应（Release 资产的 browser_download_url）。只
+// 靠「下载完自己算一遍 SHA-256」是**自证**——算出来的值本来就来自同一个
+// 可能被污染的通道，对破坏性替换没有任何阻挡作用。
+//
+// 所以这里补上真正的信任根，按优先级：
+//   1. UPDATE_CHECKSUM 显式配置（运维自己放行时写下的期望值，最可信）；
+//   2. Release 里的 checksums.txt 资产（与镜像包同批发布）。
+// 两者都拿不到时不阻断安装（否则没发 checksums 的版本直接无法更新），
+// 但会把 Verified=false 上报到状态与界面，让运维看见「这次更新未经校验」。
+// ---------------------------------------------------------------------------
+
+// checksumsAssetName 是约定存放 SHA-256 清单的资产名。
+const checksumsAssetName = "checksums.txt"
+
+// parseChecksumsFile 解析 sha256sum 风格的清单文件。
+//
+// 每行形如 `<64位hex>  <文件名>`（GNU 文本模式是两空格，二进制模式是
+// ` *`），以 # 开头的是注释。行解析失败一律忽略而不是报错——清单只要
+// 能取出目标文件那一行就算可用。
+func parseChecksumsFile(raw string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// 兼容 "<hex>  <name>" 与 "<hex> *<name>"
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		sum := strings.ToLower(strings.TrimPrefix(fields[0], "sha256:"))
+		name := strings.TrimPrefix(fields[len(fields)-1], "*")
+		if !isHexString(sum, 64) {
+			continue
+		}
+		// 同名以最后一次出现为准；同时记录去掉目录前缀的基名，方便对不上时兜底
+		out[name] = sum
+		base := path.Base(strings.ReplaceAll(name, "\\", "/"))
+		if _, exists := out[base]; !exists {
+			out[base] = sum
+		}
+	}
+	return out
+}
+
+// isHexString 判断是否为指定长度的十六进制串（大小写均可）。
+//
+// 必须接受大写：sha256sum 工具在某些平台上输出大写，运维手写
+// UPDATE_CHECKSUM 时也可能粘成大写。只认小写会让合法摘要在校验前就被拒。
+func isHexString(s string, wantLen int) bool {
+	if len(s) != wantLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// expectedChecksum 取出「期望的 SHA-256」。第二个返回值为是否拿到了期望值。
+func (s *UpdateService) expectedChecksum(ctx context.Context, rel ReleaseBrief, assetName string) (string, bool) {
+	// 1) 显式配置优先
+	if want := strings.ToLower(strings.TrimSpace(s.cfg.UpdateChecksum)); isHexString(want, 64) {
+		return want, true
+	}
+	// 2) Release 的 checksums.txt
+	var sumAsset *ReleaseAssetBrief
+	for i := range rel.Assets {
+		if strings.EqualFold(strings.TrimSpace(rel.Assets[i].Name), checksumsAssetName) {
+			sumAsset = &rel.Assets[i]
+			break
+		}
+	}
+	if sumAsset == nil {
+		return "", false
+	}
+	tmp, err := os.CreateTemp(s.imageDir(), "checksums-*")
+	if err != nil {
+		return "", false
+	}
+	defer os.Remove(tmp.Name())
+	_ = tmp.Close()
+	if _, err := s.client.download(ctx, sumAsset.URL, tmp.Name(), nil); err != nil {
+		return "", false
+	}
+	raw, err := os.ReadFile(tmp.Name())
+	if err != nil {
+		return "", false
+	}
+	sums := parseChecksumsFile(string(raw))
+	if want, ok := sums[assetName]; ok {
+		return want, true
+	}
+	// 兜底：清单里只有一个条目时，认为它就是给这个资产的
+	if len(sums) == 1 {
+		for _, v := range sums {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// verifyChecksum 比对实际与期望的 SHA-256。expected 为空表示没有信任根，
+// 此时返回 verified=false 但不报错（由调用方决定如何呈现）。
+func verifyChecksum(actual, expected string) (verified bool, err error) {
+	if strings.TrimSpace(expected) == "" {
+		return false, nil
+	}
+	if !isHexString(actual, 64) {
+		return false, fmt.Errorf("下载内容不是合法 SHA-256：%q", actual)
+	}
+	if !strings.EqualFold(strings.TrimSpace(actual), strings.TrimSpace(expected)) {
+		return false, fmt.Errorf("SHA-256 校验失败：期望 %s，实际 %s。这通常意味着下载源被篡改或镜像损坏，请更换镜像后重试", expected, actual)
+	}
+	return true, nil
 }
 
 // sanitizeFileName 去掉路径分隔符等危险字符，防止Release 资产名带目录穿越。

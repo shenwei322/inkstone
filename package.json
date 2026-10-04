@@ -8,14 +8,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shenwei234/inkstone.git"
+    "url": "git+https://github.com/shenwei322/inkstone.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/shenwei234/inkstone/issues"
+    "url": "https://github.com/shenwei322/inkstone/issues"
   },
-  "homepage": "https://github.com/shenwei234/inkstone#readme"
+  "homepage": "https://github.com/shenwei322/inkstone#readme"
 }

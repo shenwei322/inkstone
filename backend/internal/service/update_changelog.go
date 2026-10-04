@@ -126,9 +126,13 @@ func (s *UpdateService) changelogByPaging(ctx context.Context, from, to string) 
 	if base == "" {
 		return changelogResult{}, fmt.Errorf("仓库地址 %q 无法解析出 owner/name", s.cfg.UpdateRepoURL)
 	}
-	// 展开除分页外的占位符，分页参数由本函数接管
-	base = s.expandAPI(base, to)
+	// 展开除分页外的占位符，分页参数由本函数接管。
+	//
+	// 分支名必须在 expandAPI **之前**转义：expandAPI 内部会用未转义的分支名
+	// 消费 {branch}，原先放在它之后的 ReplaceAll 是无效的（占位符已不存在），
+	// 分支名含 #、&、空格时会原样进 URL 并截断查询串。
 	base = strings.ReplaceAll(base, "{branch}", escapeQueryValue(s.cfg.UpdateBranch))
+	base = s.expandAPI(base, to)
 	base = strings.ReplaceAll(base, "{limit}", strconv.Itoa(perPage))
 
 	var collected []remoteCommit

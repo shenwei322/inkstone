@@ -34,7 +34,8 @@ function ArticleCard({ article }: { article: Article }) {
     <StaggerItem>
       <HoverLift>
         <Link href={`/posts/${article.slug}`} className="block">
-          <article className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-shadow duration-300 hover:shadow-lg hover:shadow-accent/5 sm:flex-row sm:gap-5 sm:p-5">
+          <article className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5 sm:flex-row sm:gap-5 sm:p-5">
+            {/* 顶部 accent 渐变条：悬停时从左展开（scaleX，不做 width 动画） */}
             <div className="absolute inset-x-0 top-0 z-10 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-accent to-purple-500 transition-transform duration-300 group-hover:scale-x-100" />
 
             {cover && (
@@ -52,9 +53,9 @@ function ArticleCard({ article }: { article: Article }) {
               </div>
             )}
 
-            <div className="min-w-0 flex-1 p-5 sm:p-0">
+            <div className="flex min-w-0 flex-1 flex-col p-5 sm:p-0">
               <div className="flex items-start justify-between gap-3">
-                <h2 className="text-lg font-semibold tracking-tight transition-colors group-hover:text-accent">
+                <h2 className="text-lg font-semibold leading-snug tracking-tight text-balance transition-colors group-hover:text-accent">
                   {article.title}
                 </h2>
                 {article.category && (
@@ -63,29 +64,38 @@ function ArticleCard({ article }: { article: Article }) {
                   </span>
                 )}
               </div>
+              {/* 摘要：两行截断，行高放宽提升可读性 */}
               <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
                 {excerpt}
               </p>
-              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/10 text-[10px] font-bold text-accent">
-                {article.author.username.charAt(0).toUpperCase()}
-              </span>
-              <span className="font-medium text-foreground">{article.author.username}</span>
-              <span>·</span>
-              <time dateTime={article.published_at ?? article.created_at}>{date}</time>
-              <span className="flex items-center gap-1">
-                <Eye className="h-3 w-3" />
-                {article.views}
-              </span>
-              {article.tags && article.tags.length > 0 && (
-                <span className="ml-auto hidden items-center gap-1.5 sm:flex">
-                  {article.tags.slice(0, 3).map((tag) => (
-                    <span key={tag.id} className="rounded border border-border px-1.5 py-0.5">
-                      {tag.name}
-                    </span>
-                  ))}
+              {/* 底部元信息：作者/日期/阅读量，标签贴右侧（仅 sm 以上） */}
+              <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground sm:mt-auto sm:pt-4">
+                <span className="flex items-center gap-1.5">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/10 text-[10px] font-bold text-accent">
+                    {article.author.username.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="font-medium text-foreground">{article.author.username}</span>
                 </span>
-              )}
+                <span aria-hidden className="text-border">
+                  ·
+                </span>
+                <time dateTime={article.published_at ?? article.created_at}>{date}</time>
+                <span className="flex items-center gap-1">
+                  <Eye className="h-3 w-3" />
+                  {article.views}
+                </span>
+                {article.tags && article.tags.length > 0 && (
+                  <span className="ml-auto hidden items-center gap-1.5 sm:flex">
+                    {article.tags.slice(0, 3).map((tag) => (
+                      <span
+                        key={tag.id}
+                        className="rounded border border-border bg-muted/40 px-1.5 py-0.5 transition-colors group-hover:border-accent/30"
+                      >
+                        {tag.name}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </div>
             </div>
           </article>

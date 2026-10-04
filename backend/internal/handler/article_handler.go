@@ -154,7 +154,9 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// 发布（或取消草稿）同样需要人机验证，与新建一致
+	// 更新与新建共用 articleLimit 限流（见 main.go 路由注册）。
+	// 正文写入已在 service 层经 bluemonday 消毒；这里不需要人机验证——
+	// 调用者已通过 Auth 鉴权，且编辑器保存草稿的交互不适合插入验证码。
 	article, err := h.articles.Update(uint(id), current.ID, service.ArticleUpdate{
 		Title:      req.Title,
 		Content:    req.Content,

@@ -197,9 +197,19 @@ export type CaptchaCredential = Partial<GeetestCredential> & {
 }
 
 
-/** 签发 POW 挑战（免登录）：拿到后本地计算满足难度的 nonce */
-export function fetchPowChallenge() {
-  return api<PowChallenge>('/pow/challenge', { method: 'POST' })
+/**
+ * 签发 POW 挑战（免登录）：拿到后本地计算满足难度的 nonce。
+ *
+ * scene 会随请求一起发给后端，把挑战绑定到具体业务场景——这样从
+ * /pow/challenge 领到的挑战只能用在同名场景，无法「用评论等低成本场景
+ * 领一批挑战、再拿去打登录」。不传该字段时后端按「不绑定」处理，
+ * 与服务端加固前的行为一致（用于兼容尚未更新的调用方）。
+ */
+export function fetchPowChallenge(scene?: string) {
+  return api<PowChallenge>('/pow/challenge', {
+    method: 'POST',
+    body: scene ? { scene } : undefined,
+  })
 }
 
 /** 发送邮箱验证码 */

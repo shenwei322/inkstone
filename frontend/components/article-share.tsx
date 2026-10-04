@@ -13,6 +13,16 @@ export function ArticleShare({ title }: { title: string }) {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  // 复制成功后的「已复制」提示定时器句柄：卸载时必须清理，
+  // 否则用户点完复制立刻切路由，1.5s 后会向已卸载组件 setState。
+  const copiedTimerRef = useRef<number | null>(null)
+
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    },
+    [],
+  )
 
   // 点击外部/ESC 关闭
   useEffect(() => {
@@ -37,7 +47,11 @@ export function ArticleShare({ title }: { title: string }) {
     try {
       await navigator.clipboard.writeText(shareURL())
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = window.setTimeout(() => {
+        setCopied(false)
+        copiedTimerRef.current = null
+      }, 1500)
       notify.success('链接已复制，去分享给朋友吧')
     } catch {
       notify.error('复制失败，请手动复制地址栏链接')

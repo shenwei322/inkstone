@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/shenwei/inkstone/backend/internal/model"
 	"gorm.io/gorm"
@@ -23,6 +24,28 @@ func NewLinkApplicationRepository(db *gorm.DB) *LinkApplicationRepository {
 
 func (r *LinkApplicationRepository) Create(app *model.FriendLinkApplication) error {
 	return r.db.Create(app).Error
+}
+
+// ClaimForReview 把申请从 pending **抢占式**地改为目标状态。
+//
+// 返回第二个值表示是否抢占成功（即这条申请确实还是 pending）。WHERE 里带
+// status 条件让数据库完成「检查 + 修改」的原子判定，避免 check-then-act：
+// 管理员双击审核按钮时两个请求都会读到 pending，各建一条友链，
+// 结果是同一条申请产生重复友链。
+func (r *LinkApplicationRepository) ClaimForReview(id uint, newStatus string, operatorID uint, reason string) (bool, error) {
+	now := time.Now()
+	res := r.db.Model(&model.FriendLinkApplication{}).
+		Where("id = ? AND status = ?", id, model.LinkAppPending).
+		Updates(map[string]any{
+			"status":      newStatus,
+			"reason":      reason,
+			"reviewed_by": operatorID,
+			"reviewed_at": &now,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *LinkApplicationRepository) Update(app *model.FriendLinkApplication) error {

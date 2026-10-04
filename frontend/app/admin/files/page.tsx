@@ -44,37 +44,44 @@ function FileTypeIcon({ mime, name }: { mime: string; name: string }) {
 function TransferSettings() {
   const notify = useNotify()
   const queryClient = useQueryClient()
-  const [form, setForm] = useState<{ max: string; up: string; down: string } | null>(null)
 
   const settingsQuery = useQuery({
     queryKey: ['admin', 'settings'],
     queryFn: fetchAdminSettings,
   })
 
-  if (settingsQuery.data?.settings && !form) {
-    const s = settingsQuery.data.settings as unknown as Record<string, unknown>
-    setForm({
-      max: String(s.upload_max_mb ?? '50'),
-      up: String(s.upload_speed_kb ?? '0'),
-      down: String(s.download_speed_kb ?? '0'),
-    })
+  const serverSettings = settingsQuery.data?.settings as unknown as Record<string, unknown> | undefined
+  // 表单值由「服务端值 + 用户本地编辑」派生：只在用户改动时记录覆盖值，
+  // 避免把数据复制进 state（渲染期 setState 会多跑一轮渲染，且轮询回来的
+  // 新对象引用容易把用户正在编辑的内容重置）。
+  const [edited, setEdited] = useState<{ max?: string; up?: string; down?: string }>({})
+  const form = {
+    max: edited.max ?? String(serverSettings?.upload_max_mb ?? '50'),
+    up: edited.up ?? String(serverSettings?.upload_speed_kb ?? '0'),
+    down: edited.down ?? String(serverSettings?.download_speed_kb ?? '0'),
   }
+  const setForm = (patch: { max?: string; up?: string; down?: string }) =>
+    setEdited((prev) => ({ ...prev, ...patch }))
 
   const save = useMutation({
     mutationFn: () =>
       updateAdminSettings({
-        upload_max_mb: Number(form?.max || 50),
-        upload_speed_kb: Number(form?.up || 0),
-        download_speed_kb: Number(form?.down || 0),
+        upload_max_mb: Number(form.max || 50),
+        upload_speed_kb: Number(form.up || 0),
+        download_speed_kb: Number(form.down || 0),
       } as unknown as Record<string, unknown>),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'settings'] })
+    onSuccess: async () => {
+      // 必须先等 refetch 完成，再清掉本地编辑标记。
+      // 若先 setEdited({}) 再 invalidate，缓存旧值会在中间那一轮渲染里
+      // 被读出来，用户会看到输入框闪回旧值。
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'settings'] })
+      setEdited({})
       notify.success('传输设置已保存')
     },
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '保存失败'),
   })
 
-  if (!form) {
+  if (!serverSettings) {
     return <PageLoading minHeight="6rem" />
   }
 
@@ -91,7 +98,7 @@ function TransferSettings() {
             type="number"
             min={1}
             value={form.max}
-            onChange={(e) => setForm({ ...form, max: e.target.value })}
+            onChange={(e) => setForm({ max: e.target.value })}
             className={inputClass}
           />
         </div>
@@ -101,7 +108,7 @@ function TransferSettings() {
             type="number"
             min={0}
             value={form.up}
-            onChange={(e) => setForm({ ...form, up: e.target.value })}
+            onChange={(e) => setForm({ up: e.target.value })}
             className={inputClass}
           />
           <p className="text-xs text-muted-foreground">0 表示不限速</p>
@@ -112,7 +119,7 @@ function TransferSettings() {
             type="number"
             min={0}
             value={form.down}
-            onChange={(e) => setForm({ ...form, down: e.target.value })}
+            onChange={(e) => setForm({ down: e.target.value })}
             className={inputClass}
           />
           <p className="text-xs text-muted-foreground">0 表示不限速</p>
@@ -142,6 +149,9 @@ export default function AdminFilesPage() {
   const [dragging, setDragging] = useState(false)
   const [copiedId, setCopiedId] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  // 「已复制」提示定时器句柄：列表页切换频繁，卸载时必须清理，
+  // 否则回调会向已卸载组件 setState
+  const copiedTimerRef = useRef<number | null>(null)
 
   // 上传进度条：scaleX 补间（合成层，避免 width 动画每帧 layout 重排）
   const progressBarRef = useRef<HTMLDivElement>(null)
@@ -162,6 +172,14 @@ export default function AdminFilesPage() {
   })
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'files'] })
+
+  // 卸载时清掉「已复制」定时器，避免回调向已卸载组件 setState
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    },
+    [],
+  )
 
   const upload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -198,7 +216,11 @@ export default function AdminFilesPage() {
     try {
       await navigator.clipboard.writeText(full)
       setCopiedId(file.id)
-      setTimeout(() => setCopiedId(null), 1500)
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = window.setTimeout(() => {
+        setCopiedId(null)
+        copiedTimerRef.current = null
+      }, 1500)
       notify.success('下载链接已复制')
     } catch {
       notify.error('复制失败，请手动复制：' + full)

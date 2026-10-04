@@ -12,10 +12,15 @@ type User struct {
     PasswordHash string    // bcrypt，JSON 不输出
     Role         string    // "admin" | "user"
     Status       string    // "active" | "banned"
+    TokenVersion int64     // 令牌代次，JSON 不输出
     CreatedAt    time.Time
     UpdatedAt    time.Time
 }
 ```
+
+**TokenVersion（令牌代次）**：签发令牌时写入 `ver` claim，`Refresh` 校验一致性。
+改密码、管理员重置密码、封禁、改角色都会 `+1`（用 SQL 表达式 `token_version + 1` 自增，避免读-改-写竞态），
+使该用户已签发的全部 access/refresh 立即失效。旧令牌无 `ver` 字段时视为 0，与默认值一致，升级不会误伤。
 
 **关键行为**：
 - **首个注册用户自动为 admin**（`auth_service.Register` 中判断 `Count() == 0`）

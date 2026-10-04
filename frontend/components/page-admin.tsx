@@ -22,7 +22,9 @@ import type { PageItem } from '@/lib/api'
 const templates = [
   { value: 'default', label: '常规页（居中内容）' },
   { value: 'fullwidth', label: '通栏页（大标题居中）' },
-  { value: 'landing', label: '自定义模板（HTML + {{content}}）' },
+  // landing 就是「整页 HTML 原样渲染」：Page 模型只有 content 一个字段，
+  // 没有可供 {{content}} 填写的独立正文，所以不再承诺占位符替换。
+  { value: 'landing', label: '自定义模板（整页 HTML）' },
 ]
 
 function PageEditor({
@@ -124,7 +126,7 @@ function PageEditor({
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={16}
-          placeholder={'整页 HTML，{{content}} 会替换为富文本内容。\n例如：<div class="hero"><h1>欢迎</h1>{{content}}</div>'}
+          placeholder={'整页 HTML，按你写的内容原样渲染（不会被任何占位符替换）。\n例如：<div class="hero"><h1>欢迎</h1><p>这里是正文</p></div>'}
           className="w-full resize-y rounded-lg border border-border bg-card px-4 py-3 font-mono text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
         />
       ) : (

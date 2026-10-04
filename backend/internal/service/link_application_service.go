@@ -115,6 +115,11 @@ func (s *LinkApplicationService) Submit(input LinkApplicationInput, clientIP str
 	if _, err := url.ParseRequestURI(normalized); err != nil {
 		return nil, NewValidationError("站点地址格式不正确")
 	}
+	// 友链检测会让服务端主动请求该地址，因此这里先挡掉内网/保留地址
+	// （第二道防线在探测传输层的 DialContext，可防 DNS rebinding）。
+	if err := RejectPrivateHost(normalized); err != nil {
+		return nil, err
+	}
 	if email != "" && !emailRegex.MatchString(email) {
 		return nil, NewValidationError("联系邮箱格式不正确")
 	}
@@ -164,9 +169,11 @@ func (s *LinkApplicationService) Approve(id uint, operatorID uint) (*model.Frien
 	if err != nil {
 		return nil, err
 	}
+	// 这一步只用于尽早给出友好提示；真正的并发闸门在后面 ClaimForReview。
 	if app.Status != model.LinkAppPending {
 		return nil, NewValidationError("该申请已处理过")
 	}
+
 	link := &model.FriendLink{
 		Name:        app.SiteName,
 		URL:         app.URL,
@@ -178,6 +185,26 @@ func (s *LinkApplicationService) Approve(id uint, operatorID uint) (*model.Frien
 	if err := s.links.Create(link); err != nil {
 		return nil, err
 	}
+
+	// 抢占式改状态：WHERE 带 status = pending，由数据库完成「检查+修改」。
+	// 双击审核时两个请求都会走到这里，只有一个能抢占成功；失败的把刚建的
+	// 友链撤掉，避免同一条申请产生重复友链。
+	claimed, err := s.apps.ClaimForReview(id, model.LinkAppApproved, operatorID, "")
+	if err != nil {
+		_ = s.links.Delete(link.ID)
+		return nil, err
+	}
+	if !claimed {
+		_ = s.links.Delete(link.ID)
+		return nil, NewValidationError("该申请已处理过")
+	}
+
+	now := time.Now()
+	app.Status = model.LinkAppApproved
+	app.Reason = ""
+	app.ReviewedBy = operatorID
+	app.ReviewedAt = &now
+
 	// 建链后后台探测可达性（异步，带 panic 保护）
 	go func(linkID uint) {
 		defer func() {
@@ -189,14 +216,6 @@ func (s *LinkApplicationService) Approve(id uint, operatorID uint) (*model.Frien
 		_, _ = svc.CheckOne(linkID)
 	}(link.ID)
 
-	now := time.Now()
-	app.Status = model.LinkAppApproved
-	app.Reason = ""
-	app.ReviewedBy = operatorID
-	app.ReviewedAt = &now
-	if err := s.apps.Update(app); err != nil {
-		return nil, err
-	}
 	return app, nil
 }
 
@@ -209,14 +228,21 @@ func (s *LinkApplicationService) Reject(id uint, operatorID uint, reason string)
 	if app.Status != model.LinkAppPending {
 		return nil, NewValidationError("该申请已处理过")
 	}
-	now := time.Now()
-	app.Status = model.LinkAppRejected
-	app.Reason = strings.TrimSpace(reason)
-	app.ReviewedBy = operatorID
-	app.ReviewedAt = &now
-	if err := s.apps.Update(app); err != nil {
+	reason = strings.TrimSpace(reason)
+	// 与 Approve 同一套抢占式闸门：双击拒绝时两个请求都能读到 pending，
+	// 后写的那个会把前一个的拒绝原因覆盖掉。
+	claimed, err := s.apps.ClaimForReview(id, model.LinkAppRejected, operatorID, reason)
+	if err != nil {
 		return nil, err
 	}
+	if !claimed {
+		return nil, NewValidationError("该申请已处理过")
+	}
+	now := time.Now()
+	app.Status = model.LinkAppRejected
+	app.Reason = reason
+	app.ReviewedBy = operatorID
+	app.ReviewedAt = &now
 	return app, nil
 }
 

@@ -17,13 +17,15 @@ export interface TocItem {
 export function parseToc(html: string): TocItem[] {
   if (typeof document === 'undefined' || !html) return []
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  return Array.from(doc.querySelectorAll('h1, h2, h3'))
-    .map((h, i) => ({
-      id: `toc-heading-${i}`,
-      text: h.textContent?.trim() ?? '',
-      level: Number(h.tagName.slice(1)),
-    }))
-    .filter((t) => t.text)
+  // 关键：不要在这里过滤空标题。
+  // ArticleToc 会给真实 DOM 里 querySelectorAll('h1,h2,h3') 的第 i 个标题
+  // 补上 items[i].id，若这里把空标题剔掉，下标就会与真实 DOM 错位一格
+  // （正文中只要有 <h2></h2>，其后所有目录项都会跳错章节）。
+  return Array.from(doc.querySelectorAll('h1, h2, h3')).map((h, i) => ({
+    id: `toc-heading-${i}`,
+    text: h.textContent?.trim() ?? '',
+    level: Number(h.tagName.slice(1)),
+  }))
 }
 
 /**
@@ -70,23 +72,27 @@ export function ArticleToc({ items, contentRef }: { items: TocItem[]; contentRef
   }, [items])
 
   if (items.length === 0) return null
+  // 只渲染有文字的标题；空标题仍留在 items 里以维持与 DOM 的下标对齐
+  const visible = items.filter((item) => item.text)
+  if (visible.length === 0) return null
 
   return (
     <aside className="hidden lg:block">
-      <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto">
+      <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto rounded-xl border border-border bg-card/60 p-3">
         <p className="mb-2 flex items-center gap-1.5 px-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
           <ListTree className="h-3.5 w-3.5" /> 目录
         </p>
         <nav className="space-y-0.5 border-l border-border">
-          {items.map((item) => (
+          {visible.map((item) => (
             <a
               key={item.id}
               href={`#${item.id}`}
               style={{ paddingLeft: `${(item.level - 1) * 10 + 10}px` }}
-              className={`-ml-px block border-l-2 py-1 pr-2 text-xs leading-relaxed transition-colors ${
+              title={item.text}
+              className={`-ml-px block truncate border-l-2 py-1.5 pr-2 text-xs leading-relaxed transition-colors ${
                 activeId === item.id
                   ? 'border-accent font-medium text-accent'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
+                  : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
               }`}
             >
               {item.text}

@@ -31,6 +31,9 @@ func newTestUpdateService(t *testing.T, sourceDir string) *UpdateService {
 		UpdateDir:          filepath.Join(t.TempDir(), "update"),
 		UpdateDeployedFile: filepath.Join(t.TempDir(), "deployed-commit.json"),
 		UpdateWaitingAgent: true,
+		// 测试用的是 127.0.0.1 上的 httptest 服务器，而生产默认会拒绝
+		// 非公网目标（防借更新通道打内网），所以这里显式放行。
+		AllowPrivateHosts: true,
 	}, nil)
 	return svc
 }
@@ -805,7 +808,7 @@ func TestHTTPDownloadChecksumAndLength(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newHTTPClient(5*time.Second, "")
+	client := newHTTPClientWithGuard(5*time.Second, "", true)
 	dest := filepath.Join(t.TempDir(), "sub", "pkg.tar.gz")
 	res, err := client.download(context.Background(), server.URL+"/archive", dest, nil)
 	if err != nil {
@@ -831,7 +834,7 @@ func TestHTTPDownloadFailureCleansUp(t *testing.T) {
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "pkg.tar.gz")
-	client := newHTTPClient(5*time.Second, "")
+	client := newHTTPClientWithGuard(5*time.Second, "", true)
 	if _, err := client.download(context.Background(), server.URL, dest, nil); err == nil {
 		t.Fatal("404 应返回错误")
 	}
@@ -848,7 +851,7 @@ func TestHTTPDownloadDetectsTruncatedBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newHTTPClient(5*time.Second, "")
+	client := newHTTPClientWithGuard(5*time.Second, "", true)
 	dest := filepath.Join(t.TempDir(), "pkg.tar.gz")
 	if _, err := client.download(context.Background(), server.URL, dest, nil); err == nil {
 		t.Error("响应体被截断时应报错")

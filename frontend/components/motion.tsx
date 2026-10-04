@@ -1,20 +1,22 @@
-﻿'use client'
+'use client'
 
 import gsap from 'gsap'
 import { useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react'
 
-/** 鍏ㄧ珯缁熶竴缂撳姩锛堣繎浼煎師 easeOutExpo [0.16,1,0.3,1] 鐨勫熬娈电紦鍑猴級 */
+/** 全站统一缓动（近似原 easeOutExpo [0.16,1,0.3,1] 的尾段缓冲） */
 export const easeOut = 'expo.out'
 
-/** 灏婇噸绯荤粺銆屽噺灏戝姩鏁堛€嶅亸濂斤細鍛戒腑鏃舵墍鏈?GSAP 鍔ㄧ敾鑷姩璺宠繃鎴栫灛鏃跺畬鎴?*/
+/** 尊重系统「减少动效」偏好：命中时所有 GSAP 动画自动跳过或瞬时完成 */
 export const prefersReducedMotion = () =>
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
- * 鍏ュ満鍔ㄧ敾鍏滃簳锛氬姩鐢荤敱 rAF 閫愬抚鎺ㄨ繘锛岃嫢琚妭娴?涓柇浼氬仠鍦ㄩ€忔槑鎬佸鑷村唴瀹逛笉鍙
- * 锛堟浘澶嶇幇锛歰pacity 鍗″湪 0 涓嶅姩锛岃〃鐜颁负"鍐呭琚櫧鑹查伄鎸?锛夈€傝秴鏃跺悗寮哄埗娓呴櫎鍐呰仈鏍峰紡鎭㈠鍙銆? * 姝ｅ父鍔ㄧ敾鏃╁凡鎾斁瀹屾瘯锛屾澶勫彧鏄繚闄╋紝涓嶅奖鍝嶈鎰熴€? */
+ * 入场动画兜底：动画由 rAF 逐帧推进，若被节流中断会停在透明态导致内容不可见
+ * （曾复现：opacity 卡在 0 不动，表现为“内容被白色遮挡”）。超时后强制清除内联样式恢复可见。
+ * 正常动画早已播放完毕，此处只是保险，不影响观感。
+ */
 function revealFallback(el: HTMLElement, duration: number, delay: number) {
   const timer = setTimeout(
     () => {
@@ -31,18 +33,19 @@ function revealFallback(el: HTMLElement, duration: number, delay: number) {
 let gsapPatched = false
 
 /**
- * 寰幆鍔ㄧ敾缁熶竴绠＄悊锛氭棤闄愬惊鐜姩鐢伙紙repeat: -1锛夊湪椤甸潰涓嶅彲瑙佹椂鑷姩鏆傚仠銆? * 杩滅▼妗岄潰/鏃?GPU 鐜閲?transform 鍔ㄧ敾璧?CPU 鍚堟垚锛屽惊鐜姩鐢诲父椹绘槸涓昏鍗￠】婧愶紱
- * 鏍囩椤甸殣钘忥紙鍒囨崲/鏈€灏忓寲锛夋椂鏆傚仠锛屾仮澶嶆椂缁х画锛屼笉褰卞搷瑙傛劅銆? */
+ * 远程桌面/无 GPU 环境里 transform 动画走 CPU 合成，循环动画常是主要卡顿源；
+ * 标签页隐藏（切换/最小化）时暂停，恢复时继续，不影响观感。
+ */
 const loopingAnimations = new Set<gsap.core.Tween | gsap.core.Timeline>()
 
-/** 鍒涘缓寰幆鍔ㄧ敾骞剁撼鍏ュ叏灞€绠＄悊 */
+/** 创建循环动画并纳入全局管理 */
 export function createLoop<T extends gsap.core.Tween | gsap.core.Timeline>(create: () => T): T {
   const anim = create()
   loopingAnimations.add(anim)
   return anim
 }
 
-/** 瑙ｉ櫎寰幆鍔ㄧ敾鐧昏锛堢粍浠跺嵏杞?cleanup 閲岃皟鐢級 */
+/** 解除循环动画登记（组件卸载 cleanup 里调用） */
 export function releaseLoop(anim: gsap.core.Tween | gsap.core.Timeline | null | undefined) {
   if (anim) loopingAnimations.delete(anim)
 }
@@ -62,7 +65,10 @@ function bindLoopVisibility() {
 bindLoopVisibility()
 
 /**
- * 鍏ㄥ眬鍏滃簳琛ヤ竵锛氭帴绠″叏绔欐墍鏈?gsap.from / gsap.fromTo 鍏ュ満鍔ㄧ敾锛堝惈鍚勯〉闈㈣嚜缁樿皟鐢級銆? * 杩滅▼妗岄潰 / 娴忚鍣ㄧ獥鍙ｈ閬尅鏃?Chrome 浼氳妭娴?rAF锛宖ramer-motion 璧?WAAPI 涓嶅彈褰卞搷锛? * 鑰?GSAP 鏄?JS tween 閫愬抚鎺ㄨ繘鈥斺€斿叆鍦哄姩鐢讳細姘镐箙鍋滃湪閫忔槑鎬併€傝ˉ涓佷负姣忎釜浠庨€忔槑鎬? * 璧锋鐨?tween 娉ㄥ唽瓒呮椂鐪嬮棬鐙楋紝瓒呮椂鏈畬鎴愬嵆寮哄埗鎭㈠鍙銆? */
+ * 远程桌面 / 浏览器窗口被遮挡时，Chrome 会节流 rAF；framer-motion 走 WAAPI 不受影响，
+ * 而 GSAP 是 JS tween 逐帧推进——入场动画会永久停在透明态。补丁为每个从透明态
+ * 起步的 tween 注册超时看门狗，超时未完成即强制恢复可见。
+ */
 function patchEntranceAnimations() {
   if (gsapPatched || typeof gsap.from !== 'function') return
   gsapPatched = true
@@ -83,7 +89,7 @@ function patchEntranceAnimations() {
     }
     return undefined
   }
-  // 鍔ㄧ敾姝ｅ父缁撴潫鏃跺嵆鍙栨秷鐪嬮棬鐙楋紝閬垮厤瀹氭椂鍣ㄥ父椹诲埌瓒呮椂
+  // 动画正常结束时即取消看门狗，避免定时器空等到超时
   const withCancel = (tween: gsap.core.Tween, cancel?: () => void) => {
     if (!cancel) return tween
     const prev = tween.eventCallback('onComplete')
@@ -110,7 +116,8 @@ function patchEntranceAnimations() {
 patchEntranceAnimations()
 
 /**
- * 璇箟鏍囩鐨勫叆鍦哄姩鏁?hook锛氱粰宸叉湁鏍囩锛坔eader/aside/article/button 绛夛級鎸?ref 鍗冲彲銆? * 鐢ㄦ硶锛歝onst ref = useRef<HTMLElement>(null); useReveal(ref, { y: 16 })
+ * 语义标签的入场动效 hook：给已有标签（header/aside/article/button 等）挂 ref 即可。
+ * 用法：const ref = useRef<HTMLElement>(null); useReveal(ref, { y: 16 })
  */
 export function useReveal<T extends HTMLElement>(
   ref: React.RefObject<T | null>,
@@ -138,7 +145,8 @@ export function useReveal<T extends HTMLElement>(
 }
 
 /**
- * 椤甸潰杩囨浮锛氭寕杞芥椂娣″叆銆? */
+ * 页面过渡：挂载时淡入。
+ */
 export function PageTransition({ children, className }: { children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -154,7 +162,9 @@ export function PageTransition({ children, className }: { children: ReactNode; c
 }
 
 /**
- * 閫氱敤鍏ュ満鍔ㄦ晥锛歰pacity 0鈫? + 鍙€変綅绉?缂╂斁銆? * 鏇夸唬 motion.div 鐨?initial/animate/transition銆? */
+ * 通用入场动效：opacity 0→1 + 可选位移/缩放。
+ * 替代 motion.div 的 initial/animate/transition。
+ */
 export function Reveal({
   children,
   className,
@@ -192,7 +202,9 @@ export function Reveal({
 }
 
 /**
- * 鍒楄〃 stagger锛氭寕杞芥椂瀛愬厓绱犱緷娆℃贰鍏ヤ笂绉汇€? * 涓?framer 鐨?StaggerList/StaggerItem variants 鐢ㄦ硶涓€鑷达紝StaggerItem 鐜颁负绾€忎紶 div銆? */
+ * 列表 stagger：挂载时子元素依次淡入上移。
+ * 与 framer 的 StaggerList/StaggerItem variants 用法一致，StaggerItem 现为纯透传 div。
+ */
 export function StaggerList({
   children,
   className,
@@ -238,7 +250,7 @@ export function StaggerItem({ children, className }: { children: ReactNode; clas
   return <div className={className}>{children}</div>
 }
 
-/** 鎮仠杞诲井涓婃诞锛堟浛浠?HoverLift / whileHover={{ y: -4 }}锛?*/
+/** 悬停轻微上浮（替代 HoverLift / whileHover={{ y: -4 }}） */
 export function HoverLift({
   children,
   className,
@@ -267,7 +279,7 @@ export function HoverLift({
   )
 }
 
-/** 鍙洿鎺?spread 鍒?button/link 涓婄殑鎮仠鏀惧ぇ + 鎸夊帇缂╂斁锛堟浛浠?whileHover/whileTap锛?*/
+/** 可直接 spread 到 button/link 上的悬停放大 + 按压缩放（替代 whileHover/whileTap） */
 export const hoverTapScale = {
   onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
     if (prefersReducedMotion()) return
@@ -287,7 +299,7 @@ export const hoverTapScale = {
   },
 } satisfies HTMLAttributes<HTMLElement>
 
-/** 鍙洿鎺?spread 鍒颁换鎰忓厓绱犱笂鐨勬偓鍋滀笂娴紙鏇夸唬 whileHover={{ y: -4 }}锛?*/
+/** 可直接 spread 到任意元素上的悬停上浮（替代 whileHover={{ y: -4 }}） */
 export const hoverLift = {
   onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
     if (prefersReducedMotion()) return
@@ -299,7 +311,7 @@ export const hoverLift = {
   },
 } satisfies HTMLAttributes<HTMLElement>
 
-/** 杩涘叆瑙嗗彛鏃舵贰鍏ヤ竴娆★紙鏇夸唬 whileInView + viewport={{ once: true }}锛?*/
+/** 进入视口时淡入一次（替代 whileInView + viewport={{ once: true }}） */
 export function InView({
   children,
   className,
@@ -342,8 +354,10 @@ export function InView({
 }
 
 /**
- * 鏉′欢娓叉煋 + GSAP 杩涘嚭鍦哄姩鐢伙紙鏇夸唬 AnimatePresence + motion.div锛夈€? * - show 鐢?false鈫抰rue锛氱珛鍗虫寕杞藉苟鎾斁鍏ュ満
- * - show 鐢?true鈫抐alse锛氭挱鏀鹃€€鍦猴紝鍔ㄧ敾缁撴潫鍚庤嚜鍔ㄥ嵏杞? */
+ * 条件渲染 + GSAP 进出场动画（替代 AnimatePresence + motion.div）。
+ * - show 由 false→true：立即挂载并播放入场
+ * - show 由 true→false：播放退场，动画结束后自动卸载
+ */
 export function Presence({
   show,
   children,
@@ -409,7 +423,7 @@ export function Presence({
       // 入场看门狗由全局 patch（gsap.fromTo）统一注册，动画完成即取消
     } else {
       if (prefersReducedMotion()) {
-        // 寤惰繜涓€甯у嵏杞斤細寮傛鍥炶皟閲?setState锛岄伩寮€ effect 鍐呭悓姝?setState
+        // 延迟一帧卸载：异步回调里 setState，避开 effect 内同步 setState
         gsap.delayedCall(0, () => setMounted(false))
         return
       }
@@ -450,7 +464,7 @@ export function Presence({
   )
 }
 
-/** 鏁板瓧婊氬姩鍔ㄧ敾锛堟浛浠?framer-motion 鐨?animate() 璁℃暟锛?*/
+/** 数字滚动动画（替代 framer-motion 的 animate() 计数） */
 export function CountUp({ value, duration = 0.9 }: { value: number; duration?: number }) {
   const ref = useRef<HTMLSpanElement>(null)
   useEffect(() => {
@@ -472,7 +486,7 @@ export function CountUp({ value, duration = 0.9 }: { value: number; duration?: n
         el.textContent = String(value)
       },
     })
-    // 鍏滃簳锛歵ween 琚腑鏂椂锛坮AF 涓嶆帹杩涳級瓒呮椂鐩存帴钀芥渶缁堝€硷紝閬垮厤鏁板瓧鍋滃湪 0
+    // 兜底：tween 被中断时（rAF 不推进）超时直接落最终值，避免数字停在 0
     const timer = setTimeout(() => {
       el.textContent = String(value)
     }, (duration + 1) * 1000)

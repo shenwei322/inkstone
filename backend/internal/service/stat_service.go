@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/shenwei/inkstone/backend/internal/model"
@@ -35,6 +36,14 @@ func NewStatService(stats *repository.StatRepository, settings *SettingsService)
 	return s
 }
 
+// droppedSamples 统计因队列积压而丢弃的流量样本数。
+// 流量统计可以丢（不应拖慢请求），但必须可观测——否则指标偏低时无从判断
+// 是「真没流量」还是「队列一直满」。
+var droppedSamples atomic.Int64
+
+// DroppedSamples 返回进程启动以来被丢弃的样本数。
+func DroppedSamples() int64 { return droppedSamples.Load() }
+
 // Record queues a traffic sample; it never blocks the request path.
 func (s *StatService) Record(bytesIn, bytesOut int64, clientIP string) {
 	task := recordTask{
@@ -49,15 +58,33 @@ func (s *StatService) Record(bytesIn, bytesOut int64, clientIP string) {
 	select {
 	case s.queue <- task:
 	default:
-		// 队列满时丢弃，避免拖慢请求
+		// 队列满时丢弃，避免拖慢请求；每 500 条打一次日志便于发现异常
+		if n := droppedSamples.Add(1); n == 1 || n%500 == 0 {
+			log.Printf("[stats] 队列已满，累计丢弃 %d 个流量样本（数据库写入可能过慢）", n)
+		}
 	}
 }
 
+// worker 逐个消费流量样本队列。
+//
+// ⚠️ 单次写入必须单独 recover（见 recordSafely）：这里是 `for range`，
+// 若 panic 逃出循环，整个统计 worker 会静默死亡——流量曲线从此停止更新，
+// 且没有任何报错提示。
 func (s *StatService) worker() {
 	for task := range s.queue {
-		if err := s.stats.Record(task.date, task.bytesIn, task.bytesOut, task.visitorHash); err != nil {
-			log.Printf("[stats] record failed: %v", err)
+		s.recordSafely(task)
+	}
+}
+
+// recordSafely 写入一条流量样本，panic 只影响这一条。
+func (s *StatService) recordSafely(task recordTask) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[stats] 记录流量样本时 panic 已恢复（该条丢失，队列继续消费）: %v", r)
 		}
+	}()
+	if err := s.stats.Record(task.date, task.bytesIn, task.bytesOut, task.visitorHash); err != nil {
+		log.Printf("[stats] record failed: %v", err)
 	}
 }
 

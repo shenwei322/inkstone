@@ -29,10 +29,30 @@ type powChallengeResponse struct {
 	TTLSeconds int    `json:"ttl_seconds"` // 挑战有效期（秒）
 }
 
+// powChallengeRequest 是签发请求体，字段全部可选——老版本前端不带 body
+// 也照常签发（此时挑战不绑定场景，语义与加固前一致）。
+type powChallengeRequest struct {
+	// Scene 声明这次挑战将用于哪个业务场景（login/register/comment）。
+	// 带上它以后，该挑战只能在同名场景使用，防止「用便宜场景领挑战、
+	// 拿去打敏感场景」。不带则不绑定。
+	Scene string `json:"scene"`
+}
+
 // Challenge handles POST /api/v1/pow/challenge — 签发一个 POW 挑战。
 // 限流由路由层 middleware.IPRateLimit 负责（见 main.go 装配）。
 func (h *PowHandler) Challenge(c *gin.Context) {
-	challenge, difficulty, memoryMB, rounds, minEvents, ttlSeconds, err := h.pow.Issue()
+	// 场景来源优先级：请求体 scene > 请求头 X-Pow-Scene。
+	// 两者都没有时按「不绑定」处理，保证旧前端行为不变。
+	// body 解析失败不报错：签发接口对格式宽容，宁可少一层绑定也不能让
+	// 用户卡在拿不到挑战上。
+	var req powChallengeRequest
+	_ = c.ShouldBindJSON(&req)
+	scene := req.Scene
+	if scene == "" {
+		scene = c.GetHeader("X-Pow-Scene")
+	}
+
+	challenge, difficulty, memoryMB, rounds, minEvents, ttlSeconds, err := h.pow.IssueFor(scene)
 	if err != nil {
 		// 挑战池满等异常：提示繁忙，让用户稍后重试（非配置错误）
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人机验证服务繁忙，请稍后重试"})

@@ -25,6 +25,13 @@ type Config struct {
 	UploadDir    string
 	FilesDir     string
 
+	// TrustedProxies 是允许其转发头（X-Forwarded-For / X-Real-IP）被采信的
+	// 代理网段（CIDR）。只有直连对端落在这些网段内，转发头才会被用来判定
+	// 访客 IP——否则一律用 TCP 对端地址。默认覆盖本机与 RFC1918 私网，即
+	// 「同机 / 同容器网络的 Nginx 反代」这一标准部署；公网直连部署时伪造的
+	// XFF 不会被采信。可用 TRUSTED_PROXIES 覆盖（逗号分隔 CIDR）。
+	TrustedProxies []string
+
 	// 在线更新系统（后台「系统更新」页）
 	UpdateEnabled      bool   // 总开关（UPDATE_ENABLED）
 	UpdateRepoURL      string // 上游仓库（UPDATE_REPO_URL）
@@ -33,6 +40,7 @@ type Config struct {
 	UpdateReleasesAPI  string // Releases 最新版本接口模板（默认 {UPDATE_GITHUB_API}/repos/{owner}/{name}/releases/latest）
 	UpdateImageAsset   string // 镜像包资产名匹配（正则；默认 inkstone-images-.*\.tar$）
 	UpdateImageMaxMB   int64  // 镜像包大小上限（MB，默认 2048）
+	UpdateChecksum     string // 期望的下载内容 SHA-256（十六进制，可空）。非空则强制校验，不一致直接拒绝安装
 	UpdateVersionFile  string // 部署版本记录文件（默认自动探测 data/deployed-version.json）
 	UpdateComposeFile  string // 镜像更新使用的 compose 文件（默认自动探测）
 	UpdateMirror       string // 源码包镜像地址模板，支持 {repo} {owner} {name} {ref} {commit} {short} 占位
@@ -46,6 +54,15 @@ type Config struct {
 	UpdateDeployedFile string // 部署记录文件路径（默认自动探测 data/deployed-commit.json）
 	UpdateRemote       string // git remote 名：写入待更新清单，供宿主代理脚本使用
 	UpdateWaitingAgent bool   // true=替换源码后等待宿主代理重建；false=本机直接重建
+	// AllowPrivateHosts 放开对更新/镜像地址的内网访问限制。
+	//
+	// 默认 false：下载链路会校验实际拨号地址，拒绝回环/私网/链路本地
+	// （含云元数据 169.254.169.254）等。理由是下载地址可能来自上游 API
+	// 响应（Release 资产的 browser_download_url）或第三方镜像，一旦上游被
+	// 污染/中间人，就能借更新通道让后端请求内网服务。
+	//
+	// 只在「更新源就是内网自建服务器」时置为 true，并清楚这会关掉上述防护。
+	AllowPrivateHosts bool
 }
 
 // defaultUpdateMirror 是默认源码包镜像：gh-proxy 的格式是「代理前缀 + 完整 GitHub 地址」，
@@ -90,6 +107,43 @@ func getEnvInt(key string, fallback int64) int64 {
 	return n
 }
 
+// defaultTrustedProxies 是未显式配置 TRUSTED_PROXIES 时采信的代理网段。
+//
+// 只包含本机与私网：标准部署是同一台机器（或同一个 compose 网络）里的
+// Nginx 反代，直连对端必然落在这些网段内。反向的取舍是——公网直连部署时
+// 对端是公网地址，不在名单里，于是客户端自带的 X-Forwarded-For 被忽略，
+// 限流无法被伪造头绕过。这正是我们要的默认行为。
+var defaultTrustedProxies = []string{
+	"127.0.0.0/8",    // IPv4 本机
+	"::1/128",        // IPv6 本机
+	"10.0.0.0/8",     // RFC1918
+	"172.16.0.0/12",  // RFC1918（含 Docker 默认网段 172.17/16）
+	"192.168.0.0/16", // RFC1918
+	"fc00::/7",       // IPv6 ULA
+}
+
+// parseTrustedProxies 解析 TRUSTED_PROXIES（逗号分隔 CIDR）。空串用默认值；
+// 显式写成 "none" 表示「不信任任何代理」，一律按 TCP 对端判定。
+func parseTrustedProxies(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return append([]string(nil), defaultTrustedProxies...)
+	}
+	if strings.EqualFold(raw, "none") {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return append([]string(nil), defaultTrustedProxies...)
+	}
+	return out
+}
+
 func Load() *Config {
 	filesDir := getEnv("FILES_DIR", "./data/files")
 	uploadDir := getEnv("UPLOAD_DIR", "./data/uploads")
@@ -127,6 +181,8 @@ func Load() *Config {
 		UploadDir:    uploadDir,
 		FilesDir:     filesDir,
 
+		TrustedProxies: parseTrustedProxies(os.Getenv("TRUSTED_PROXIES")),
+
 		UpdateEnabled:      getEnv("UPDATE_ENABLED", "true") == "true",
 		UpdateRepoURL:      getEnv("UPDATE_REPO_URL", "https://github.com/shenwei234/inkstone"),
 		UpdateBranch:       getEnv("UPDATE_BRANCH", "main"),
@@ -134,6 +190,7 @@ func Load() *Config {
 		UpdateReleasesAPI:  getEnv("UPDATE_RELEASES_API", ""),
 		UpdateImageAsset:   getEnv("UPDATE_IMAGE_ASSET", defaultImageAssetPattern),
 		UpdateImageMaxMB:   getEnvInt("UPDATE_IMAGE_MAX_MB", defaultImageMaxMB),
+		UpdateChecksum:     strings.ToLower(strings.TrimSpace(strings.ReplaceAll(getEnv("UPDATE_CHECKSUM", ""), "sha256:", ""))),
 		UpdateVersionFile:  getEnv("UPDATE_VERSION_FILE", ""),
 		UpdateComposeFile:  getEnv("UPDATE_COMPOSE_FILE", ""),
 		UpdateMirror:       getEnv("UPDATE_MIRROR", defaultUpdateMirror),
@@ -147,6 +204,9 @@ func Load() *Config {
 		UpdateDeployedFile: getEnv("UPDATE_DEPLOYED_FILE", ""),
 		UpdateRemote:       getEnv("UPDATE_REMOTE", "origin"),
 		UpdateWaitingAgent: getEnv("UPDATE_WAITING_AGENT", "true") == "true",
+		// 默认 false：下载链路校验实际拨号地址，拒绝内网/回环/元数据地址。
+		// 仅当更新源本身就是内网自建服务器时才显式置 true。
+		AllowPrivateHosts: getEnv("UPDATE_ALLOW_PRIVATE_HOSTS", "false") == "true",
 	}
 }
 

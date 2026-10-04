@@ -75,9 +75,20 @@ const (
 	SettingPowOnRegister = "pow_on_register" // 注册需人机验证
 	SettingPowOnComment  = "pow_on_comment"  // 评论/发表需人机验证
 	// POW v2：本地资源参数（签发时快照进挑战，服务端只校验一次）
-	SettingPowMemoryMB  = "pow_memory_mb"  // 内存表大小 MB（1-32，默认 8）：每次验证实打实占用的本地内存带宽
-	SettingPowRounds    = "pow_rounds"     // 表查找-混合轮数（1-16，默认 4）：每轮一次随机查表 + 一次 SHA-256
-	SettingPowMinEvents = "pow_min_events" // 需采集的本地交互事件数（0-10，默认 3；0=关闭 signal 校验）
+	//
+	// 这两个参数的取舍由实测标定决定（见 pow_calibrate_test.go）：
+	// 建表是「每挑战一次」的开销，而服务端每次校验都要重建一遍表；
+	// 轮数则乘在每一个候选 nonce 上，客户端要付 16^difficulty 次、服务端只付 1 次。
+	// 也就是说 memoryMB 的成本几乎全压在服务端，却几乎不增加攻击者的搜索成本。
+	//
+	// 实测（difficulty=4，每次 40 个挑战取均值）：
+	//   8MB / 4 轮：服务端 2.09 ms，客户端 ~60 ms
+	//   1MB / 12 轮：服务端 0.22 ms（快 9.7 倍），客户端 ~60 ms，且攻击者每个
+	//                候选的成本从 5 次 SHA-256 提高到 13 次（贵 2.6 倍）
+	// 因此默认值取「小表 + 多轮」：服务端更便宜、攻击者更贵。
+	SettingPowMemoryMB  = "pow_memory_mb"  // 内存表大小 MB（1-32，默认 1）：建表开销几乎全落在服务端，不宜调大
+	SettingPowRounds    = "pow_rounds"     // 表查找-混合轮数（1-16，默认 12）：每轮一次随机查表 + 一次 SHA-256，是攻击者每次尝试的真实成本
+	SettingPowMinEvents = "pow_min_events" // 需采集的本地交互事件数（0-10，默认 3；0=关闭 signal 校验）。注意：signal 只是 UX 门槛，不构成对机器人的防护
 
 	// 站点外观
 	SettingSiteWallpaper    = "site_wallpaper"    // 全站壁纸图片地址
@@ -152,9 +163,11 @@ var settingDefaults = map[string]string{
 	SettingPowOnLogin:    "true",
 	SettingPowOnRegister: "false",
 	SettingPowOnComment:  "false",
-	// POW v2 本地资源参数：默认 8MB 表 + 4 轮查找 + 3 个交互事件
-	SettingPowMemoryMB:  "8",
-	SettingPowRounds:    "4",
+	// POW v2 本地资源参数：默认 1MB 表 + 12 轮查找 + 3 个交互事件。
+	// 「小表 + 多轮」的依据见上面的标定注释与 pow_calibrate_test.go：
+	// 表大小几乎只增加服务端成本，轮数才真正抬高攻击者的每次尝试成本。
+	SettingPowMemoryMB:  "1",
+	SettingPowRounds:    "12",
 	SettingPowMinEvents: "3",
 
 	SettingSiteWallpaper:      "",
@@ -266,12 +279,22 @@ func (s *SettingsService) IntValue(key string, fallback int) int {
 	}
 	n := 0
 	neg := false
+	// 超长数字串直接视为配置异常：int 溢出会回绕成负数或乱值，
+	// 虽然上层对 POW/限流参数都有 clamp 兜底，但在这里挡掉更干净。
+	const maxDigits = 18
 	for i, ch := range v {
 		if i == 0 && ch == '-' {
 			neg = true
 			continue
 		}
 		if ch < '0' || ch > '9' {
+			return fallback
+		}
+		digitCount := i
+		if neg {
+			digitCount = i - 1
+		}
+		if digitCount >= maxDigits {
 			return fallback
 		}
 		n = n*10 + int(ch-'0')
@@ -321,6 +344,15 @@ func (s *SettingsService) Update(payload map[string]any) error {
 		if lapHiddenKeys[key] && strings.TrimSpace(value) == "" {
 			continue
 		}
+		// 侧边栏「自定义 HTML」小工具会被前台直接 innerHTML 注入到每个访客
+		// 页面，必须在写入前消毒（这是设置项里唯一的 HTML 通道）。
+		if key == SettingSidebarWidgets {
+			sanitized, err := sanitizeSidebarWidgets(value)
+			if err != nil {
+				return NewValidationError("侧边栏小工具配置格式无效")
+			}
+			value = sanitized
+		}
 		setting := model.Setting{Key: key, Value: value, UpdatedAt: time.Now()}
 		if err := s.db.Save(&setting).Error; err != nil {
 			return err
@@ -330,6 +362,44 @@ func (s *SettingsService) Update(payload map[string]any) error {
 	s.cacheTime = time.Time{}
 	s.mu.Unlock()
 	return nil
+}
+
+// sanitizeSidebarWidgets 净化侧边栏小工具 JSON 里的 HTML 内容。
+//
+// 只处理 type=="html" 的条目（其余类型是纯文本/URL 字段，不走 innerHTML）；
+// 非数组或非法 JSON 时返回错误，避免把坏数据写进设置表。
+func sanitizeSidebarWidgets(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return value, nil
+	}
+	var widgets []map[string]any
+	if err := json.Unmarshal([]byte(value), &widgets); err != nil {
+		return "", err
+	}
+	changed := false
+	for _, w := range widgets {
+		typ, _ := w["type"].(string)
+		if typ != "html" {
+			continue
+		}
+		content, ok := w["content"].(string)
+		if !ok || content == "" {
+			continue
+		}
+		if sanitized := SanitizeWidgetHTML(content); sanitized != content {
+			w["content"] = sanitized
+			changed = true
+		}
+	}
+	if !changed {
+		// 内容没变时原样返回，保持存储格式稳定
+		return value, nil
+	}
+	raw, err := json.Marshal(widgets)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // Public returns non-sensitive settings for the frontend.

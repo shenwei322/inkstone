@@ -419,9 +419,17 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 
 ### 文章详情（`app/posts/[slug]/page.tsx`）
 三层卡片结构：
-1. **正文卡片**：分类 + 标题 + 元信息 + 标签 + 正文（`prose` 样式）
-2. **互动卡片**：点赞 / 收藏 / 分享（`ArticleShare`）/ 返回
-3. **评论卡片**：输入框 + 评论列表
+1. **标题卡（`header`）**：分类徽章 + `w-1.5` accent 竖线标题（`text-balance`）+ 元信息栏；右上角 `bg-accent/5 blur-3xl` 装饰光斑
+   （**只做 opacity，不做 transform**——blur 元素每帧 transform 重绘模糊区，CPU 合成下极重）
+2. **正文卡**：封面（`figure` 占满卡宽 `aspect-video`）+ 正文（`proseBody`）+ 底部标签行
+3. **互动卡**：点赞 / 收藏 / 分享（`ArticleShare`）/ 返回
+4. **评论卡**：输入框 + 评论列表
+
+元信息栏：作者首字母圆形头像 + 用户名 + `·` 分隔 + 日期 + 阅读量；分隔点在窄屏 `hidden`
+（`flex-wrap` 折行后不留孤立圆点），`aria-hidden` 不给屏幕阅读器念。
+
+评论列表项：`group` + `hover:border-accent/25`，删除按钮 `opacity-0` → `group-hover:opacity-100`
+（`focus-visible:opacity-100` 保证键盘可达）——平时不干扰阅读，悬停才出现。
 
 宽度：`max-w-4xl`（无侧栏）/ `max-w-7xl`（有侧栏，两列）
 
@@ -443,7 +451,7 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 `group-hover:-translate-y-0.5` 微上移（两个元素互不冲突）。
 
 ### 站点 head（`components/site-head.tsx`）+ 站点 title（`app/layout.tsx` 的 `generateMetadata`）
-- **favicon**：`site-head.tsx` 只渲染一个 `<link rel="icon">`（React 19 metadata hoist 到 head），`site_favicon` 有值用自定义图标、为空回退 `/icon.svg`（`public/icon.svg`）。两点硬约束：①**必须渲染在 `SiteConfigProvider` 内层**（`app/layout.tsx` 的 `<Providers>` 内、`<MaintenanceGate>` 前），在 Provider 外 `useSiteConfig()` 只拿到 `DEFAULT_CONFIG`→永远回退默认图标；②**`app/icon.svg`、`app/favicon.ico` 已删除**（Next file convention 会额外注入静态 icon link，与动态 link 并存互相抢占，实测 head 出现 3 个 rel=icon）。
+- **favicon**：`site-head.tsx` 只渲染一个 `<link rel="icon">`（React 19 metadata hoist 到 head），`site_favicon` 有值用自定义图标、为空回退 `/icon.svg`（`public/icon.svg`）。两点硬约束：①**必须渲染在 `SiteConfigProvider` 内层**（`app/layout.tsx` 的 `<Providers>` 内、`<MaintenanceGate>` 前），在 Provider 外 `useSiteConfig()` 只拿到 `DEFAULT_CONFIG`→永远回退默认图标；②**`app/icon.svg`、`app/favicon.ico` 必须保持删除**（Next file convention 会额外注入静态 icon link，与动态 link 并存互相抢占，实测 head 出现 3 个 rel=icon）。**2026-11 复现过**：文档当时已写「已删除」，但这两个文件实际仍在 git 跟踪中（`git ls-files frontend/app/icon.svg frontend/app/favicon.ico` 有输出），上传 favicon 后 head 里 3 个 rel=icon 并存 → 自定义图标被静态图标抢占。删除后重新 build，head 收敛为 1 个 `<link rel="icon" href="/icon.svg">`。**改动后必须用构建产物自查**：`[regex]::Matches((Get-Content .next/server/app/admin/settings.html -Raw), '<link rel="icon"[^>]*>')` 应恰好命中 1 个（`_global-error.html` 为 0 属正常，错误页不挂业务组件树）。
 - **站点 title/description**：`app/layout.tsx` 用 `export async function generateMetadata()` fetch `${NEXT_PUBLIC_API_URL}/site-config` 取 `site_name`/`site_description`，`next: { revalidate: 30 }`（与后端 settings 30s 缓存对齐）+ try/catch 兜底。**不要**在 SiteHead 里渲染 `<title>`（React 19 hoist title 不复用 Next 注入的节点→多个 title 而 Chrome 只读第一个），**也不要**在 context 里 `document.title =`（会被 Next metadata 管理覆盖，实测 navbar 已显示新名而 title 不变）。副作用：全站变为 **ISR 30s**。
 - **不要再在 site-config-context 里用 querySelector/appendChild 改 favicon**——运行时 DOM 操作会被 React 19 metadata 管理覆盖/清理，后台改了前台不生效（踩过）。
 
@@ -517,9 +525,33 @@ Tailwind 中直接用 `bg-card`、`text-muted-foreground`、`border-border`、`t
 ### 正文排版（`lib/ui.ts` 的 `proseBody`）
 文章正文（`app/posts/[slug]`、独立页 `app/p/[slug]`）统一用 `proseBody` 常量，**不要再手写 prose 类串**。约定：
 - `prose-lg` + `prose-p:leading-[1.8]` + `text-pretty`：中文长文阅读舒适区
+- 段间距用 **em**（`prose-p:my-[1.1em]`）而非固定 rem：标题/字号缩放时段落节奏同步缩放
 - `prose-headings:scroll-mt-24`：目录锚点跳转不被 sticky 导航遮挡
-- h2 加分隔线、引用浅底色圆角、图片边框阴影、代码块描边：结构层次
+- h1/h2/h3/h4 层递字号 + `prose-h2:border-b` 分隔线、引用浅底色圆角、图片边框阴影、代码块描边：结构层次
 - `.prose table` 的框线/表头底色/斑马纹在 `globals.css` 单独定制；`::selection` 用 accent 底色
+
+**`.prose-reading` 标记类**（`proseBody` 里紧跟在 `prose` 后）：`proseBody` 目前只被文章详情与独立页引用，
+但**全站还有三处裸 `prose` 容器**（`markdown-editor.tsx` / `rich-editor.tsx` / `article-preview.tsx` 的编辑器预览），
+它们共用 `@tailwindcss/typography` 的 `.prose` 基础样式。因此**只想作用于文章正文的增强样式一律挂 `.prose-reading`**，
+直接写 `.prose xxx` 会连后台编辑区一起改：
+- `max-width: 74ch` + `margin-inline: auto`：比 typography 默认 65ch 略宽，减少宽卡片里的孤行
+- `h2`/`h3` 左侧 accent 竖线（`::before` 绘制，h3 更细更淡）：与文章头部视觉语言一致，且不占布局、不影响目录锚点 id
+- 首段 `> p:first-of-type` 轻微放大 + 提亮：形成「导语」观感
+- 外链 `a[href^="http"]::after` 加 `↗` 箭头提示会跳站外
+
+> 注意：`.prose-reading` 与 `max-w-none` 同为单类选择器（specificity 相同），
+> 靠**源码顺序**决定胜负——`globals.css` 里 `@import "tailwindcss"` 在最前，故这些规则写在文件后段即生效。
+
+### 文章列表卡片（`app/home-client.tsx` 的 `ArticleCard`）
+- 卡片用 `flex-col`（窄屏）/ `sm:flex-row`（宽屏，左封面 176×112）；封面 `object-cover` 悬停 `scale-110`
+- 顶部 accent→purple 渐变细条：`origin-left scale-x-0` → `group-hover:scale-x-100`
+  （**只做 transform 不做 width 动画**，避免每帧 layout 重排）
+- 右侧内容区 `flex flex-col`，元信息行 `sm:mt-auto sm:pt-4`：宽屏时元信息贴卡片底部，多张卡片高度对齐
+- 元信息：作者头像（首字母圆形）+ 用户名 · 日期 + 阅读量；标签贴右（`ml-auto`，仅 `sm` 以上显示，最多 3 个）
+
+### 文章目录（`components/article-toc.tsx`）外观
+目录卡片：`rounded-xl border border-border bg-card/60 p-3` 半透明卡 + `sticky top-24`；
+条目 `truncate` + `title` 全文（长标题不撑破侧栏），高亮项 `border-accent text-accent`，悬停补 `border-border`。
 
 ### 深色模式
 全部用 `dark:` 前缀，不需要额外配置（跟随系统）。

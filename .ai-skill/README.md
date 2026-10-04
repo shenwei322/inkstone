@@ -26,6 +26,17 @@
 | 理解验证码机制 | `backend.md` 的 CaptchaService + `frontend.md` 的 Captcha 组件 |
 | 理解权限系统 | `SKILL.md` 关键事实 + `backend.md` 中间件详解 |
 
+## 交流语言规范（DSH skill）
+
+本仓库要求 AI **思考和回复全部用简体中文**。该规则由 DSH 项目级 skill 强制：
+
+- 路径：`.dsh/skills/inkstone-chinese-only/SKILL.md`
+- 机制：DSH 的 `dsh-skill-filesystem` 提供方会自动扫描 `<项目根>/.dsh/skills/`（rank 100），**无需注册、无需重启**，改动即时生效
+- 生效方式：目录 bundle（`权限/<name>/SKILL.md`）或平铺文件（`<name>.md`），frontmatter 必填 kebab-case 的 `name` 与 `description`
+- 注意：只发现**一层**目录，嵌套的 `**/SKILL.md` 不会被识别；`name` 非 kebab-case 会被静默丢弃
+
+改动交流语言规范时，只需编辑该 skill 文件，不必改本文档。
+
 ## 项目速览
 
 - **定位**：多用户博客平台（WordPress 替代品，中文优先）

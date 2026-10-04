@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { CheckCircle2, ShieldCheck } from 'lucide-react'
 import { useSiteConfig } from './site-config-context'
 import { useIsMounted } from '@/lib/use-mounted'
+import { createDeferred } from '@/lib/deferred'
 import type { GeetestCredential } from '@/lib/api'
 
 /** 极验 gt4.js 验证实例暴露的最小接口 */
@@ -32,6 +33,8 @@ export type GeetestScene = 'login' | 'register' | 'comment'
 interface Pending {
   resolve: (v: GeetestCredential) => void
   reject: (e: Error) => void
+  /** 自身 Promise：run() 被并发调用时复用它，避免覆盖后永远不 settle */
+  promise: Promise<GeetestCredential>
 }
 
 const INIT_RETRY_MS = 50
@@ -170,14 +173,19 @@ export function useGeetestCaptcha(scene: GeetestScene) {
   }, [open, closeDialog])
 
   const run = useCallback((): Promise<GeetestCredential> => {
+    // 并发调用复用同一个 pending：直接覆盖 pendingRef.current 会让被覆盖的
+    // Promise 永远不 settle，其 await 永久挂起（提交按钮卡在 loading）。
+    const existing = pendingRef.current
+    if (existing) return existing.promise
+
     const captcha = instanceRef.current
     if (!captcha) {
       return Promise.reject(new Error('人机验证组件未加载完成，请刷新页面后重试'))
     }
-    return new Promise((resolve, reject) => {
-      pendingRef.current = { resolve, reject }
-      setOpen(true)
-    })
+    const d = createDeferred<GeetestCredential>()
+    pendingRef.current = { resolve: d.resolve, reject: d.reject, promise: d.promise }
+    setOpen(true)
+    return d.promise
   }, [])
 
   // 弹窗容器常驻 DOM（display 切换显隐）：极验入口挂载后不能重复 appendTo，

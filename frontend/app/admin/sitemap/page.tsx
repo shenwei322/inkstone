@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Check,
@@ -24,6 +24,14 @@ import { inputClass } from '@/lib/ui'
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const notify = useNotify()
   const [done, setDone] = useState(false)
+  // 定时器句柄要跟踪：复制后 1.5s 内卸载组件，回调会向已卸载组件 setState
+  const timerRef = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    },
+    [],
+  )
   return (
     <button
       type="button"
@@ -32,7 +40,11 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
         try {
           await navigator.clipboard.writeText(text)
           setDone(true)
-          window.setTimeout(() => setDone(false), 1500)
+          if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+          timerRef.current = window.setTimeout(() => {
+            setDone(false)
+            timerRef.current = null
+          }, 1500)
           notify.success('已复制到剪贴板')
         } catch {
           notify.error('复制失败，请手动选择复制')

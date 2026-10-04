@@ -22,6 +22,21 @@ func NewAdminService(users *repository.UserRepository, articles *repository.Arti
 	return &AdminService{users: users, articles: articles}
 }
 
+// DeleteUserWithArticles 删除用户及其全部文章（单事务，保证一致性）。
+// handler 不再分别调用两个 repo——那会产生「文章已删、用户还在」的中间态。
+func (s *AdminService) DeleteUserWithArticles(id uint) error {
+	return s.users.DeleteWithArticles(id)
+}
+
+// UpdateUserRole 修改角色，并自增令牌代次让旧令牌里的角色声明立即失效
+// （Auth 中间件已以库中角色为准，这里是纵深防御）。
+func (s *AdminService) UpdateUserRole(id uint, role string) error {
+	if role != model.RoleAdmin && role != model.RoleUser {
+		return NewValidationError("无效的角色值")
+	}
+	return s.users.UpdateRole(id, role)
+}
+
 type Stats struct {
 	TotalUsers     int64 `json:"total_users"`
 	TotalArticles  int64 `json:"total_articles"`
@@ -179,7 +194,8 @@ func (s *AdminService) UpdateUser(id uint, input UpdateUserInput) (*model.User, 
 		if err != nil {
 			return nil, err
 		}
-		if err := s.users.UpdatePasswordHash(id, string(hash)); err != nil {
+		// 管理员重置密码同样作废该用户已签发的全部令牌
+		if err := s.users.UpdatePasswordHashAndRevoke(id, string(hash)); err != nil {
 			return nil, err
 		}
 	}

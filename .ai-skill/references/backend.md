@@ -100,13 +100,15 @@ middleware.Auth(tokens, userStatusOK)
 ```
 - 解析 `Authorization: Bearer <token>`
 - 校验 JWT 有效性 + 类型必须是 `access`
-- `userStatusOK` 回调**实时查库**校验用户未被封禁/删除（避免封禁后旧 token 仍可用），签名 `func(id uint) (username string, ok bool)`；返回的用户名写入 context 供操作日志使用
+- `userStatusOK` 回调**实时查库**校验用户未被封禁/删除（避免封禁后旧 token 仍可用），签名 `func(id uint) (middleware.UserStatus, bool)`；返回的**用户名与角色**会覆盖 token 里的同名 claim
+  - ⚠️ **角色必须来自数据库**：若沿用 JWT 里的旧 role，管理员被降级后在其 refresh TTL 内仍能访问 `/admin/**`（`RequireRole` 比对的就是这个值）
 - 通过后 `c.Set(ContextUserKey, CurrentUser{ID, Role, Username})`
 - 用 `middleware.GetCurrentUser(c)` 取值
-- JWT claims 内置 `uname`（用户名）声明（Beta1.12 起），`GeneratePair` 签名 `(userID, username, role)`；**改动签发点必须同步三个参数**（Register/Login/Refresh）
+- JWT claims 内置 `uname`（用户名）与 `ver`（令牌代次）声明，`GeneratePair` 签名 `(userID, username, role, tokenVersion)`；**改动签发点必须同步四个参数**（Register/Login/Refresh）
 
 ### OptionalAuth
 同 Auth，但无 token 或 token 无效时不拦截，仅匿名放行。用于文章列表等「登录后可见更多」的接口。
+**同样接收 `UserChecker`**：封禁用户的令牌不会被采信（当作匿名），否则旧 token 过期前仍可读到自己的草稿。
 
 ### RequireRole
 ```go
@@ -139,7 +141,7 @@ middleware.RequireRole(model.RoleAdmin)
 |---|---|
 | `Register(RegisterInput)` | 注册。检查注册开关；**首个用户自动成为 admin** |
 | `Login(identifier, password)` | 登录。**identifier 支持邮箱或用户名**（`FindByLogin`）；封禁用户拒绝 |
-| `Refresh(token)` | 刷新令牌，同时校验封禁状态 |
+| `Refresh(token)` | 刷新令牌，校验封禁状态 + **令牌代次一致**（代次不符返回 `ErrTokenRevoked`，用于改密码/封禁后立即作废） |
 | `ChangePassword(userID, current, new)` | 验证当前密码 → bcrypt 哈希新密码 |
 | `UpdateUsername(userID, name)` | 改用户名（唯一性校验） |
 

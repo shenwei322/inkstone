@@ -78,9 +78,19 @@ export function StaticPageDetail({ slug }: { slug: string }) {
 
   const page = data.page
 
-  // 自定义模板：整页 HTML，{{content}} 替换为页面内容
+  // 自定义模板：整页 HTML。
+  //
+  // 历史 bug：这里曾写成 `content.replace(/\{\{content\}\}/g, content)`——
+  // 用整段页面内容去替换页面内容里的占位符，等于自我替换。String.replace
+  // 单次扫描不会真的无限展开，但输出体积直接翻倍：landing 模板本身就是整页
+  // HTML，嵌套一层后 DOM 节点与样式计算量成倍增长。
+  //
+  // 更根本的问题是 Page 模型只有 content 一个字段（backend/internal/model/page.go），
+  // 并不存在占位符语义里那个独立的"富文本正文"可填。因此这里把残留的
+  // {{content}} 字面量移除，按作者原样渲染；page-admin.tsx 的说明文案已同步
+  // 改为「整页 HTML，自行写全」，不再承诺会替换。
   if (page.template === 'landing') {
-    const html = (page.content || '').replace(/\{\{content\}\}/g, page.content || '')
+    const html = (page.content || '').replace(/\{\{content\}\}/g, '')
     return (
       <PageTransition>
         <div

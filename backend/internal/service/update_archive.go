@@ -105,6 +105,17 @@ func (s *UpdateService) downloadAndExtract(ctx context.Context, commit string, r
 			continue
 		}
 
+		// 信任根校验：只在自己算一遍 SHA-256 是自证（同一个可能被污染的通道），
+		// 所以拿 UPDATE_CHECKSUM 或同批发布的 checksums 对账。配置了却没对上
+		// 一律拒绝，防止被污染的源码包覆盖仓库。
+		if want, ok := s.expectedSourceChecksum(commit); ok {
+			if verified, verr := verifyChecksum(res.SHA256, want); verr != nil || !verified {
+				_ = os.Remove(res.Path)
+				lastErr = verr
+				continue
+			}
+		}
+
 		report(75, "校验并解压源码包…")
 		stagedDir := filepath.Join(stagingRoot, commit)
 		if err := os.RemoveAll(stagedDir); err != nil {
@@ -134,6 +145,16 @@ func (s *UpdateService) downloadAndExtract(ctx context.Context, commit string, r
 		lastErr = fmt.Errorf("源码包下载失败")
 	}
 	return "", 0, "", "", lastErr
+}
+
+// expectedSourceChecksum 返回源码包的期望 SHA-256（commit 参数当前仅用于
+// 日志定位）。源码包不在 Release 资产里，所以没有 checksums.txt 可读，
+// 信任根只能是 UPDATE_CHECKSUM 显式配置——运维从官方渠道核对后写进环境变量。
+func (s *UpdateService) expectedSourceChecksum(commit string) (string, bool) {
+	if want := strings.ToLower(strings.TrimSpace(s.cfg.UpdateChecksum)); isHexString(want, 64) {
+		return want, true
+	}
+	return "", false
 }
 
 // extractArchive 按魔数识别 tar.gz / zip 并解压到 destRoot。

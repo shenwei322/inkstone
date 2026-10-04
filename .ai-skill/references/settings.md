@@ -33,6 +33,11 @@
 | `nav_menu` | `[]` | `[{label, url, icon?}]` |
 | `sidebar_widgets` | `[]` | `[{type, title, content?, limit?, city?, avatar?, date?, eventName?, subtitle?, socials?: [{icon,url,label?}]}]` |
 
+> ⚠️ `sidebar_widgets` 中 `type: "html"` 的 `content` 会被前台 `dangerouslySetInnerHTML`
+> 注入到**每个访客页面**。`SettingsService.Update` 会调用 `sanitizeSidebarWidgets`
+> → `SanitizeWidgetHTML`（bluemonday，白名单：基础排版 + a/img，不放行 class/id/iframe/script）。
+> **新增任何写入该字段的路径都必须走同一消毒**，否则即为存储型 XSS。
+
 ### SMTP 邮件
 | Key | 默认值 | 敏感 |
 |---|---|---|

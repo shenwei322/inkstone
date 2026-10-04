@@ -1,0 +1,205 @@
+{
+  "generated_at": "2026-10-04T06:40:09.728Z",
+  "digests": [
+    {
+      "challenge": "vec-1-1-0",
+      "nonce": "13",
+      "memory_mb": 1,
+      "rounds": 1,
+      "digest": "9e87dd6f5732716b46b3b588abad46eeb9cbbcb52c7f03b670e484b2bf9bdd4b",
+      "match": true
+    },
+    {
+      "challenge": "vec-1-1-1",
+      "nonce": "990",
+      "memory_mb": 1,
+      "rounds": 1,
+      "digest": "9410796a3e7f20e4fd24ed88102c80bc320ade856edbf26042677d1f61bf7b96",
+      "match": true
+    },
+    {
+      "challenge": "vec-1-1-2",
+      "nonce": "1967",
+      "memory_mb": 1,
+      "rounds": 1,
+      "digest": "5aceb086be933be21be656952f3313668f1166af5e0007b4fa3558ec0397abd3",
+      "match": true
+    },
+    {
+      "challenge": "vec-1-1-3",
+      "nonce": "2944",
+      "memory_mb": 1,
+      "rounds": 1,
+      "digest": "04a92f486c04b229aaf04bbb14daf9448a988fc872ff9e60d224d374a9e09f56",
+      "match": true
+    },
+    {
+      "challenge": "vec-2-3-0",
+      "nonce": "13",
+      "memory_mb": 2,
+      "rounds": 3,
+      "digest": "bdbd50028de666c494118d6cb6553cb6b65de5f4a289cd8c92c9f5efc8cfc004",
+      "match": true
+    },
+    {
+      "challenge": "vec-2-3-1",
+      "nonce": "990",
+      "memory_mb": 2,
+      "rounds": 3,
+      "digest": "70f785c03fb6e3a4f93b658ac5bfa43c9dfca540cce3606d473cc1bd87fc9999",
+      "match": true
+    },
+    {
+      "challenge": "vec-2-3-2",
+      "nonce": "1967",
+      "memory_mb": 2,
+      "rounds": 3,
+      "digest": "af8258cdcf36ee5627556c455a9f186ca88200a7bdbabebf6e265a53f1ce9252",
+      "match": true
+    },
+    {
+      "challenge": "vec-2-3-3",
+      "nonce": "2944",
+      "memory_mb": 2,
+      "rounds": 3,
+      "digest": "b6f93a70c8fee3063e25f3594b2212ae02d859e7ee7706248763e87424936b95",
+      "match": true
+    },
+    {
+      "challenge": "vec-8-4-0",
+      "nonce": "13",
+      "memory_mb": 8,
+      "rounds": 4,
+      "digest": "1544f61982bf815b1e75dc3e1de7287210713b7a5af88f95d776e59f939a1307",
+      "match": true
+    },
+    {
+      "challenge": "vec-8-4-1",
+      "nonce": "990",
+      "memory_mb": 8,
+      "rounds": 4,
+      "digest": "54da1ffafa905806c3b650e3c967e101f1a73fe0eeecd60ce177532eb5b379a3",
+      "match": true
+    },
+    {
+      "challenge": "vec-8-4-2",
+      "nonce": "1967",
+      "memory_mb": 8,
+      "rounds": 4,
+      "digest": "0a4dd12c559acfbee2c00afe852edba3797a6466b156501979f250d72c41efe7",
+      "match": true
+    },
+    {
+      "challenge": "vec-8-4-3",
+      "nonce": "2944",
+      "memory_mb": 8,
+      "rounds": 4,
+      "digest": "26033e26bcd58cc792913c49ba786fca497a9b8b787abf3789da55b151545bcf",
+      "match": true
+    },
+    {
+      "challenge": "vec-32-16-0",
+      "nonce": "13",
+      "memory_mb": 32,
+      "rounds": 16,
+      "digest": "bc31e8c08ecf06f7c58235509ef1616c9ba1abab63d1878bbea750f839891871",
+      "match": true
+    },
+    {
+      "challenge": "vec-32-16-1",
+      "nonce": "990",
+      "memory_mb": 32,
+      "rounds": 16,
+      "digest": "0b3381eeba4d8aca5aa310439e865f1f085ac4efb77119ee8507d16c1c8b20e5",
+      "match": true
+    },
+    {
+      "challenge": "vec-32-16-2",
+      "nonce": "1967",
+      "memory_mb": 32,
+      "rounds": 16,
+      "digest": "a9859dba2b5ec0eddc96ad66a207ff76d10bb00412cbe88c784a4e51f2c58c39",
+      "match": true
+    },
+    {
+      "challenge": "vec-32-16-3",
+      "nonce": "2944",
+      "memory_mb": 32,
+      "rounds": 16,
+      "digest": "15ae145feb415b6b793814675149f319b091300866f505e2465eb32b07c384d3",
+      "match": true
+    },
+    {
+      "challenge": "vec-4-1-0",
+      "nonce": "13",
+      "memory_mb": 4,
+      "rounds": 1,
+      "digest": "b858e1af3cb050123a26a92f485ee15369fbfec5d0f6dbcd19a56def4621b6b8",
+      "match": true
+    },
+    {
+      "challenge": "vec-4-1-1",
+      "nonce": "990",
+      "memory_mb": 4,
+      "rounds": 1,
+      "digest": "9f584ff20df98b10aaa695f42d4ce1dbb83b37a43ba368addaa062672f92d3de",
+      "match": true
+    },
+    {
+      "challenge": "vec-4-1-2",
+      "nonce": "1967",
+      "memory_mb": 4,
+      "rounds": 1,
+      "digest": "dc4d4450a0b5ea9c6ce86041eb38db701614790856598a06b44b4f8f6bec46ae",
+      "match": true
+    },
+    {
+      "challenge": "vec-4-1-3",
+      "nonce": "2944",
+      "memory_mb": 4,
+      "rounds": 1,
+      "digest": "29c871e62db542e909c13bcb90e2f1f6ab98c934f5146f1131b9ce6bab7e0790",
+      "match": true
+    },
+    {
+      "challenge": "vec-16-8-0",
+      "nonce": "13",
+      "memory_mb": 16,
+      "rounds": 8,
+      "digest": "9fff7c9ba284b807f999f0abb88a4293cb38075b1c96c7a5fae0b86bdbc9cf83",
+      "match": true
+    },
+    {
+      "challenge": "vec-16-8-1",
+      "nonce": "990",
+      "memory_mb": 16,
+      "rounds": 8,
+      "digest": "5be64d3b8cb653e8120c240ee527cdb1c4604447e0d9b2d1ef5a56d01b505e78",
+      "match": true
+    },
+    {
+      "challenge": "vec-16-8-2",
+      "nonce": "1967",
+      "memory_mb": 16,
+      "rounds": 8,
+      "digest": "9ad5f2ee0f869d2bafb27dd5dcba9f83b4a5520d6ae42d544723356f179ec58b",
+      "match": true
+    },
+    {
+      "challenge": "vec-16-8-3",
+      "nonce": "2944",
+      "memory_mb": 16,
+      "rounds": 8,
+      "digest": "ff0af40fb84f878f6af976c5bdb9cb2718a4d6966b9b771c9ca222833a36abd6",
+      "match": true
+    }
+  ],
+  "solve": {
+    "challenge": "bad05b76edd8d600b49509559009cc3f709ec602b10c8bb839c02c6409b75436",
+    "difficulty": 4,
+    "memory_mb": 1,
+    "rounds": 12,
+    "nonce": "48727",
+    "attempts": 48728
+  }
+}

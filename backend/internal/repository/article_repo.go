@@ -32,8 +32,74 @@ func (r *ArticleRepository) Create(article *model.Article) error {
 	return r.db.Create(article).Error
 }
 
+// Update 只写业务字段。
+//
+// 绝不能用 Save：Save 在主键非零时执行**全字段 UPDATE（含零值）**。这里的
+// article 是「先 FindByID 读出来、改几个字段」得到的，读取之后若有访客
+// IncrementViews，Save 就会把并发累加出来的 views 覆盖回旧值——日常
+// 「编辑文章 + 访客浏览」交错即造成浏览量回滚。views 因此也必须排除在外。
+// updated_at 交给 GORM 按约定自动维护。
 func (r *ArticleRepository) Update(article *model.Article) error {
-	return r.db.Save(article).Error
+	res := r.db.Model(article).Updates(map[string]any{
+		"title":        article.Title,
+		"slug":         article.Slug,
+		"content":      article.Content,
+		"cover":        article.Cover,
+		"status":       article.Status,
+		"category_id":  article.CategoryID,
+		"published_at": article.PublishedAt,
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	// PostgreSQL 对「匹配到并执行 UPDATE」的行计数为 1（与值是否变化无关），
+	// 因此 0 行只可能是文章不存在。
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateWithTags 在**同一事务**内更新文章字段并替换标签关联。
+//
+// 拆成两步的问题：Update 成功而 ReplaceTags 失败时，库里留下「新内容配旧标签」
+// 的文章；Create 后 ReplaceTags 失败则留下无标签的半成品。二者都属于
+// 只改对一半的中间态，管理员看到的却是错误提示。
+func (r *ArticleRepository) UpdateWithTags(article *model.Article, tags []model.Tag) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(article).Updates(map[string]any{
+			"title":        article.Title,
+			"slug":         article.Slug,
+			"content":      article.Content,
+			"cover":        article.Cover,
+			"status":       article.Status,
+			"category_id":  article.CategoryID,
+			"published_at": article.PublishedAt,
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		if tags == nil {
+			return nil // 未提交标签字段：保持原关联不动
+		}
+		return tx.Model(article).Association("Tags").Replace(tags)
+	})
+}
+
+// CreateWithTags 在**同一事务**内插入文章并写入标签关联。
+func (r *ArticleRepository) CreateWithTags(article *model.Article, tags []model.Tag) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(article).Error; err != nil {
+			return err
+		}
+		if len(tags) > 0 {
+			return tx.Model(article).Association("Tags").Replace(tags)
+		}
+		return nil
+	})
 }
 
 // purgeArticleRelations 清理一篇文章的所有关联行（评论 / 点赞收藏 / 标签关联）。
@@ -83,18 +149,25 @@ func (r *ArticleRepository) DeleteAny(id uint) error {
 
 func (r *ArticleRepository) DeleteByAuthor(authorID uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		var ids []uint
-		if err := tx.Model(&model.Article{}).Where("author_id = ?", authorID).
-			Pluck("id", &ids).Error; err != nil {
+		return purgeArticlesByAuthor(tx, authorID)
+	})
+}
+
+// purgeArticlesByAuthor 在给定事务内删除某作者的全部文章及其关联行。
+// 抽成可复用函数，以便「删除用户」在**同一事务**里连带清理文章
+// （此前 handler 分两个事务调用，中途失败会留下不一致状态）。
+func purgeArticlesByAuthor(tx *gorm.DB, authorID uint) error {
+	var ids []uint
+	if err := tx.Model(&model.Article{}).Where("author_id = ?", authorID).
+		Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := purgeArticleRelations(tx, id); err != nil {
 			return err
 		}
-		for _, id := range ids {
-			if err := purgeArticleRelations(tx, id); err != nil {
-				return err
-			}
-		}
-		return tx.Where("author_id = ?", authorID).Delete(&model.Article{}).Error
-	})
+	}
+	return tx.Where("author_id = ?", authorID).Delete(&model.Article{}).Error
 }
 
 func (r *ArticleRepository) CountAll() (int64, error) {

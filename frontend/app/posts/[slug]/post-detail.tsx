@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -15,7 +15,6 @@ import {
   Tag as TagIcon,
   SearchX,
   Trash2,
-  User,
 } from 'lucide-react'
 import {
   deleteComment,
@@ -175,7 +174,9 @@ export function PostDetail({ slug }: { slug: string }) {
 
   // 目录贴「没有侧边栏的一侧」：无侧边栏→目录右；侧边栏在右→目录左；侧边栏在左→目录右
   // 注意：渲染顺序必须与 layoutClass 的 grid 列模板一致（先渲染的 DOM 落在第一列）
-  const showToc = tocItems.length > 0
+  // 只有带文字的标题才算「有目录」，与 ArticleToc 内部的过滤口径保持一致
+  // （parseToc 不再剔除空标题，以保证 id 与真实 DOM 下标对齐）
+  const showToc = tocItems.some((item) => item.text)
   const tocPosition: 'left' | 'right' =
     showSidebar && site.sidebarPosition !== 'left' ? 'left' : 'right'
 
@@ -201,35 +202,49 @@ export function PostDetail({ slug }: { slug: string }) {
         <ArticleToc items={tocItems} contentRef={contentRef} />
       )}
       <div className="min-w-0">
-        {/* 顶部标题区：蓝色竖线 + 标题 + 三图标信息栏（圆角卡片） */}
+        {/* 顶部标题区：分类徽章 + 蓝色竖线标题 + 图标信息栏（圆角卡片） */}
         <header
           ref={headerRef}
-          className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
+          className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
         >
+          {/* 右上角装饰光斑：纯 opacity 呼吸（不做 transform，避免 CPU 合成下每帧重绘） */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-accent/5 blur-3xl"
+          />
           {article.category && (
             <Link
               href={`/?category=${article.category.slug}`}
-              className="inline-block rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+              className="relative inline-block rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
             >
               {article.category.name}
             </Link>
           )}
-          <div className="mt-3 flex items-stretch gap-3">
+          <div className="relative mt-3 flex items-stretch gap-3">
             <span className="w-1.5 shrink-0 rounded-full bg-accent" />
-            <h1 className="text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
+            <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
               {article.title}
             </h1>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
+          {/* 元信息栏：图标 + 文字成组，组间用圆点分隔，窄屏自动折行 */}
+          <div className="relative mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <span className="flex items-center gap-1.5">
-              <User className="h-4 w-4" />
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/10 text-[10px] font-bold text-accent">
+                {article.author.username.charAt(0).toUpperCase()}
+              </span>
               <Link href="/" className="font-medium text-foreground transition-colors hover:text-accent">
                 {article.author.username}
               </Link>
             </span>
+            <span aria-hidden className="hidden text-border sm:inline">
+              ·
+            </span>
             <span className="flex items-center gap-1.5">
               <CalendarDays className="h-4 w-4" />
               <time dateTime={article.published_at ?? article.created_at}>{date}</time>
+            </span>
+            <span aria-hidden className="hidden text-border sm:inline">
+              ·
             </span>
             <span className="flex items-center gap-1.5">
               <Eye className="h-4 w-4" />
@@ -238,7 +253,7 @@ export function PostDetail({ slug }: { slug: string }) {
           </div>
         </header>
 
-        {/* 主体：白色圆角容器，居中图形 + 正文 */}
+        {/* 主体：白色圆角容器，居中封面 + 正文 */}
         <Reveal
           delay={0.05}
           duration={0.55}
@@ -246,17 +261,17 @@ export function PostDetail({ slug }: { slug: string }) {
         >
           {/* 封面：仅设置了文章图片时展示，无封面不渲染占位图 */}
           {article.cover && (
-            <div className="mb-8 flex justify-center">
-              <div className="relative aspect-video w-full max-w-2xl overflow-hidden rounded-xl">
+            <figure className="mb-9">
+              <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border shadow-sm">
                 <Image
                   src={article.cover}
                   alt={article.title}
                   fill
-                  sizes="(max-width: 1024px) 100vw, 672px"
+                  sizes="(max-width: 1024px) 100vw, 768px"
                   className="object-cover"
                 />
               </div>
-            </div>
+            </figure>
           )}
 
           <article
@@ -266,13 +281,13 @@ export function PostDetail({ slug }: { slug: string }) {
           />
 
           {article.tags && article.tags.length > 0 && (
-            <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-border pt-6">
+            <div className="mt-10 flex flex-wrap items-center gap-2 border-t border-border pt-6">
               <TagIcon className="h-3.5 w-3.5 text-muted-foreground" />
               {article.tags.map((tag) => (
                 <Link
                   key={tag.id}
                   href={`/?tag=${tag.slug}`}
-                  className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent"
+                  className="rounded-md border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                 >
                   {tag.name}
                 </Link>
@@ -281,10 +296,11 @@ export function PostDetail({ slug }: { slug: string }) {
           )}
         </Reveal>
 
+        {/* 互动栏：点赞/收藏/分享，窄屏可换行，返回入口贴右侧 */}
         <Reveal
           delay={0.25}
           duration={0.45}
-          className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm"
+          className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm"
         >
           <button
             type="button"
@@ -292,14 +308,16 @@ export function PostDetail({ slug }: { slug: string }) {
               if (requireLogin()) return
               toggle.mutate('like')
             }}
+            aria-pressed={Boolean(reactions?.liked)}
             className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all ${
               reactions?.liked
                 ? 'border-red-300 bg-red-500/10 text-red-500'
-                : 'border-border text-muted-foreground hover:border-red-300 hover:text-red-500'
+                : 'border-border text-muted-foreground hover:border-red-300 hover:bg-red-500/5 hover:text-red-500'
             }`}
           >
-            <Heart className={`h-4 w-4 ${reactions?.liked ? 'fill-current' : ''}`} />
+            <Heart className={`h-4 w-4 transition-transform ${reactions?.liked ? 'fill-current scale-110' : ''}`} />
             {reactions?.likes ?? 0}
+            <span className="sr-only">点赞</span>
           </button>
           <button
             type="button"
@@ -307,14 +325,16 @@ export function PostDetail({ slug }: { slug: string }) {
               if (requireLogin()) return
               toggle.mutate('favorite')
             }}
+            aria-pressed={Boolean(reactions?.favorited)}
             className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all ${
               reactions?.favorited
                 ? 'border-amber-300 bg-amber-500/10 text-amber-500'
-                : 'border-border text-muted-foreground hover:border-amber-300 hover:text-amber-500'
+                : 'border-border text-muted-foreground hover:border-amber-300 hover:bg-amber-500/5 hover:text-amber-500'
             }`}
           >
-            <Star className={`h-4 w-4 ${reactions?.favorited ? 'fill-current' : ''}`} />
+            <Star className={`h-4 w-4 transition-transform ${reactions?.favorited ? 'fill-current scale-110' : ''}`} />
             {reactions?.favorites ?? 0}
+            <span className="sr-only">收藏</span>
           </button>
           <ArticleShare title={article.title} />
           <Link
@@ -391,7 +411,7 @@ export function PostDetail({ slug }: { slug: string }) {
                   key={comment.id}
                   delay={i * 0.05}
                   duration={0.3}
-                  className="flex gap-3 rounded-xl border border-border bg-muted/40 p-4"
+                  className="group flex gap-3 rounded-xl border border-border bg-muted/40 p-4 transition-colors hover:border-accent/25 hover:bg-muted/60"
                 >
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-bold text-accent">
                     {comment.author.username.charAt(0).toUpperCase()}
@@ -416,8 +436,9 @@ export function PostDetail({ slug }: { slug: string }) {
                                 if (ok) removeComment.mutate(comment.id)
                               })
                           }}
-                          className="ml-auto text-muted-foreground transition-colors hover:text-red-500"
+                          className="ml-auto text-muted-foreground opacity-0 transition-all hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
                           title="删除"
+                          aria-label="删除评论"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -441,11 +462,8 @@ export function PostDetail({ slug }: { slug: string }) {
       )}
       {captcha.dialog}
       <BackToTop />
-      {captcha.dialog}
       {captcha.prewarmNode}
       </div>
     </PageTransition>
   )
 }
-
-// 无封面文章展示的扁平「电脑屏幕」图形标识（极简知识库风格）

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"errors"
+	"fmt"
+	"hash/fnv"
 
 	"github.com/shenwei/inkstone/backend/internal/model"
 	"gorm.io/gorm"
@@ -15,33 +17,63 @@ func NewReactionRepository(db *gorm.DB) *ReactionRepository {
 	return &ReactionRepository{db: db}
 }
 
+// toggleLockKey 把 (article, user, type) 三元组折叠为 64 位 advisory 锁键。
+// 用 NUL 作分隔符，避免 "1|23" 与 "12|3" 撞成同一个串；FNV-1a 分布均匀。
+// 极小概率的哈希碰撞只会让两把无关的 toggle 互相多等一瞬，不影响正确性。
+func toggleLockKey(articleID, userID uint, typ model.ReactionType) int64 {
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%d\x00%d\x00%s", articleID, userID, typ)
+	return int64(h.Sum64()) // 位模式重解释为 bigint，pg_advisory_xact_lock 只要求不重复
+}
+
 // Toggle adds the reaction if absent, removes it if present. Returns whether
 // the reaction is active afterwards plus the fresh count for that type.
+//
+// 并发正确性（重要，勿改回 ON CONFLICT DO NOTHING 版本）：
+// 主键是 (user_id, article_id, type)。曾用 `INSERT ... ON CONFLICT DO NOTHING`
+// 再按 RowsAffected 分支，它能消掉 23505，但**消不掉 toggle 交错**：
+// 两个请求同时进来时 A 插入成功（RowsAffected=1 → active=true）、B 撞冲突
+// （RowsAffected=0 → 走删除），于是 B 把 A 刚插入的行删掉——DB 里一行不剩，
+// 而 A 已经向用户返回"已点赞"。前端显示的赞数与数据库不符，且无法自愈。
+//
+// 现在用 pg_advisory_xact_lock 把同一三元组的 toggle 串行化，锁随事务自动
+// 释放；进入临界区后再 First 判定，语义确定。
 func (r *ReactionRepository) Toggle(articleID, userID uint, typ model.ReactionType) (active bool, count int64, err error) {
-	var existing model.Reaction
-	err = r.db.Where("article_id = ? AND user_id = ? AND type = ?", articleID, userID, typ).First(&existing).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		reaction := model.Reaction{ArticleID: articleID, UserID: userID, Type: typ}
-		if err = r.db.Create(&reaction).Error; err != nil {
-			return false, 0, err
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", toggleLockKey(articleID, userID, typ)).Error; err != nil {
+			return err
 		}
-		active = true
-	case err != nil:
-		return false, 0, err
-	default:
-		if err = r.db.Delete(&existing).Error; err != nil {
-			return false, 0, err
-		}
-		active = false
-	}
 
-	if err = r.db.Model(&model.Reaction{}).
-		Where("article_id = ? AND type = ?", articleID, typ).
-		Count(&count).Error; err != nil {
-		return active, 0, err
-	}
-	return active, count, nil
+		var existing model.Reaction
+		findErr := tx.Where("article_id = ? AND user_id = ? AND type = ?", articleID, userID, typ).
+			First(&existing).Error
+		switch {
+		case findErr == nil:
+			// 锁内已确认存在 → 取消
+			if err := tx.Delete(&existing).Error; err != nil {
+				return err
+			}
+			active = false
+		case errors.Is(findErr, gorm.ErrRecordNotFound):
+			// 锁内已确认不存在 → 点赞
+			if err := tx.Create(&model.Reaction{
+				ArticleID: articleID,
+				UserID:    userID,
+				Type:      typ,
+			}).Error; err != nil {
+				return err
+			}
+			active = true
+		default:
+			return findErr
+		}
+
+		// 计数与改动在同一个事务里读，保证返回给前端的数字就是提交后的值
+		return tx.Model(&model.Reaction{}).
+			Where("article_id = ? AND type = ?", articleID, typ).
+			Count(&count).Error
+	})
+	return active, count, err
 }
 
 type ReactionStats struct {

@@ -73,6 +73,7 @@ func main() {
 	captchaSvc := service.NewCaptchaService(settingsSvc, geetestSvc, lapSvc, powSvc)
 	apiLimiter := middleware.NewSlidingLimiter()
 
+	taxonomySvc := service.NewTaxonomyService(taxonomyRepo)
 	authHandler := handler.NewAuthHandler(authSvc, emailCodeSvc, captchaSvc, apiLimiter, logSvc)
 	articleHandler := handler.NewArticleHandler(articleSvc, logSvc)
 	adminHandler := handler.NewAdminHandler(adminSvc, userRepo, articleSvc, articleRepo, commentSvc, logSvc)
@@ -92,7 +93,7 @@ func main() {
 	statHandler := handler.NewStatHandler(statSvc)
 	logHandler := handler.NewLogHandler(logSvc)
 	emailCodeHandler := handler.NewEmailCodeHandler(emailCodeSvc)
-	adminTagHandler := handler.NewAdminTagHandler(taxonomyRepo, logSvc)
+	adminTagHandler := handler.NewAdminTagHandler(taxonomySvc, logSvc)
 
 	// 在线更新：检查上游提交、下载镜像包、替换源码、触发重建
 	updateSvc := service.NewUpdateService(cfg, logSvc)
@@ -114,6 +115,28 @@ func main() {
 	}
 
 	router := gin.New()
+	// 可信代理网段：决定 X-Forwarded-For 是否被采信。
+	//
+	// 不配置时 gin 默认信任「所有」代理，任何客户端都能靠伪造 XFF 绕过全部
+	// IP 限流（实测逐请求换 XFF 可 200/200 全放行）。这里显式收窄到配置的
+	// 网段，默认只含本机与私网，覆盖同机/同容器网络的 Nginx 反代。
+	middleware.SetTrustedProxies(cfg.TrustedProxies)
+	if err := router.SetTrustedProxies(middleware.TrustedProxies()); err != nil {
+		log.Printf("[warn] 设置可信代理失败（回退为不信任任何代理）: %v", err)
+	}
+	{
+		proxies := middleware.TrustedProxies()
+		if len(proxies) == 0 {
+			// 不信任任何代理：一律按 TCP 对端判定访客 IP。
+			// 直连部署下这是最安全的配置；若前面确实有反代，限流会把所有
+			// 访客算成同一个人，此时应通过 TRUSTED_PROXIES 指定反代网段。
+			log.Printf("[security] 未配置可信代理，访客 IP 一律取 TCP 对端地址。" +
+				"若部署在反向代理之后，请设置 TRUSTED_PROXIES=<反代 CIDR>，否则 IP 限流会误伤全部访客")
+		} else {
+			log.Printf("[security] 可信代理网段: %s（仅这些来源的 X-Forwarded-For 会被采信）",
+				strings.Join(proxies, ", "))
+		}
+	}
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(middleware.SecurityHeaders())
 	router.Use(middleware.TrafficStats(statSvc))
@@ -215,12 +238,15 @@ func main() {
 		Message: "comment",
 	})
 
-	userStatusOK := func(id uint) (string, bool) {
+	// 每次带鉴权请求都回查数据库：封禁/删除的账号立即失效，且**角色以库为准**。
+	// 若角色沿用 JWT 里的旧 claim，管理员被降级后在 refresh TTL 内仍持有
+	// admin 权限（RequireRole 比对的正是该 claim）。
+	userStatusOK := func(id uint) (middleware.UserStatus, bool) {
 		u, err := userRepo.FindByID(id)
 		if err != nil || u.IsBanned() {
-			return "", false
+			return middleware.UserStatus{}, false
 		}
-		return u.Username, true
+		return middleware.UserStatus{Username: u.Username, Role: u.Role}, true
 	}
 
 	router.GET("/healthz", func(c *gin.Context) {
@@ -285,7 +311,7 @@ func main() {
 		})
 		api.POST("/link-applications", friendApplyLimit, linkAppHandler.Submit)
 
-		articles := api.Group("/articles", middleware.OptionalAuth(tokens))
+		articles := api.Group("/articles", middleware.OptionalAuth(tokens, userStatusOK))
 		{
 			articles.GET("", articleHandler.List)
 			articles.GET("/:id", articleHandler.Get)
@@ -296,7 +322,9 @@ func main() {
 			authed := articles.Group("", middleware.Auth(tokens, userStatusOK))
 			{
 				authed.POST("", articleLimit, articleHandler.Create)
-				authed.PUT("/:id", articleHandler.Update)
+				// 更新同样受限流约束：否则可以「建草稿 → 反复更新为已发布」
+				// 绕过 Create 的限流（此前 Update 既无限流也无验证码）。
+				authed.PUT("/:id", articleLimit, articleHandler.Update)
 				authed.DELETE("/:id", articleHandler.Delete)
 				authed.POST("/:id/comments", commentLimit, commentHandler.Create)
 				authed.POST("/:id/reactions", reactionHandler.Toggle)

@@ -115,11 +115,12 @@ func (s *UpdateService) runUpdateRelease(target, previous string) {
 		return
 	}
 
-	imagePath, size, sum, err := s.downloadImageAsset(ctx, rel.Tag, asset, s.downloadProgress)
+	res, verified, err := s.downloadImageAsset(ctx, rel.Tag, rel, asset, s.downloadProgress)
 	if err != nil {
 		s.finishFailedRelease(target, err, previous)
 		return
 	}
+	imagePath, size, sum := res.Path, res.Bytes, res.SHA256
 
 	s.reportStage(func(st *UpdateStage) {
 		st.Phase = PhaseSwapping
@@ -141,6 +142,9 @@ func (s *UpdateService) runUpdateRelease(target, previous string) {
 		ImageName:   asset.Name,
 		ComposeFile: s.releaseComposeFile(),
 		Previous:    previous,
+		// Verified 记录这次下载是否通过了信任根校验。false 不代表一定要
+		// 中止（没发布 checksums 的历史版本仍应可更新），但必须让运维看见。
+		Verified: verified,
 	}
 	if s.state.Last != nil {
 		s.state.Last.Progress = 85

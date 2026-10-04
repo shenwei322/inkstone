@@ -36,6 +36,11 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-https://blog.shenv.top}
       ADMIN_URL: ${ADMIN_URL:-https://admin.blog.shenv.top}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://blog.shenv.top}
+      # 可信反代网段：只有这些来源的 X-Forwarded-For 会被采信。
+      # 留空用内置默认（本机 + 私网），覆盖同 compose 网络的 Nginx 反代。
+      # 反代走公网 IP 连过来时必须显式指定，否则 IP 限流会把所有访客
+      # 算成同一个人；写 none 表示完全不信任代理。
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # —— 在线更新（后台 → 系统更新）——
       # 后端下载并替换源码；重建由宿主更新代理完成：
       #   deploy/update-agent.sh（Linux） / deploy/update-agent.ps1（Windows）

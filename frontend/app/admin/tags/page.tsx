@@ -189,6 +189,7 @@ export default function AdminTagsPage() {
                     disabled={remove.isPending}
                     className="shrink-0 rounded-md p-1 text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
                     title="删除"
+                    aria-label={`删除标签 ${tag.name}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

@@ -27,8 +27,10 @@ var guardedPrefixes = []string{
 }
 
 // skipSourceDir 遍历时跳过重目录。
+// 目录名统一转小写后比较：NTFS 大小写不敏感，`Data/`、`.Git/` 与
+// `data/`、`.git/` 落到磁盘上是同一个目录。
 func skipSourceDir(name string) bool {
-	switch name {
+	switch strings.ToLower(name) {
 	case "node_modules", ".git", ".next", ".update", ".tools", "data", "uploads":
 		return true
 	}
@@ -44,21 +46,35 @@ func skipSourceDir(name string) bool {
 //
 // 两层的名单故意不完全相同：files/uploads 只做顶层匹配，因为站点源码里
 // 确实存在 frontend/app/admin/files/page.tsx 这类同名目录。
+//
+// ⚠️ Windows 大小写不敏感：所有比较必须先转小写。此前这里直接 HasPrefix("data/")
+// 等大小写敏感比较，于是上游包里放一个 `Data/x.json`、`.ENV`、`.Git/config`
+// 就能骗过守卫——NTFS 会把它写到真正的 data/、.env、.git/ 上，
+// 造成站点数据被覆盖、密钥被替换、deployed-commit.json 被投毒。
+// Linux 的 ext4 大小写敏感，不受影响；这是仅 Windows 部署存在的缺口。
 func isGuardedPath(rel string) bool {
 	clean := strings.Trim(strings.TrimPrefix(filepath.ToSlash(rel), "./"), "/")
 	if clean == "" {
 		return true
 	}
+	// Windows 特有形态，源码路径里不可能合法出现，宁可拒绝：
+	//   - ':' NTFS 备用数据流（evil.ps1:hidden），可让写入落到文件流上；
+	//   - '~' 8.3 短名（PROGRA~1），用于在路径形态上躲避目录名匹配。
+	if strings.ContainsRune(clean, ':') || strings.ContainsRune(clean, '~') {
+		return true
+	}
+	lower := strings.ToLower(clean)
 	// 任何层级的 .env* 都不动（密钥属于站点，不属于上游）
-	if base := filepath.Base(clean); strings.HasPrefix(base, ".env") {
+	base := lower[strings.LastIndexByte(lower, '/')+1:]
+	if strings.HasPrefix(base, ".env") {
 		return true
 	}
 	for _, prefix := range guardedPrefixes {
-		if strings.HasPrefix(clean, prefix) {
+		if strings.HasPrefix(lower, prefix) {
 			return true
 		}
 	}
-	for _, segment := range strings.Split(clean, "/") {
+	for _, segment := range strings.Split(lower, "/") {
 		if protectedSegment(segment) {
 			return true
 		}
@@ -73,7 +89,7 @@ func isGuardedPath(rel string) bool {
 // 仓库里确实有 frontend/app/admin/files/page.tsx 这样的源码目录，
 // 一旦按段匹配就会把「文件管理」页面的更新静默吞掉。
 func protectedSegment(segment string) bool {
-	switch segment {
+	switch strings.ToLower(segment) {
 	case "data", "node_modules", ".git", ".update", ".next", ".tools":
 		return true
 	}
@@ -266,7 +282,12 @@ func (s *UpdateService) rollback(backupID string) error {
 	if strings.TrimSpace(backupID) == "" {
 		return NewValidationError("缺少备份 ID")
 	}
-	if strings.ContainsAny(backupID, `/\`) {
+	// 备份 ID 必须是 createBackupID() 生成的白名单字符（时间戳 + 短随机串）。
+	// 此前只拒 / 和 \，于是 `..`、`.`、`C:` 这类值能通过：
+	// backupRoot 会变成 UpdateDir 本身或别处目录，rollbackFromDirectory
+	// 会把 update-state.json、deployed-commit.json、backups/** 全量复制进
+	// 源码树，污染部署记录并塞入垃圾文件。
+	if !isSafeBackupID(backupID) {
 		return NewValidationError("备份 ID 非法")
 	}
 	sourceDir := s.cfg.UpdateSourceDir
@@ -282,6 +303,29 @@ func (s *UpdateService) rollback(backupID string) error {
 		return s.rollbackByManifest(changes, backupRoot, sourceDir)
 	}
 	return rollbackFromDirectory(backupRoot, sourceDir)
+}
+
+// isSafeBackupID 校验备份 ID 只含 createBackupID() 会生成的字符。
+// 白名单 ^[A-Za-z0-9._-]{1,64}$，且拒绝以 "." 开头——后者让 `..`、`.` 这类
+// 相对路径值无法通过（否则 filepath.Join(UpdateDir,"backups","..") 会指向
+// UpdateDir 本身）。
+func isSafeBackupID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	if id[0] == '.' {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // rollbackByManifest 按变更清单回滚：还原被覆盖/删除的文件，并删除本次新增的文件。

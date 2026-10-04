@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,14 +34,92 @@ type httpClient struct {
 	// downloader 只用于下载源码包：长超时（进度回调依赖它不被打断）
 	downloader *http.Client
 	token      string // 私有仓库 / 提高 API 限额
+	// allowPrivate 放行内网目标（UPDATE_ALLOW_PRIVATE_HOSTS=true）。
+	allowPrivate bool
 }
 
 func newHTTPClient(timeout time.Duration, token string) *httpClient {
-	return &httpClient{
-		client:     &http.Client{Timeout: timeout},
-		downloader: &http.Client{Timeout: downloadTimeout},
-		token:      strings.TrimSpace(token),
+	return newHTTPClientWithGuard(timeout, token, false)
+}
+
+// newHTTPClientWithGuard 是带 SSRF 防护开关的真实构造入口。
+// allowPrivate 对应 UPDATE_ALLOW_PRIVATE_HOSTS（默认 false = 校验公网地址）。
+func newHTTPClientWithGuard(timeout time.Duration, token string, allowPrivate bool) *httpClient {
+	hc := &httpClient{
+		client:       &http.Client{Timeout: timeout},
+		downloader:   &http.Client{Timeout: downloadTimeout},
+		token:        strings.TrimSpace(token),
+		allowPrivate: allowPrivate,
 	}
+	hc.applySSRFGuard(hc.client)
+	hc.applySSRFGuard(hc.downloader)
+	return hc
+}
+
+// applySSRFGuard 给客户端装上「拨号前校验 + 逐跳重定向校验」。
+//
+// 为什么需要：更新链路上的下载地址并不都来自可信配置——Release 资产的
+// browser_download_url 来自上游 API 响应，镜像模板里的部分占位符同理。上游
+// 一旦被污染或被中间人，就能借更新通道让后端去请求内网服务（云元数据
+// 169.254.169.254、本机管理端口等）。
+//
+// 注意不能无条件封禁内网：UPDATE_GITHUB_API 等允许指向自建内网代理，
+// 因此由 cfg.AllowPrivateHosts 显式放行，默认严格。
+func (c *httpClient) applySSRFGuard(client *http.Client) {
+	client.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			if c.privateAllowed() {
+				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+			}
+			ips, err := net.LookupIP(host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if !isPublicIP(ip) {
+					return nil, fmt.Errorf("更新下载目标 %s 解析到非公网地址 %s，已拒绝（如需使用内网更新源，请设置 UPDATE_ALLOW_PRIVATE_HOSTS=true）", host, ip)
+				}
+			}
+			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
+		},
+	}
+	// CheckRedirect 属于 http.Client 而非 Transport。默认最多 10 跳且逐跳不
+	// 校验，等于第一跳合法就放行后续任意跳转，这里补上每一跳的地址校验。
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("重定向次数过多")
+		}
+		if c.privateAllowed() {
+			return nil
+		}
+		host := req.URL.Hostname()
+		if ip := net.ParseIP(host); ip != nil {
+			if !isPublicIP(ip) {
+				return fmt.Errorf("重定向目标 %s 不是公网地址，已拒绝", host)
+			}
+			return nil
+		}
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			return err
+		}
+		for _, ip := range ips {
+			if !isPublicIP(ip) {
+				return fmt.Errorf("重定向目标 %s 解析到非公网地址 %s，已拒绝", host, ip)
+			}
+		}
+		return nil
+	}
+}
+
+// privateAllowed 汇报是否放行内网地址（配置 UPDATE_ALLOW_PRIVATE_HOSTS）。
+// 之所以做成方法而不是读全局变量：便于测试注入，也避免包级可变状态。
+func (c *httpClient) privateAllowed() bool {
+	return c.allowPrivate
 }
 
 // getJSON 拉取并解析 JSON。返回原始字节与响应头，便于调用方按需二次解析。

@@ -198,7 +198,8 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.users.UpdateRole(uint(id), req.Role); err != nil {
+	// 走 service 层（分层约定：handler 不直调 repository）
+	if err := h.admin.UpdateUserRole(uint(id), req.Role); err != nil {
 		recordOp(h.logs, c, model.LogCategoryUser, "修改用户角色", fmt.Sprintf("用户 #%d → %s", id, req.Role), false)
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
@@ -225,12 +226,9 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.articleRepo.DeleteByAuthor(uint(id)); err != nil {
-		recordOp(h.logs, c, model.LogCategoryUser, "删除用户", fmt.Sprintf("用户 #%d", id), false)
-		errorResponse(c, err)
-		return
-	}
-	if err := h.users.Delete(uint(id)); err != nil {
+	// 删文章 + 删用户在 service 层的同一事务内完成：此前是两个独立事务，
+	// 第二步失败会留下「文章已全删但用户还在」的不一致状态。
+	if err := h.admin.DeleteUserWithArticles(uint(id)); err != nil {
 		recordOp(h.logs, c, model.LogCategoryUser, "删除用户", fmt.Sprintf("用户 #%d", id), false)
 		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})

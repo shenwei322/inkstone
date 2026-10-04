@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { CheckCircle2, Cpu, ShieldCheck } from 'lucide-react'
 import { useSiteConfig } from './site-config-context'
 import { useIsMounted } from '@/lib/use-mounted'
+import { createDeferred } from '@/lib/deferred'
 import type { CaptchaCredential } from '@/lib/api'
 
 export type CaptchaScene = 'login' | 'register' | 'comment'
@@ -34,6 +35,8 @@ interface LapErrorDetail {
 interface Pending {
   resolve: (v: CaptchaCredential) => void
   reject: (e: Error) => void
+  /** 自身 Promise：run() 被并发调用时复用它，避免覆盖后永远不 settle */
+  promise: Promise<CaptchaCredential>
 }
 
 // Lap 全部上游（widget.js / wasm / challenge / redeem）都走 InkStone 后端的
@@ -273,14 +276,23 @@ export function useLapCaptcha(scene: CaptchaScene, opts: LapCaptchaOptions = {})
   }, [open, closeDialog])
 
   const run = useCallback((): Promise<CaptchaCredential> => {
+    // 并发调用复用同一个 pending：直接覆盖 pendingRef.current 会让被覆盖的
+    // Promise 永远不 settle，其 await 永久挂起（提交按钮卡在 loading）。
+    const existing = pendingRef.current
+    if (existing) return existing.promise
+
+    const d = createDeferred<CaptchaCredential>()
+    // 先占住 pending：widget 脚本是异步加载的，加载期间再来的重复调用
+    // 也必须拿到同一个 Promise，而不是各自开一个弹窗。
+    pendingRef.current = { resolve: d.resolve, reject: d.reject, promise: d.promise }
     // 先确保 widget.js 就绪再开弹窗，避免自定义元素尚未定义时挂载失效
-    return ensureLapWidgetScript(LAP_WIDGET_SCRIPT).then(
-      () =>
-        new Promise<CaptchaCredential>((resolve, reject) => {
-          pendingRef.current = { resolve, reject }
-          setOpen(true)
-        }),
-    )
+    ensureLapWidgetScript(LAP_WIDGET_SCRIPT)
+      .then(() => setOpen(true))
+      .catch((e) => {
+        pendingRef.current = null
+        d.reject(e instanceof Error ? e : new Error('人机验证组件加载失败，请刷新页面后重试'))
+      })
+    return d.promise
   }, [])
 
   const solving = progress >= 0 && progress < 100

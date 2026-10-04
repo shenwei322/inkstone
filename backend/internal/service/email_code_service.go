@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -28,8 +29,15 @@ type EmailCodeService struct {
 type codeEntry struct {
 	code      string
 	expiresAt time.Time
-	attempts  int
+	// sentAt 记录签发时刻，用于固定的重发间隔判断。
+	// 此前用 expiresAt-ttl()/2 反推，一旦管理员调大 TTL 就会把判断点前移，
+	// 同一邮箱可被立即重复发信（邮件轰炸）。显式记录则不依赖 TTL 配置。
+	sentAt   time.Time
+	attempts int
 }
+
+// resendInterval 是同一邮箱两次发送之间的最小间隔。
+const resendInterval = time.Minute
 
 func NewEmailCodeService(settings *SettingsService, mailClient MailSender) *EmailCodeService {
 	s := &EmailCodeService{
@@ -67,7 +75,8 @@ func (s *EmailCodeService) Send(email, purpose string) error {
 	}
 
 	s.mu.Lock()
-	if entry, ok := s.codes[email]; ok && time.Now().Before(entry.expiresAt.Add(-s.ttl()/2)) {
+	// 固定间隔限流：与 TTL 配置解耦，改设置不会缩短静默期
+	if entry, ok := s.codes[email]; ok && time.Since(entry.sentAt) < resendInterval {
 		s.mu.Unlock()
 		return NewValidationError("验证码发送过于频繁，请稍后再试")
 	}
@@ -77,7 +86,11 @@ func (s *EmailCodeService) Send(email, purpose string) error {
 		return err
 	}
 	code := fmt.Sprintf("%06d", n.Int64())
-	s.codes[email] = codeEntry{code: code, expiresAt: time.Now().Add(s.ttl())}
+	s.codes[email] = codeEntry{
+		code:      code,
+		expiresAt: time.Now().Add(s.ttl()),
+		sentAt:    time.Now(),
+	}
 	s.mu.Unlock()
 
 	subject := "InkStone 邮箱验证码"
@@ -119,7 +132,9 @@ func (s *EmailCodeService) Verify(action, email, code string) error {
 		delete(s.codes, email)
 		return NewValidationError("尝试次数过多，请重新获取验证码")
 	}
-	if entry.code != code {
+	// 常量时间比较：虽然 6 位空间 + 5 次尝试 + IP 限流已使时序侧信道
+	// 不可利用，用 crypto/hmac.Equal 顺手硬化，且不增加复杂度。
+	if !hmac.Equal([]byte(entry.code), []byte(code)) {
 		entry.attempts++
 		s.codes[email] = entry
 		return NewValidationError("验证码不正确")

@@ -310,6 +310,88 @@ body.has-wallpaper header {
   --tw-prose-code: var(--foreground);
 }
 
+/* 正文阅读宽度：prose-lg 的默认 65ch 在宽卡片里偏窄，略放宽减少孤行。
+   只作用于文章/独立页正文容器（.prose-reading），不影响后台编辑器预览的 max-w-none。 */
+.prose-reading {
+  max-width: 74ch;
+  margin-inline: auto;
+}
+
+/* 段落：中文排版禁用「首行缩进」，并让句间空白更均匀 */
+.prose p {
+  text-indent: 0;
+}
+
+/* 正文标题层级：h2 左侧 accent 短竖线，与文章头部视觉语言一致；
+   竖线用 ::before 绘制，不占布局空间也不影响目录锚点 id。
+   只作用于文章正文（.prose-reading），后台编辑器预览保持原样。 */
+.prose-reading h2 {
+  position: relative;
+  padding-left: 0.75rem;
+}
+.prose-reading h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.18em;
+  bottom: 0.18em;
+  width: 0.25rem;
+  border-radius: 9999px;
+  background: var(--accent);
+}
+/* h3 用更细更淡的竖线，形成 h2 → h3 的层级递减 */
+.prose-reading h3 {
+  position: relative;
+  padding-left: 0.75rem;
+}
+.prose-reading h3::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.3em;
+  bottom: 0.3em;
+  width: 0.125rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* 正文首段稍微放大：作为阅读起点，形成「导语」观感 */
+.prose-reading > p:first-of-type {
+  font-size: 1.0625em;
+  color: color-mix(in srgb, var(--foreground) 94%, transparent);
+}
+
+/* 外链：右上角小箭头提示「会跳走」（内链锚点不加） */
+.prose-reading a[href^="http"]::after {
+  content: "↗";
+  display: inline-block;
+  margin-left: 0.15em;
+  font-size: 0.85em;
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/* 行内代码：与背景拉开层次，避免和正文糊在一起 */
+.prose :not(pre) > code {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-weight: 500;
+  white-space: break-spaces;
+}
+
+/* 引用块：内部段落去掉多余首尾间距，视觉更紧凑 */
+.prose blockquote p:first-of-type {
+  margin-top: 0.5em;
+}
+.prose blockquote p:last-of-type {
+  margin-bottom: 0.5em;
+}
+
+/* 有序列表：数字标记用 accent 提升识别度 */
+.prose ol > li::marker {
+  color: color-mix(in srgb, var(--accent) 75%, var(--muted-foreground));
+  font-weight: 600;
+}
+
 /* 文章/页面正文：代码块横向滚动、图片限宽居中、长词换行，避免宽内容撑破卡片导致整页横滚 */
 .prose pre {
   overflow-x: auto;
@@ -482,9 +564,10 @@ body.has-wallpaper header {
 
 /* 代码块外框（header：语言标签 + 复制按钮，由预览 DOM 后处理注入） */
 .md-codeblock {
-  margin: 0;
+  margin: 1.5em 0;
   overflow: hidden;
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
   background: var(--muted);
 }
 .md-codeblock-header {
@@ -492,10 +575,13 @@ body.has-wallpaper header {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 12px;
+  padding: 6px 12px;
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   font-size: 12px;
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--muted-foreground);
+  text-transform: lowercase;
 }
 .md-codeblock-copy {
   border-radius: 4px;
@@ -510,7 +596,18 @@ body.has-wallpaper header {
 }
 .prose .md-codeblock pre {
   margin: 0;
+  border: none;
   border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+/* 代码块行高与内边距：紧凑但不挤，等宽字体可读性更好 */
+.prose .md-codeblock pre code {
+  display: block;
+  padding: 0.9rem 1rem;
+  font-size: 0.85em;
+  line-height: 1.7;
+  background: transparent;
 }
 
 /* 任务列表复选框可点击 */

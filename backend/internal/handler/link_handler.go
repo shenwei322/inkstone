@@ -88,6 +88,17 @@ type linkRequest struct {
 	SortOrder   int    `json:"sort_order"`
 }
 
+// linkUpdateRequest 用指针绑定，区分「未提交」与「提交空值」。
+// 值类型绑定时未提交字段会变成零值，进而把检测页/图标/简介静默清空。
+type linkUpdateRequest struct {
+	Name        *string `json:"name"`
+	URL         *string `json:"url"`
+	CheckURL    *string `json:"check_url"`
+	IconURL     *string `json:"icon_url"`
+	Description *string `json:"description"`
+	SortOrder   *int    `json:"sort_order"`
+}
+
 // ListAdmin handles GET /admin/links.
 func (h *LinkHandler) ListAdmin(c *gin.Context) {
 	links, err := h.links.List()
@@ -133,12 +144,12 @@ func (h *LinkHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req linkRequest
+	var req linkUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写网站名称与链接"})
 		return
 	}
-	link, err := h.links.Update(uint(id), service.LinkInput{
+	link, err := h.links.Update(uint(id), service.LinkUpdateInput{
 		Name:        req.Name,
 		URL:         req.URL,
 		CheckURL:    req.CheckURL,

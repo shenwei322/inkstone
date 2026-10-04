@@ -151,10 +151,14 @@ func (h *FileHandler) Delete(c *gin.Context) {
 }
 
 // contentDisposition builds an attachment header safe for non-ASCII names.
+//
+// 必须逐字符过滤不可打印字符：文件名来自用户上传（Save 只用 filepath.Base
+// 去目录，不剥离 CR/LF），若把 \r\n 带进响应头即可造成响应头注入。
+// ASCII 可见区间（0x20-0x7E）之外、以及两个分隔符 " 与 \ 一律替换为 _。
 func contentDisposition(name string) string {
 	ascii := make([]rune, 0, len(name))
 	for _, r := range name {
-		if r < 128 && r != '"' && r != '\\' {
+		if r >= 0x20 && r < 0x7F && r != '"' && r != '\\' {
 			ascii = append(ascii, r)
 		} else {
 			ascii = append(ascii, '_')

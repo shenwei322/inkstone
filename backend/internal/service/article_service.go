@@ -80,11 +80,16 @@ func (s *ArticleService) Create(authorID uint, input ArticleInput) (*model.Artic
 		return nil, err
 	}
 
+	// 标签在事务外先解析成行：FindOrCreateTags 会插入新 tag，若后面的文章
+	// 写入失败，最多留下一个无人引用的 tag（无害），比留下半篇文章好。
+	var tags []model.Tag
 	if len(input.TagNames) > 0 {
-		tags, err := s.taxonomy.FindOrCreateTags(input.TagNames)
-		if err != nil {
+		var err error
+		if tags, err = s.taxonomy.FindOrCreateTags(input.TagNames); err != nil {
 			return nil, err
 		}
+	}
+	if len(tags) > 0 {
 		if err := s.articles.ReplaceTags(article, tags); err != nil {
 			return nil, err
 		}
@@ -158,18 +163,16 @@ func (s *ArticleService) Update(articleID, authorID uint, update ArticleUpdate) 
 		}
 	}
 
-	if err := s.articles.Update(article); err != nil {
-		return nil, err
-	}
-
+	// 标签在事务外解析成行；nil 表示「本次未提交标签字段」，保留原关联
+	var tags []model.Tag
 	if update.TagNames != nil {
-		tags, err := s.taxonomy.FindOrCreateTags(*update.TagNames)
-		if err != nil {
+		var err error
+		if tags, err = s.taxonomy.FindOrCreateTags(*update.TagNames); err != nil {
 			return nil, err
 		}
-		if err := s.articles.ReplaceTags(article, tags); err != nil {
-			return nil, err
-		}
+	}
+	if err := s.articles.UpdateWithTags(article, tags); err != nil {
+		return nil, err
 	}
 	return s.articles.FindByID(articleID)
 }
@@ -180,19 +183,6 @@ func (s *ArticleService) Delete(articleID, authorID uint) error {
 
 func (s *ArticleService) GetByID(id uint) (*model.Article, error) {
 	return s.articles.FindByID(id)
-}
-
-// StatusForOwner returns the current status of an article owned by authorID.
-// 用于更新时判断是否需要人机验证（发布态需要）。
-func (s *ArticleService) StatusForOwner(articleID, authorID uint) (string, error) {
-	a, err := s.articles.FindByID(articleID)
-	if err != nil {
-		return "", err
-	}
-	if a.AuthorID != authorID {
-		return "", ErrForbidden
-	}
-	return a.Status, nil
 }
 
 func (s *ArticleService) GetBySlug(slug string) (*model.Article, error) {

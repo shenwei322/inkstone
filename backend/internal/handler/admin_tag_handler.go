@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -10,13 +11,15 @@ import (
 	"github.com/shenwei/inkstone/backend/internal/service"
 )
 
+// AdminTagHandler 只做参数绑定 / 调用 service / 响应映射；
+// 标签的校验与业务逻辑在 service.TaxonomyService（分层铁律）。
 type AdminTagHandler struct {
-	taxonomy *repository.TaxonomyRepository
-	logs     *service.LogService
+	tags *service.TaxonomyService
+	logs *service.LogService
 }
 
-func NewAdminTagHandler(taxonomy *repository.TaxonomyRepository, logs *service.LogService) *AdminTagHandler {
-	return &AdminTagHandler{taxonomy: taxonomy, logs: logs}
+func NewAdminTagHandler(tags *service.TaxonomyService, logs *service.LogService) *AdminTagHandler {
+	return &AdminTagHandler{tags: tags, logs: logs}
 }
 
 type tagRequest struct {
@@ -30,7 +33,7 @@ func (h *AdminTagHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写标签名称"})
 		return
 	}
-	tag, err := h.taxonomy.CreateTag(req.Name)
+	tag, err := h.tags.CreateTag(req.Name)
 	if err != nil {
 		recordOp(h.logs, c, model.LogCategoryTaxonomy, "创建标签", req.Name, false)
 		errorResponse(c, err)
@@ -57,9 +60,13 @@ func (h *AdminTagHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写标签名称"})
 		return
 	}
-	tag, err := h.taxonomy.UpdateTag(id, req.Name)
+	tag, err := h.tags.UpdateTag(id, req.Name)
 	if err != nil {
 		recordOp(h.logs, c, model.LogCategoryTaxonomy, "更新标签", fmt.Sprintf("标签 #%d", id), false)
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "标签不存在"})
+			return
+		}
 		errorResponse(c, err)
 		return
 	}
@@ -79,17 +86,13 @@ func (h *AdminTagHandler) Delete(c *gin.Context) {
 		return
 	}
 	// 删除前先取名称，让审计日志记录删的是哪个标签
-	name := ""
-	if tags, err := h.taxonomy.ListTags(); err == nil {
-		for i := range tags {
-			if tags[i].ID == id {
-				name = tags[i].Name
-				break
-			}
-		}
-	}
-	if err := h.taxonomy.DeleteTag(id); err != nil {
+	name := h.tags.TagName(id)
+	if err := h.tags.DeleteTag(id); err != nil {
 		recordOp(h.logs, c, model.LogCategoryTaxonomy, "删除标签", fmt.Sprintf("标签 #%d", id), false)
+		if errors.Is(err, repository.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "标签不存在"})
+			return
+		}
 		errorResponse(c, err)
 		return
 	}

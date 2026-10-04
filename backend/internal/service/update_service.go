@@ -140,6 +140,7 @@ type PendingBrief struct {
 	ImagePath   string          `json:"image_path"`   // releases 模式的镜像包路径
 	ImageName   string          `json:"image_name"`   // releases 模式的镜像包文件名
 	ComposeFile string          `json:"compose_file"` // releases 模式使用的 compose 文件
+	Verified    bool            `json:"verified"`     // 是否通过信任根校验（UPDATE_CHECKSUM / checksums.txt）
 	Preview     *PendingPreview `json:"preview"`
 }
 
@@ -201,6 +202,7 @@ type pendingState struct {
 	ImagePath   string `json:"image_path"`
 	ImageName   string `json:"image_name"`
 	ComposeFile string `json:"compose_file"`
+	Verified    bool   `json:"verified"`         // 是否通过信任根校验（UPDATE_CHECKSUM / checksums.txt）
 	Previous    string `json:"previous_version"` // 安装前的本地版本（回滚用）
 }
 
@@ -235,7 +237,7 @@ func NewUpdateService(cfg *config.Config, logs *LogService) *UpdateService {
 	s := &UpdateService{
 		cfg:          cfg,
 		logs:         logs,
-		client:       newHTTPClient(20*time.Second, cfg.UpdateToken),
+		client:       newHTTPClientWithGuard(20*time.Second, cfg.UpdateToken, cfg.AllowPrivateHosts),
 		deployedFile: strings.TrimSpace(cfg.UpdateDeployedFile),
 	}
 	s.reloadState()
@@ -496,6 +498,7 @@ func (s *UpdateService) buildVersionInfo() VersionInfo {
 			ImagePath:   st.Pending.ImagePath,
 			ImageName:   st.Pending.ImageName,
 			ComposeFile: st.Pending.ComposeFile,
+			Verified:    st.Pending.Verified,
 		}
 		if kind == pendingKindReleaseImage {
 			// 镜像更新没有「替换源码」这一步：镜像包下载完成即可安装
@@ -844,12 +847,16 @@ func (s *UpdateService) remoteLatest(ctx context.Context) (remoteCommit, error) 
 	}
 
 	// 2) 提交列表接口（GitHub API 或兼容实现）
-	commitsURL := cfg.UpdateCommitsAPI
-	if commitsURL == "" {
-		commitsURL = cfg.UpdateGitHubAPI + "/repos/{owner}/{name}/commits?sha={branch}&per_page={limit}"
+	url := cfg.UpdateCommitsAPI
+	if url == "" {
+		url = cfg.UpdateGitHubAPI + "/repos/{owner}/{name}/commits?sha={branch}&per_page={limit}"
 	}
-	url := s.expandAPI(commitsURL, "")
+	// 先转义分支名再展开：expandAPI 内部会把 {branch} 用**未转义**的分支名替换，
+	// 所以原先放在 expandAPI 之后的 ReplaceAll("{branch}", escapeQueryValue(...))
+	// 永远不会命中——占位符已经被消费掉了。分支名含 #、&、空格时会原样进 URL，
+	// 把查询串截断成别的参数。
 	url = strings.ReplaceAll(url, "{branch}", escapeQueryValue(cfg.UpdateBranch))
+	url = s.expandAPI(url, "")
 	url = strings.ReplaceAll(url, "{limit}", "20")
 	raw, _, err := s.client.getJSON(ctx, url)
 	if err != nil {

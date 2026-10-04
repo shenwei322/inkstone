@@ -1,0 +1,150 @@
+"use strict";
+/**
+ * 纯 JavaScript SHA-256（输出十六进制摘要）。
+ *
+ * 为什么不直接用 WebCrypto：crypto.subtle 只在安全上下文（https 或
+ * localhost）可用，博客以纯 http 部署时 POW 验证会直接不可用。本实现
+ * 保证任何上下文都能计算；https 环境下优先走更快的原生实现（见 pow.ts）。
+ *
+ * 与后端 pow_service.go 的 powAnswerOK 严格配套：两端计算的均为
+ * SHA-256(challenge + ":" + nonce) 的十六进制摘要，任一侧改动必须同步。
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.sha256Bytes = sha256Bytes;
+exports.sha256Raw = sha256Raw;
+exports.sha256Hex = sha256Hex;
+exports.leadingZerosOK = leadingZerosOK;
+exports.bytesToHex = bytesToHex;
+const K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+const HEX = '0123456789abcdef';
+function rotr(x, n) {
+    return (x >>> n) | (x << (32 - n));
+}
+/** UTF-8 编码（不依赖 TextEncoder，保证极端旧环境可用） */
+function utf8Bytes(s) {
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c < 0x80) {
+            out.push(c);
+        }
+        else if (c < 0x800) {
+            out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+        }
+        else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+            const c2 = s.charCodeAt(++i);
+            const cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+            out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+        }
+        else {
+            out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+        }
+    }
+    return new Uint8Array(out);
+}
+/** 计算消息的 SHA-256 摘要（32 字节） */
+function sha256Bytes(message) {
+    return sha256Raw(utf8Bytes(message));
+}
+/** 直接对字节串计算 SHA-256（不做 UTF-8 编码；POW v2 表混合用） */
+function sha256Raw(bytes) {
+    const bitLen = bytes.length * 8;
+    // padding：+1 字节 0x80，补零至 56 mod 64，末尾 8 字节大端位长
+    const total = ((bytes.length + 9 + 63) >> 6) << 6;
+    const buf = new Uint8Array(total);
+    buf.set(bytes);
+    buf[bytes.length] = 0x80;
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(total - 8, Math.floor(bitLen / 0x100000000));
+    dv.setUint32(total - 4, bitLen >>> 0);
+    const h = new Uint32Array([
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    const w = new Uint32Array(64);
+    let a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, hh = 0;
+    for (let off = 0; off < total; off += 64) {
+        for (let i = 0; i < 16; i++)
+            w[i] = dv.getUint32(off + i * 4);
+        for (let i = 16; i < 64; i++) {
+            const x15 = w[i - 15];
+            const x2 = w[i - 2];
+            const s0 = rotr(x15, 7) ^ rotr(x15, 18) ^ (x15 >>> 3);
+            const s1 = rotr(x2, 17) ^ rotr(x2, 19) ^ (x2 >>> 10);
+            w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+        }
+        a = h[0];
+        b = h[1];
+        c = h[2];
+        d = h[3];
+        e = h[4];
+        f = h[5];
+        g = h[6];
+        hh = h[7];
+        for (let i = 0; i < 64; i++) {
+            const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            const ch = (e & f) ^ (~e & g);
+            const t1 = (hh + s1 + ch + K[i] + w[i]) >>> 0;
+            const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            const maj = (a & b) ^ (a & c) ^ (b & c);
+            const t2 = (s0 + maj) >>> 0;
+            hh = g;
+            g = f;
+            f = e;
+            e = (d + t1) >>> 0;
+            d = c;
+            c = b;
+            b = a;
+            a = (t1 + t2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0;
+        h[1] = (h[1] + b) >>> 0;
+        h[2] = (h[2] + c) >>> 0;
+        h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0;
+        h[5] = (h[5] + f) >>> 0;
+        h[6] = (h[6] + g) >>> 0;
+        h[7] = (h[7] + hh) >>> 0;
+    }
+    const out = new Uint8Array(32);
+    const dvOut = new DataView(out.buffer);
+    for (let i = 0; i < 8; i++)
+        dvOut.setUint32(i * 4, h[i]);
+    return out;
+}
+/** 计算消息的 SHA-256 十六进制摘要（小写） */
+function sha256Hex(message) {
+    const b = sha256Bytes(message);
+    let out = '';
+    for (let i = 0; i < b.length; i++) {
+        out += HEX[b[i] >> 4] + HEX[b[i] & 15];
+    }
+    return out;
+}
+/**摘要的十六进制串前 difficulty 位是否均为 '0'（与后端前导零校验同口径） */
+function leadingZerosOK(digest, difficulty) {
+    if (difficulty <= 0)
+        return true;
+    for (let i = 0; i < difficulty; i++) {
+        if (digest[i] !== '0')
+            return false;
+    }
+    return true;
+}
+/** 字节数组转小写十六进制串（pow.ts 原生路径复用） */
+function bytesToHex(bytes) {
+    let out = '';
+    for (let i = 0; i < bytes.length; i++) {
+        out += HEX[bytes[i] >> 4] + HEX[bytes[i] & 15];
+    }
+    return out;
+}

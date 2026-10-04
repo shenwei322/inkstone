@@ -123,6 +123,8 @@ server {
 | `UPDATE_RELEASES_API` | `{UPDATE_GITHUB_API}/repos/{owner}/{name}/releases/latest` | releases 模式的 Release 接口模板（`{api}` `{owner}` `{name}` `{repo}` `{branch}` 占位） |
 | `UPDATE_IMAGE_ASSET` | `inkstone-images-.*\.tar$` | releases 模式镜像包资产名匹配（正则；多个命中优先版本号出现在文件名里的） |
 | `UPDATE_IMAGE_MAX_MB` | `2048` | releases 模式镜像包大小上限（MB） |
+| `UPDATE_CHECKSUM` | 空 | **信任根**：期望的下载内容 SHA-256（十六进制，可带 `sha256:` 前缀）。配了就在下载后强制校验，不一致直接拒绝安装并删除文件。不配则尝试读 Release 里的 `checksums.txt`；两者都没有时不阻断，但状态里 `verified=false`，界面会提示「本次更新未经完整性校验」 |
+| `UPDATE_ALLOW_PRIVATE_HOSTS` | `false` | 是否放行内网目标。默认 `false`：下载链路会校验实际拨号地址与每一跳重定向，拒绝回环 / 私网 / 链路本地（含云元数据 `169.254.169.254`）——因为下载地址可能来自上游 API 响应或第三方镜像，一旦被污染就能借更新通道打内网。**只有更新源本身就是内网自建服务器时才置 `true`**，置位即关闭该防护 |
 | `UPDATE_COMPOSE_FILE` | 自动探测 | releases 模式安装用的 compose 文件（容器内路径相对 `UPDATE_SOURCE_DIR`；默认探测 `docker-compose.offline.yml` → `prod` → `.yml`） |
 | `UPDATE_VERSION_FILE` | 自动探测 | 部署版本记录文件（releases 模式；默认 `data/deployed-version.json` 或 `UPDATE_DIR/deployed-version.json`） |
 | `UPDATE_LATEST_API` / `UPDATE_COMMITS_API` / `UPDATE_COMPARE_API` | 空 | 自建更新服务器的三个接口模板；配了就完全不走 GitHub |
@@ -358,6 +360,10 @@ docker-compose.offline.yml up -d` → 容器健康检查 + 站点版本核对。
 ### 更新行为约束（改动时别破坏）
 
 - 只从 `UPDATE_MIRROR` / 上游仓库取包，**不接受请求体指定下载地址**；
+- 下载链路默认拒绝内网目标（见 `UPDATE_ALLOW_PRIVATE_HOSTS`）；下载地址可能来自上游 API 响应
+  （Release 资产的 `browser_download_url`）或第三方公共镜像，这是防「借更新通道打内网」的一层；
+- **下载内容有信任根**：`UPDATE_CHECKSUM` 或 Release 的 `checksums.txt` 任选其一；配了没对上
+  直接拒绝安装。注意「下载完自己算 SHA-256」不算校验——算出来的值同样来自可能被污染的通道；
 - 解压拒绝绝对路径、`..` 穿越与符号链接，限制文件数（2 万）与解压体积（512 MB，按**实际写入**累计）；
 - 替换源码时**永不触碰** `data/`、`uploads/`、`files/`、`.env*`、`node_modules/`、`.git/`、`.update/`、`.next/`、`.tools/`。
   判定分两层：`uploads/`、`files/` 等只按**顶层前缀**保护（因为 `frontend/app/admin/files/page.tsx` 是真实源码目录），

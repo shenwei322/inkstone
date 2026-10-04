@@ -70,6 +70,7 @@ export function SecretInput({
           type="button"
           onClick={() => setVisible((v) => !v)}
           title={visible ? '隐藏' : '显示'}
+          aria-label={visible ? '隐藏密钥' : '显示密钥'}
           className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
         >
           {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
