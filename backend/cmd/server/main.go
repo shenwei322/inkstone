@@ -434,6 +434,8 @@ func main() {
 			// （见 service.ExportImportService 的说明），不共用路径。
 			admin.GET("/system/export", exportHandler.Export)
 			admin.POST("/system/import", exportHandler.Import)
+			// 路由清单：从 gin 的路由树实时导出，不可能与实现脱节。
+			admin.GET("/system/routes", handler.ListRoutes(router))
 			admin.GET("/users", adminHandler.ListUsers)
 			admin.POST("/users", adminHandler.CreateUser)
 			admin.PUT("/users/:id/role", adminHandler.UpdateUserRole)

@@ -241,6 +241,8 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | repository 常量与 SQL 同层 | 尝试上限 `MaxEmailCodeAttempts` 由 SQL 判定，所以常量放 repository 而不是 service——避免两侧各持一份而漂移 |
 | 跨包共用的测试 fake 要独立成包 | `_test.go` 的导出符号对其他包不可见。service 与 handler 都要用的 fake 放 `internal/service/powstoretest/` |
 | `_test.go` 的导出符号不外泄 | 其他包的测试 import 不到本包 `_test.go` 里的函数。跨包共用的测试 fake 要放独立非测试包（如 `internal/service/powstoretest/`） |
+| 接口文档从路由树导出 | `GET /admin/system/routes` 实时返回全部路由。手写 swaggo 注释的问题是改代码忘改注释，失真的文档比没有更糟；路由树导出不可能脱节 |
+| 单容器部署的前提 | 限流（`SlidingLimiter`）、设置缓存（30s TTL）都在内存里，**单副本下正确**。多副本部署时限流会按实例各自计数（打 N 个实例即绕过）、设置最多延迟 30 秒生效。要做多副本需要引入共享存储（Redis 等）——这是部署决策，不是缺陷；若确认多副本，优先处理限流（它是安全功能，不是体验问题） |
 | PowerShell 不能写含中文的文件 | `Set-Content`/`Out-File` 会把中文转成乱码并吞换行（实测写 Go 测试文件直接损坏）。**一律用 Edit/Write 工具**；`.ps1` 若必须产生，也要确认是 UTF-8 且有 BOM |
 | SQL 语义必须连真实库验证 | `DELETE ... RETURNING`、`make_interval`、软删除过滤这些都不是 Go 单测能覆盖的。仓库带了 `INKSTONE_TEST_DSN` 的集成测试（未设置则跳过），改 SQL 前先跑一遍 |
 | 快照/备份类接口放进「不失败」路径 | `RevisionService.Snapshot` 失败只 log 不返回 error：版本历史是增强功能，为它让文章保存失败是拿次要功能拖垮主要功能 |
