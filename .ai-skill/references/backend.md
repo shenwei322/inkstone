@@ -248,6 +248,38 @@ func resolveCover(explicit, content string) string {
 }
 ```
 
+### POW 挑战存储（`model.PowChallenge` / `repository/pow_challenge_repo.go`）
+
+POW 的 challenge 跨请求存活（前端先领、算几百毫秒到几秒、再提交），
+**必须放共享存储**：内存 map 下进程 A 签发的挑战被提交到进程 B 时
+必然查不到，症状是用户反复「验证已失效，请重新验证」，
+错误提示指向客户端，根因在服务端拓扑。
+
+`PowService` 只依赖 `ChallengeStore` 接口，不直接吃 `*gorm.DB`：
+本项目没有数据库测试基建，接口让 service 测试能跑在内存实现上。
+生产实现是 `repository.PowChallengeRepository`，测试共用
+`internal/service/powstoretest` 的 `Store`（它刻意复刻生产的
+**可观察行为**：取走即删、过期判定、并发互斥）。
+
+`Take` 是本文件唯一的核心语义，三条都是踩过的坑：
+
+| 写法 | 后果 |
+|---|---|
+| `WHERE issued_at > now()` | 要求行存于未来。**实测 100% 取不到任何挑战**，用户刚领挑战就被告知失效 |
+| 过期条件写进 `WHERE` | 已过期的行谁都删不掉（DELETE 没匹配），只能等每 2 分钟的 GC。提交过期挑战是零成本攻击面，表会无限堆积 |
+| 先 `Exec(DELETE)` 再 `Raw(... RETURNING)` | 第一条已把行删了，第二条只会拿到零行，症状是「刚签发却说不存在」 |
+
+正确写法是**无条件 DELETE + RETURNING 拿整行，再在代码里判过期**。
+`make_interval(secs => ...)` 返回 interval，与 timestamptz 相减在
+参数化查询下类型推导不成立（SQLSTATE 42883），参数后要加 `::timestamptz`。
+
+清理挂在签发路径上（`maybeGC`，距上次超过 2 分钟才真删）而不起独立
+goroutine：多副本下每实例一个定时器会重复清理，挂签发路径则天然只
+清理真正产生负载的实例。
+
+集成测试见 `pow_challenge_repo_integration_test.go`，需要
+`INKSTONE_TEST_DSN`（未设置自动跳过）。
+
 ### ScheduledPublisher（`service/scheduled_publisher.go`）
 
 每分钟把到点的 `scheduled` 文章改成 `published`。

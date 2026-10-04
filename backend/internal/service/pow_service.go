@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/shenwei/inkstone/backend/internal/model"
+	"github.com/shenwei/inkstone/backend/internal/repository"
 )
 
 // POW v2 人机验证（自研工作量证明，零外部依赖）。
@@ -44,36 +47,40 @@ import (
 //	动态参数：memoryMB / rounds / minEvents 由后台随时调整，challenge
 //	签发时快照，改参数立即对新挑战生效、不影响进行中的验证。
 //
+// ChallengeStore 是 POW 挑战的存储抽象。
+//
+// 生产用 repository.PowChallengeRepository（落 PostgreSQL），
+// 测试用内存实现——本项目没有数据库测试基建（无 sqlmock/sqlite），
+// 若 PowService 直接吃 *gorm.DB，每次验证都要连真库才能测。
+//
+// Take 返回 (*PowChallenge, error) 用 nil 表达「不存在」，而不是 bool：
+// 与 GORM 的 Scan 零行行为对齐，仓储层与 service 层只需一套约定。
+type ChallengeStore interface {
+	Save(c *model.PowChallenge) error
+	// Take 原子地取走并删除一条未过期的挑战，不存在返回 (nil, nil)。
+	Take(challenge string, now time.Time) (*model.PowChallenge, error)
+	// CountActive 返回仍未过期的挑战数（签发限额检查用）。
+	CountActive(now time.Time) (int64, error)
+	Delete(challenge string) error
+	// DeleteExpired 清理已过期的挑战（按各自的 ttl_seconds 判定）。
+	DeleteExpired(now time.Time) (int64, error)
+}
+
 // 设计约束：
-//   - challenge 存内存（单实例部署的本项目 backend 只有一个实例），重启全部
-//     失效——后果只是用户重新验证一次，不影响正确性；多副本部署需换共享存储；
+//   - challenge 落库（pow_challenges 表）而非进程内 map：跨请求存活，
+//     多副本部署下任意实例都要能消费别的实例签发的挑战；
 //   - 挑战与签发它的场景绑定（见 IssueFor / Verify）：跨场景挪用一律拒绝；
 //   - 开关语义与 lap/geetest 对称：场景未开启一律放行，绝不锁死用户。
 type PowService struct {
-	settings *SettingsService
+	settings   *SettingsService
+	challenges ChallengeStore
 
-	mu         sync.Mutex
-	challenges map[string]*powChallenge // challenge -> 签发记录（含参数快照）
-	lastGC     time.Time
+	mu     sync.Mutex
+	lastGC time.Time
 }
 
-// powChallenge 是已签发挑战的内存记录（参数在签发时刻快照，验证时以快照为准，
-// 后台调整 memoryMB/rounds/minEvents/难度/TTL 只影响之后签发的新挑战）。
-type powChallenge struct {
-	difficulty int
-	memMB      int
-	rounds     int
-	minEvents  int
-	ttl        time.Duration
-	issuedAt   time.Time
-
-	// scene 是签发该挑战的业务场景（login/register/comment/...）。
-	// 挑战只在签发它的场景可用：否则可以为代价最低的场景（例如评论）
-	// 批量签发挑战，再拿去打登录接口，把 PoW 成本与实际攻击目标解耦。
-	// 实测跨场景挪用原先拦截率为 0%，绑定后为 100%。
-	// 空串表示「未绑定」（兼容旧调用方与测试），此时不做场景校验。
-	scene string
-}
+// 编译期断言：生产仓储必须实现接口。
+var _ ChallengeStore = (*repository.PowChallengeRepository)(nil)
 
 // POW 参数边界与池上限。
 const (
@@ -87,10 +94,10 @@ const (
 	powChallengeGCEvery = 2 * time.Minute
 )
 
-func NewPowService(settings *SettingsService) *PowService {
+func NewPowService(settings *SettingsService, challenges ChallengeStore) *PowService {
 	return &PowService{
 		settings:   settings,
-		challenges: make(map[string]*powChallenge),
+		challenges: challenges,
 	}
 }
 
@@ -205,26 +212,33 @@ func (s *PowService) IssueFor(scene string) (challenge string, difficulty, memor
 	}
 	challenge = hex.EncodeToString(buf)
 
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.challenges) >= powMaxChallenges {
+	rec := &model.PowChallenge{
+		Challenge:  challenge,
+		Difficulty: s.Difficulty(),
+		MemMB:      s.MemoryMB(),
+		Rounds:     s.Rounds(),
+		MinEvents:  s.MinEvents(),
+		Scene:      normalizePowScene(scene),
+		IssuedAt:   time.Now(),
+		TTLSeconds: int(s.TTL().Seconds()),
+	}
+	if err := s.challenges.Save(rec); err != nil {
+		return "", 0, 0, 0, 0, 0, err
+	}
+
+	// 限额按「未过期的挑战数」算，而不是总行数：
+	// 已过期但还没被清掉的行不占额度，否则 TTL 内的正常高峰一旦
+	// 攒够上限，后续用户会在后台清理前一直看到「服务繁忙」。
+	active, err := s.challenges.CountActive(rec.IssuedAt)
+	if err == nil && int(active) > powMaxChallenges {
+		// 刚写进去的那条也计入，所以要 > 而不是 >=
+		_ = s.challenges.Delete(challenge)
 		return "", 0, 0, 0, 0, 0, NewValidationError("人机验证服务繁忙，请稍后重试")
 	}
-	rec := &powChallenge{
-		difficulty: s.Difficulty(),
-		memMB:      s.MemoryMB(),
-		rounds:     s.Rounds(),
-		minEvents:  s.MinEvents(),
-		ttl:        s.TTL(),
-		issuedAt:   now,
-		scene:      normalizePowScene(scene),
-	}
-	s.challenges[challenge] = rec
-	s.gcLocked(now)
+	s.maybeGC(rec.IssuedAt)
 
 	// 服务端自己也要能用快照参数完成一次重算（与前台严格一致）
-	return challenge, rec.difficulty, rec.memMB, rec.rounds, rec.minEvents, int(rec.ttl.Seconds()), nil
+	return challenge, rec.Difficulty, rec.MemMB, rec.Rounds, rec.MinEvents, rec.TTLSeconds, nil
 }
 
 // normalizePowScene 把场景名归一化，避免大小写/空白差异造成误判。
@@ -260,65 +274,58 @@ func (s *PowService) Verify(action string, challenge, nonce, signal string) erro
 		}
 	}
 
-	// 一次性消费：按快照参数取出记录（TTL 过期同样视为失效）
-	rec, ok := s.takeChallenge(challenge)
-	if !ok {
+	// 一次性消费：按快照参数取出记录（TTL 过期同样视为失效）。
+	// 取走与删atomicity由 SQL 的 DELETE...RETURNING 保证——两个请求
+	// 带同一个挑战并发进来时只有一个能删到行。
+	rec, err := s.challenges.Take(challenge, time.Now())
+	if err != nil {
+		return err
+	}
+	if rec == nil {
 		return NewValidationError("人机验证已失效，请重新验证")
 	}
 
 	// 场景绑定校验：挑战只能在签发它的场景使用。
-	// 注意 takeChallenge 已经把它删掉了——即使这里拒绝，挑战也不会被复用，
+	// 注意取走即已删除——即使这里拒绝，挑战也不会被复用，
 	// 跨场景尝试同样要付出一次完整的求解成本。
-	if rec.scene != "" && rec.scene != normalizePowScene(action) {
+	if rec.Scene != "" && rec.Scene != normalizePowScene(action) {
 		return NewValidationError("人机验证已失效，请重新验证")
 	}
 
+	ttl := time.Duration(rec.TTLSeconds) * time.Second
+
 	// signal 校验（min_events=0 时跳过）：格式 + 时间窗 + 事件数
-	if rec.minEvents > 0 {
-		if err := verifyPowSignal(signal, rec.minEvents, rec.issuedAt, rec.ttl); err != nil {
+	if rec.MinEvents > 0 {
+		if err := verifyPowSignal(signal, rec.MinEvents, rec.IssuedAt, ttl); err != nil {
 			return err
 		}
 	}
 
 	// 同参数重放本地资源计算（内存表 + 多轮查表混合），校验前导零。
 	// 表通过池复用，避免每次校验都新分配一整张表。
-	table := acquirePowTable(rec.memMB, challenge)
-	digest := digestWithTable(challenge, nonce, table, rec.rounds)
+	table := acquirePowTable(rec.MemMB, challenge)
+	digest := digestWithTable(challenge, nonce, table, rec.Rounds)
 	releasePowTable(table)
-	if !leadingZeros(digest, rec.difficulty) {
+	if !leadingZeros(digest, rec.Difficulty) {
 		return NewValidationError("人机验证未通过，请重试")
 	}
 	return nil
 }
 
-// takeChallenge 取出挑战记录：存在且未过期返回记录（同时删除，防重放）；
-// 不存在/已过期返回 false。
-func (s *PowService) takeChallenge(challenge string) (*powChallenge, bool) {
-	now := time.Now()
+// maybeGC 定期清理过期的挑战行。
+//
+// 只在签发时顺带触发（上次 GC 超过 powChallengeGCEvery 才真删），
+// 不起独立定时 goroutine：多副本下每个实例都跑一个定时器会重复清理，
+// 而挂在签发路径上则天然只清理真正产生负载的实例。
+// 失败只静默忽略——清不掉最多是多占几行，不影响正确性。
+func (s *PowService) maybeGC(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.challenges[challenge]
-	if !ok {
-		return nil, false
-	}
-	delete(s.challenges, challenge)
-	if now.Sub(rec.issuedAt) > rec.ttl {
-		return nil, false
-	}
-	return rec, true
-}
-
-// gcLocked 清理过期挑战（调用方需持有 s.mu；TTL 按各记录自己的快照）。
-func (s *PowService) gcLocked(now time.Time) {
 	if !s.lastGC.IsZero() && now.Sub(s.lastGC) < powChallengeGCEvery {
 		return
 	}
-	for k, rec := range s.challenges {
-		if now.Sub(rec.issuedAt) > rec.ttl {
-			delete(s.challenges, k)
-		}
-	}
 	s.lastGC = now
+	_, _ = s.challenges.DeleteExpired(now)
 }
 
 // ---------- POW v2 核心算法（与前端 lib/pow.ts 严格一致，勿单侧改动） ----------

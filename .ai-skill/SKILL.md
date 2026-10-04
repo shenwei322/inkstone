@@ -230,7 +230,15 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | `json:"-"` 字段要手动塞进响应 | `User.LockedUntil` 带 `json:"-"`，`/admin/users` 的 `ListUsers` 用显式 `gin.H` 白名单构造响应，不手写 `"locked_until"` 就不下发 → 前端「解锁」按钮永不显示（真实踩过，前端按契约写好了也看不到） |
 | 树形结构用值切片要从深到浅挂 | `CategoryNode.Children` 是值切片，往父节点 `append` 会产生拷贝。先挂浅层会让后挂的深层子节点写进 map 里的父，而浅层那份拷贝已取走 → 子树丢失。必须按深度**从大到小**挂载 |
 | `*uint` 外键别塞结构体指针 | `Comment.ParentID` 是 `*uint` 不是 `*Comment`。GORM 存的是 id，要用 `parentID := parent.ID; &parentID`，且 nil 父评论必须传 nil（不是 0，0 会指向不存在的记录） |
-| repository 层不能调 service | `NewValidationError`/`CheckPasswordStrength` 都在 service 包。repository 只返回可判定错误（`ErrCategoryCycle` 等），中文文案由 service 映射 |
+| POW 挑战必须落库 | challenge 跨请求存活，多副本下任意实例要能消费别的实例签发的挑战。用表 `pow_challenges`，代价可忽略（POW 本质就是故意慢） |
+| POW 过期判定方向 | 必须写 `issued_at > now() - ttl`（签发时间足够新）。写成 `issued_at > now()` 是要求行存于未来，**实测 100% 取不到任何挑战** |
+| POW 过期挑战也要删 | 过期条件写进 WHERE 的话，已过期的行谁都删不掉，只能等 2 分钟的 GC；提交过期挑战是零成本攻击面，表会无限堆积。要无条件删、再判过期 |
+| `make_interval` 类型坑 | `make_interval()` 返回 interval，`timestamptz - interval` 在参数化查询下类型推导不成立，报 `operator does not exist: timestamptz > interval`（42883）。参数后加 `::timestamptz` |
+| `DELETE ... RETURNING` 只能有一条 | 先 Exec 一条 DELETE 再 Raw 一条 RETURNING，第二条只会拿到零行。GORM 要用 `Raw().Scan()` 才拿得到被删的整行 |
+| `_test.go` 的导出符号不外泄 | 其他包的测试 import 不到本包 `_test.go` 里的函数。跨包共用的测试 fake 要放独立非测试包（如 `internal/service/powstoretest/`） |
+| PowerShell 不能写含中文的文件 | `Set-Content`/`Out-File` 会把中文转成乱码并吞换行（实测写 Go 测试文件直接损坏）。**一律用 Edit/Write 工具**；`.ps1` 若必须产生，也要确认是 UTF-8 且有 BOM |
+| SQL 语义必须连真实库验证 | `DELETE ... RETURNING`、`make_interval`、软删除过滤这些都不是 Go 单测能覆盖的。仓库带了 `INKSTONE_TEST_DSN` 的集成测试（未设置则跳过），改 SQL 前先跑一遍 |
+| 快照/备份类接口放进「不失败」路径 | `RevisionService.Snapshot` 失败只 log 不返回 error：版本历史是增强功能，为它让文章保存失败是拿次要功能拖垮主要功能 |
 | lucide 图标不吃 title | `<Pin title="x" />` 会 TS 报错：`Property 'title' does not exist`。tooltip 用 `aria-label`（全项目 24 处既有用法都是这个） |
 | 摘要可能泄露加密正文 | `excerpt` 常由正文生成（前 120 字），等于文章开头。清加密内容时必须**连摘要一起清**——列表 `stripLockedContent`、卡片 `toArticleBrief` 都要挡 |
 | 前端别重复算摘要 | 保存时后端已生成 `excerpt` 落库，列表页再剥一遍标签是重复劳动。且前端 `slice()` 按 UTF-16 码元，会劈坏 emoji；兜底也要按字符截断 |

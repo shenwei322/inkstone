@@ -92,6 +92,31 @@ type ArticleRevision struct {
 之后就被覆盖）。草稿阶段同样留版——「只在发布时记一版」会让发布前的
 所有编辑无从追溯。内容与标题都没变时不留（自动保存会周期性触发）。
 
+## PowChallenge（POW 人机验证挑战）
+
+```go
+type PowChallenge struct {
+    Challenge  string    // 主键：64 位十六进制随机串
+    Difficulty int       // 签发时刻的参数快照
+    MemMB      int       // 后台随时调参数只影响之后签发的新挑战
+    Rounds     int
+    MinEvents  int
+    Scene      string    // 签发场景（login/register/comment），空 = 未绑定
+    IssuedAt   time.Time // 签发时间
+    TTLSeconds int       // 与该挑战绑定的有效期
+}
+```
+
+**为什么必须落库**：challenge 跨请求存活（前端领完要真算几百毫秒到几秒），
+多副本部署下进程 A 签发的挑战很可能被负载均衡分到进程 B。内存 map 时
+B 必然查不到，用户会反复看到「验证已失效」——错误指向客户端，根因在拓扑。
+
+**存 `IssuedAt` + `TTLSeconds` 而不是算好的绝对过期时刻**：
+后台调整 TTL 时，已签发的挑战应仍按各自签发时的 TTL 判定。
+
+**过期判定**：`IssuedAt.Add(TTLSeconds).Before(now)`。
+方向反了（写成 "签发时间晚于当前时刻"）会让所有新挑战直接失效。
+
 ## Category / Tag（分类与标签）
 
 ```go

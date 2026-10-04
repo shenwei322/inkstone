@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shenwei/inkstone/backend/internal/service/powstoretest"
 )
 
 // =====================================================================
@@ -66,7 +68,7 @@ func powTestEnv(t *testing.T, overrides map[string]string) (*PowService, *Captch
 	settingDefaults = cfg
 
 	settings := NewSettingsService(nil)
-	pow := NewPowService(settings)
+	pow := NewPowService(settings, powstoretest.New())
 	return pow, NewCaptchaService(settings, NewGeetestService(settings), NewLapService(settings), pow)
 }
 
@@ -763,12 +765,13 @@ func TestPowTTLExpiry(t *testing.T) {
 		t.Fatal("难度 1 下未能求出 nonce")
 	}
 
-	// 直接把记录的签发时间推到一年前，等价于等待 TTL 过期（否则测试要跑 1 分钟）
-	pow.mu.Lock()
-	if rec, ok := pow.challenges[ch]; ok {
-		rec.issuedAt = time.Now().Add(-time.Hour)
+	// 直接把记录的签发时间推到一天前，等价于等待 TTL 过期
+	// （否则测试要真等 1 分钟）。默认 TTL 是 10 分钟，24 小时必然过期。
+	store, ok := pow.challenges.(*powstoretest.Store)
+	if !ok {
+		t.Fatalf("测试期望内存存储，实际是 %T", pow.challenges)
 	}
-	pow.mu.Unlock()
+	store.Expire(ch)
 
 	err = captcha.Verify("login", CaptchaParams{PowChallenge: ch, PowNonce: nonce, PowSignal: powMakeSignal("robot", 3)})
 	if err == nil {

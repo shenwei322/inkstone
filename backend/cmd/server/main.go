@@ -82,7 +82,10 @@ func main() {
 
 	geetestSvc := service.NewGeetestService(settingsSvc)
 	lapSvc := service.NewLapService(settingsSvc)
-	powSvc := service.NewPowService(settingsSvc)
+	// POW 挑战落库（pow_challenges）：跨请求存活，多副本部署下
+	// 任意实例都要能消费别的实例签发的挑战。
+	powChallengeRepo := repository.NewPowChallengeRepository(db)
+	powSvc := service.NewPowService(settingsSvc, powChallengeRepo)
 	captchaSvc := service.NewCaptchaService(settingsSvc, geetestSvc, lapSvc, powSvc)
 	apiLimiter := middleware.NewSlidingLimiter()
 

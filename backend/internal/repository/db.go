@@ -59,6 +59,9 @@ func NewDB() *gorm.DB {
 		&model.OperationLog{},
 		&model.VisitorDay{},
 		&model.FriendLinkApplication{},
+		// POW 挑战必须持久化：跨请求存活，多副本部署下
+		// 任意实例要能消费别的实例签发的挑战。
+		&model.PowChallenge{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}

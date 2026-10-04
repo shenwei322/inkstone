@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shenwei/inkstone/backend/internal/middleware"
 	"github.com/shenwei/inkstone/backend/internal/service"
+	"github.com/shenwei/inkstone/backend/internal/service/powstoretest"
 )
 
 // =====================================================================
@@ -30,6 +31,9 @@ import (
 // 同时把可信代理配成「本机 + 私网」——与 config.defaultTrustedProxies 的
 // 默认值一致。测试里用公网地址（192.0.2.x / 203.0.113.x 等文档段）作
 // RemoteAddr 即代表「不可信直连」，用私网地址即代表「可信反代」。
+// 把挑战存储换成内存 fake：这条测试关注的是路由层的限流与
+// 客户端 IP 解析，不需要真库。pow_challenge_repo 的 SQL 语义
+// （DELETE...RETURNING 的一次性消费）另由独立测试覆盖。
 func powRouter(limit int) (*gin.Engine, *service.PowService) {
 	gin.SetMode(gin.TestMode)
 	// 与生产默认一致；每个用例都重设，避免用例间相互污染全局解析器
@@ -38,7 +42,7 @@ func powRouter(limit int) (*gin.Engine, *service.PowService) {
 		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
 	})
 	settings := service.NewSettingsService(nil)
-	pow := service.NewPowService(settings)
+	pow := service.NewPowService(settings, powstoretest.New())
 	h := NewPowHandler(pow)
 
 	r := gin.New()
