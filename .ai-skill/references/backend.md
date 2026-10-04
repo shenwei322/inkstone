@@ -248,6 +248,28 @@ func resolveCover(explicit, content string) string {
 }
 ```
 
+### 邮箱验证码存储（`model.EmailCode` / `repository/email_code_repo.go`）
+
+与 POW 挑战同理：验证码必须放共享存储。用户要去邮箱收信、复制、再回来填，
+这段时间足以让下一个请求落到另一个实例上。内存 map 版在多副本下会让用户看到
+「验证码已过期」——明明刚收到的码。
+
+**主键是 (email, purpose) 而不是 email**：同一邮箱可能并行发起「登录」和
+「重置密码」。只按 email 作主键会让后申请的那枚顶掉前一枚，用户拿先收到的那枚
+来校验必然失败，而提示只是「验证码不正确」。
+
+`UpsertIfNotRecent` 一条 UPSERT 同时完成**重发间隔检查与写入**：
+WHERE 条件限定「不存在记录，或已有记录已过间隔」。若拆成两次查询，
+并发请求会同时通过检查、各发一封信，后写的顶掉先前的。集成测试里有
+10 并发的用例守住这一点。
+
+`Consume` 同样是**无条件删除再判条件**——过期条件写进 WHERE 的话，
+过期的码谁都删不掉，还占着重发间隔，用户想重新申请会被挡回来而拿到的码其实已失效。
+
+`EmailCodeService` 依赖 `EmailCodeStore` 接口（与 `ChallengeStore` 同样的理由），
+生产用 `repository.EmailCodeRepository`，测试用内存 fake
+（`email_code_fake_test.go`）。行为一致性由真库集成测试守住。
+
 ### POW 挑战存储（`model.PowChallenge` / `repository/pow_challenge_repo.go`）
 
 POW 的 challenge 跨请求存活（前端先领、算几百毫秒到几秒、再提交），

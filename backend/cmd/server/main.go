@@ -48,7 +48,12 @@ func main() {
 
 	// EmailCodeService 必须先于 AuthService 创建：忘记密码/重置密码链路
 	// 由 AuthService 直接调用它发信与校验，构造函数需要这个引用。
-	emailCodeSvc := service.NewEmailCodeService(settingsSvc, mailerSvc)
+	//
+	// 验证码落库（email_codes）：用户要去邮箱收信再回来填，这段时间足够
+	// 让下一个请求落到另一个实例上。内存 map 在多副本下会让用户看到
+	// 「验证码已过期」——明明刚收到的码。
+	emailCodeRepo := repository.NewEmailCodeRepository(db)
+	emailCodeSvc := service.NewEmailCodeService(settingsSvc, mailerSvc, emailCodeRepo)
 
 	authSvc := service.NewAuthService(userRepo, tokens, settingsSvc, emailCodeSvc)
 	articleSvc := service.NewArticleService(articleRepo, taxonomyRepo)

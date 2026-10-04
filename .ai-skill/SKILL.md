@@ -235,6 +235,11 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | POW 过期挑战也要删 | 过期条件写进 WHERE 的话，已过期的行谁都删不掉，只能等 2 分钟的 GC；提交过期挑战是零成本攻击面，表会无限堆积。要无条件删、再判过期 |
 | `make_interval` 类型坑 | `make_interval()` 返回 interval，`timestamptz - interval` 在参数化查询下类型推导不成立，报 `operator does not exist: timestamptz > interval`（42883）。参数后加 `::timestamptz` |
 | `DELETE ... RETURNING` 只能有一条 | 先 Exec 一条 DELETE 再 Raw 一条 RETURNING，第二条只会拿到零行。GORM 要用 `Raw().Scan()` 才拿得到被删的整行 |
+| UPSERT 做「检查+写入」要保证原子 | 邮箱验证码的重发间隔若拆成两次查询，并发会同时通过检查、各发一封信。用 `INSERT ... ON CONFLICT DO UPDATE ... WHERE` 一条搞定，`RowsAffected=0` 即"被拒" |
+| 一次性凭证必须无条件删 | 过期条件写进 DELETE 的 WHERE 时，过期的行谁都删不掉，还占着重发间隔。要无条件删、再判过期（POW 挑战与邮箱验证码都踩过） |
+| 主键要含用途字段 | 邮箱验证码用 (email, purpose) 而非 email：同邮箱可能并行发起登录与重置密码，只按 email 会让后一枚顶掉前一枚 |
+| repository 常量与 SQL 同层 | 尝试上限 `MaxEmailCodeAttempts` 由 SQL 判定，所以常量放 repository 而不是 service——避免两侧各持一份而漂移 |
+| 跨包共用的测试 fake 要独立成包 | `_test.go` 的导出符号对其他包不可见。service 与 handler 都要用的 fake 放 `internal/service/powstoretest/` |
 | `_test.go` 的导出符号不外泄 | 其他包的测试 import 不到本包 `_test.go` 里的函数。跨包共用的测试 fake 要放独立非测试包（如 `internal/service/powstoretest/`） |
 | PowerShell 不能写含中文的文件 | `Set-Content`/`Out-File` 会把中文转成乱码并吞换行（实测写 Go 测试文件直接损坏）。**一律用 Edit/Write 工具**；`.ps1` 若必须产生，也要确认是 UTF-8 且有 BOM |
 | SQL 语义必须连真实库验证 | `DELETE ... RETURNING`、`make_interval`、软删除过滤这些都不是 Go 单测能覆盖的。仓库带了 `INKSTONE_TEST_DSN` 的集成测试（未设置则跳过），改 SQL 前先跑一遍 |

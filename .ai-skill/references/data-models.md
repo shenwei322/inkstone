@@ -117,6 +117,32 @@ B 必然查不到，用户会反复看到「验证已失效」——错误指向
 **过期判定**：`IssuedAt.Add(TTLSeconds).Before(now)`。
 方向反了（写成 "签发时间晚于当前时刻"）会让所有新挑战直接失效。
 
+## EmailCode（邮箱验证码）
+
+```go
+type EmailCode struct {
+    Email     string    // 主键之一
+    Purpose   string    // 主键之一：login / register / reset_password
+    CodeHash  string    // SHA-256，不存明文
+    Attempts  int       // 累计错误次数，达上限作废
+    ExpiresAt time.Time // 算好的绝对过期时刻
+    SentAt    time.Time // 实际发信时刻（重发间隔判断用）
+}
+```
+
+**主键是 (email, purpose) 而非 email**：同一邮箱可能并行发起「登录」
+与「重置密码」两个流程。只按 email 作主键时，后申请的那枚会顶掉前一枚，
+用户拿着先收到的那枚来校验必然失败。
+
+**存 SHA-256 而非 bcrypt**：6 位数字空间只有 10^6，慢哈希挡不住枚举。
+真正的防护是 `Attempts`（上限 5，把成本推回邮件通道）与 IP 限流。
+
+**存绝对过期时刻而非 duration**：验证码的 TTL 会随后台设置改变，
+但已发出的码必须始终按发出时的有效期判定。
+
+`repository.MaxEmailCodeAttempts` 是尝试上限，由 SQL 在 Consume 里判定，
+所以常量与实现同层——service 只是引用它。
+
 ## Category / Tag（分类与标签）
 
 ```go

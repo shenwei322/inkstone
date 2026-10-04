@@ -62,6 +62,9 @@ func NewDB() *gorm.DB {
 		// POW 挑战必须持久化：跨请求存活，多副本部署下
 		// 任意实例要能消费别的实例签发的挑战。
 		&model.PowChallenge{},
+		// 邮箱验证码同理：收信再回来填的过程足以跨实例，
+		// 内存 map 下用户会看到「验证码已过期」而邮件其实刚到。
+		&model.EmailCode{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
