@@ -417,7 +417,7 @@ func (r *ArticleRepository) List(q ArticleQuery) ([]model.Article, int64, error)
 // view_password 只用来判断「这篇有没有设访问密码」（转成 has_password
 // 布尔值），绝不下发哈希本身。相关/邻居卡片点进去可能要输密码，
 // 提前在卡片上显示锁标识，比让人点完才知道要密码好。
-const articleCardColumns = "articles.id, articles.title, articles.slug, articles.cover, articles.views, articles.published_at, " +
+const articleCardColumns = "articles.id, articles.title, articles.slug, articles.cover, articles.views, articles.published_at, articles.excerpt, " +
 	"CASE WHEN articles.view_password IS NULL OR articles.view_password = '' THEN false ELSE true END AS has_password"
 
 // relatedDefaultLimit / relatedMaxLimit 约束相关文章条目的入参区间：
@@ -454,7 +454,7 @@ func normalizeRelatedLimit(limit int) int {
 // Raw 的 ? 顺序即调用处参数顺序，最直观。Raw 不会像 Model 那样自动追加
 // 软删除条件，因此 a.deleted_at IS NULL 与 a.status 都在 SQL 里显式声明。
 var relatedSQL = `
-SELECT a.id, a.title, a.slug, a.cover, a.views, a.published_at,
+SELECT a.id, a.title, a.slug, a.cover, a.views, a.published_at, a.excerpt,
        CASE WHEN a.view_password IS NULL OR a.view_password = '' THEN false ELSE true END AS has_password,
        (SELECT COUNT(*)
           FROM article_tags t1

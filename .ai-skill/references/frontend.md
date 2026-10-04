@@ -55,6 +55,16 @@ page 与 pageSize，调用方不必自己推导「改每页条数要不要回第
 `components/term-article-list.tsx`（分类/标签详情共用）、`lib/seo.ts`
 （`SITE_URL` / `resolveSlug` / `plainText` / `jsonLdString`）。
 
+**摘要只用后端的 `excerpt`，前端不再剥正文**：
+保存文章时后端就生成好并落库（`service.resolveExcerpt`），列表页每篇都要摘要，
+现场剥标签等于把同样的字符串处理重复 N 遍。前端只保留
+`fallbackExcerpt` 兜底极旧存量数据，且**按字符截断**——
+`slice()` 按 UTF-16 码元，`'😀'.slice(0,1)` 会劈出半个代理对变乱码。
+
+**`excerpt` 与 SEO 描述同源**：`posts/[slug]/page.tsx` 的 meta description 与
+`post-detail.tsx` 的 JSON-LD description 都优先取 `article.excerpt`。
+两处各算一套会让搜索引擎与社交卡片拿到不同描述。
+
 **前台分页用「加载更多」而非 `useInfiniteQuery`**：`useQueries` 按页声明式查询 +
 `loadedPages` state，第 1 页的 queryKey 与 SSR prefetch 完全一致，首屏仍命中服务端缓存；
 翻页只是事件回调里的 setState，规避 `react-hooks/set-state-in-effect`。

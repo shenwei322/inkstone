@@ -15,22 +15,36 @@ import { SiteSidebar } from '@/components/site-sidebar'
 // 每页条数。与后台各列表页保持同一档位，后端上限是 50。
 const PAGE_SIZE = 20
 
+// fallbackExcerpt 在没有后端摘要时兜底从正文剥一段。
+//
+// 正常情况下走不到：保存文章时后端就生成好 excerpt 了。这条路径只服务
+// 极旧的存量数据（迁移前入库、或手动改库），此时不能显示空白卡片。
+//
+// 按字符截断而不是 slice()：slice 按 UTF-16 码元，
+// `'😀'.slice(0, 1)` 会劈出半个代理对变成乱码。
+function fallbackExcerpt(html: string): string {
+  const text = html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return ''
+  return Array.from(text).slice(0, 120).join('')
+}
+
 function ArticleCard({ article }: { article: Article }) {
   const date = article.published_at
     ? new Date(article.published_at).toLocaleDateString('zh-CN')
     : new Date(article.created_at).toLocaleDateString('zh-CN')
 
-  // 封面：优先使用后台设置的封面，否则取正文中第一张图片；摘要由正文纯文本生成。
+  // 封面：优先使用后台设置的封面，否则取正文中第一张图片。
+  // 摘要用后端返回的 excerpt——保存时就已经生成好并落库，
+  // 前端再剥一遍标签等于把同样的字符串处理重复 N 遍，
+  // 而且 slice(0,200) 按 UTF-16 码元切，会把 emoji 和中日韩文字劈成乱码。
   // 用 useMemo 缓存，避免列表每次渲染都做多段正则。
   const { cover, excerpt } = useMemo(() => {
     const c =
       article.cover || (article.content.match(/<img[^>]+src="([^"]+)"/)?.[1] ?? '')
-    const e = article.content
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 200)
-    return { cover: c, excerpt: e }
+    return { cover: c, excerpt: article.excerpt?.trim() || fallbackExcerpt(article.content) }
   }, [article])
 
   return (

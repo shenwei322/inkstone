@@ -28,7 +28,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     // 公开接口，不带 auth：爬虫与社交平台抓取时也没有令牌
     const { article } = await fetchArticleBySlug(slug)
     title = article.title
-    description = plainText(article.content, 110)
+    // 摘要优先用作者写的 excerpt：SEO 描述是写给潜在读者看的，
+    // 作者最清楚该用什么句子概括这篇文章。没写才退回正文剥标签。
+    // 后端保存时已填好 excerpt，这里直接取，不必再剥一遍。
+    const manual = article.excerpt?.trim()
+    description = manual ? plainText(manual, 110) : plainText(article.content, 110)
     publishedTime = article.published_at ?? article.created_at
     authors = [article.author.username]
     if (article.cover) images = [article.cover]

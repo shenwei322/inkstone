@@ -232,6 +232,8 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | `*uint` 外键别塞结构体指针 | `Comment.ParentID` 是 `*uint` 不是 `*Comment`。GORM 存的是 id，要用 `parentID := parent.ID; &parentID`，且 nil 父评论必须传 nil（不是 0，0 会指向不存在的记录） |
 | repository 层不能调 service | `NewValidationError`/`CheckPasswordStrength` 都在 service 包。repository 只返回可判定错误（`ErrCategoryCycle` 等），中文文案由 service 映射 |
 | lucide 图标不吃 title | `<Pin title="x" />` 会 TS 报错：`Property 'title' does not exist`。tooltip 用 `aria-label`（全项目 24 处既有用法都是这个） |
+| 摘要可能泄露加密正文 | `excerpt` 常由正文生成（前 120 字），等于文章开头。清加密内容时必须**连摘要一起清**——列表 `stripLockedContent`、卡片 `toArticleBrief` 都要挡 |
+| 前端别重复算摘要 | 保存时后端已生成 `excerpt` 落库，列表页再剥一遍标签是重复劳动。且前端 `slice()` 按 UTF-16 码元，会劈坏 emoji；兜底也要按字符截断 |
 | 复合主键表做 UPDATE 前先删冲突行 | `article_tags(article_id, tag_id)` 是复合主键。标签合并时直接把 `tag_id` 改成目标会撞 23505，必须先删「该文章已有目标标签」的重复行 |
 | unknown 上不能取属性 | `res.json()` 返回 unknown，`typeof data.error === 'string'` 直接 TS2339。要先 `typeof data === 'object' && 'error' in data` 收窄 |
 | 快照/备份类接口放进「不失败」路径 | `RevisionService.Snapshot` 失败只 log 不返回 error：版本历史是增强功能，为它让文章保存失败是拿次要功能拖垮主要功能 |

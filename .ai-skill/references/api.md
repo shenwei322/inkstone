@@ -452,7 +452,8 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 
 **加密文章的防护面**（改密码保护时必须同步，漏一处就白设）：
 - `GET /articles/slug/:slug` 与 `GET /articles/:id` 都要校验——只挡 slug 入口的话，知道 id 就能取到全文
-- `GET /articles` 列表：非作者本人的加密文章 `content` 返回空串（否则首页列表直接泄露全文）
+- `GET /articles` 列表：非作者本人的加密文章 `content` **与 `excerpt`** 都返回空串。摘要常由正文生成，留着等于公开文章开头
+- `GET /articles/slug/:slug/related` / `neighbors` 卡片：`toArticleBrief` 对加密文章不下发 `excerpt`
 - `GET /feed.xml`：加密文章只给标题与链接，`content:encoded` 留空
 - 作者本人永久免密（否则作者改不了自己的文章）
 - **相关/邻居卡片**：`articleCardColumns` 带 `CASE WHEN view_password...` 算出 `has_password`，

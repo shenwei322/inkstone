@@ -432,7 +432,9 @@ export function PostDetail({ slug }: { slug: string }) {
       '@context': 'https://schema.org',
       '@type': 'Article',
       headline: a.title,
-      description: plainText(a.content, 110),
+      // 与 <head> 里的 meta description 保持同一来源：作者写了摘要就用摘要，
+      // 否则剥正文。两处各算一套会让搜索引擎与社交卡片拿到不同描述。
+      description: plainText(a.excerpt?.trim() || a.content, 110),
       // datePublished 用首次发布时间；草稿没有 published_at 时退回创建时间
       datePublished: a.published_at ?? a.created_at,
       dateModified: a.updated_at,

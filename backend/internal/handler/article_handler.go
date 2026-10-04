@@ -424,12 +424,15 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	})
 }
 
-// stripLockedContent 把未解锁文章的正文从列表响应里抹掉。
+// stripLockedContent 把未解锁文章的正文与摘要从列表响应里抹掉。
 //
 // 为什么必须做：列表接口返回的是完整 Content。如果不处理，访客在首页
 // 拿到文章列表就等于拿到了所有加密文章的正文——密码保护形同虚设。
 // 把 Content 清空并在前端显示"该文章已加密"，标题/封面等元信息保留
 // （否则列表里会凭空少一篇，反而让人以为是数据丢了）。
+//
+// Excerpt 也要清：作者没手写摘要时，后端从正文生成它——
+// 那段"摘要"就是正文前 120 字，留着等于把加密文章的开头公开。
 //
 // Content 就地改动而非重新构造：items 是值切片，改的是副本，
 // 不会污染 repository 层的数据（下次请求照常取到完整正文）。
@@ -439,11 +442,12 @@ func (h *ArticleHandler) stripLockedContent(c *gin.Context, items []articleRespo
 		if !items[i].HasPassword {
 			continue
 		}
-		// 作者本人（自己的文章列表）/ 管理员看后台列表时保留正文
+		// 作者本人（自己的文章列表）保留正文与摘要
 		if ok && current.ID == items[i].AuthorID {
 			continue
 		}
 		items[i].Content = ""
+		items[i].Excerpt = ""
 	}
 }
 
@@ -468,13 +472,17 @@ type articleBrief struct {
 	Cover       string     `json:"cover"`
 	Views       int64      `json:"views"`
 	PublishedAt *time.Time `json:"published_at"`
+	// Excerpt 只在未加密时下发。摘要可能摘自正文——
+	// 加密文章的摘要等于把内容透露出去。有密码时留空，
+	// 前端显示「该文章已加密」而不是半段摘要。
+	Excerpt string `json:"excerpt"`
 	// HasPassword 让卡片也能显示锁标识。卡片接口用 Select 指定列，
 	// ViewPassword 不在列里，只能靠查询期计算的布尔值。
 	HasPassword bool `json:"has_password"`
 }
 
 func toArticleBrief(a *model.Article) articleBrief {
-	return articleBrief{
+	brief := articleBrief{
 		ID:          a.ID,
 		Title:       a.Title,
 		Slug:        a.Slug,
@@ -483,6 +491,11 @@ func toArticleBrief(a *model.Article) articleBrief {
 		PublishedAt: a.PublishedAt,
 		HasPassword: a.HasPassword || a.ViewPassword != "",
 	}
+	if brief.HasPassword {
+		return brief
+	}
+	brief.Excerpt = resolveExcerptForResponse(a)
+	return brief
 }
 
 // articleBriefOrNil 让「一侧不存在」的邻居在 JSON 里输出 null 而不是

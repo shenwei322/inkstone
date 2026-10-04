@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shenwei/inkstone/backend/internal/model"
 )
 
 // =====================================================================
@@ -253,4 +254,82 @@ func TestNeedTOTPResponseShape(t *testing.T) {
 			t.Errorf("状态码 = %d，想要 200", w.Code)
 		}
 	})
+}
+
+// =====================================================================
+// 加密文章的摘要泄露防护
+//
+// 这条链路曾被漏掉：stripLockedContent 只清了 Content，
+// 而 Excerpt 是后端从正文生成的（前 120 字）——留着它等于
+// 把加密文章的开头公开。加 excerpt 字段时发现的第二类同源问题。
+// =====================================================================
+
+func TestLockedArticleStripsExcerpt(t *testing.T) {
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	const secretTail = "这段是加密文章的开头，绝不能出现在列表里"
+
+	// 模拟 /articles 列表的响应构造与 stripLockedContent 调用
+	r.GET("/api/v1/articles", func(c *gin.Context) {
+		items := []articleResponse{
+			{
+				ID: 1, Title: "公开文章",
+				Content: "<p>公开正文</p>",
+				Excerpt: "公开摘要",
+			},
+			{
+				ID: 2, Title: "加密文章",
+				Content: "<p>加密正文。</p><p>" + secretTail + "</p>",
+				// 作者没写摘要时，后端从正文生成它
+				Excerpt:     "加密正文。" + secretTail,
+				HasPassword: true,
+				AuthorID:    99, // 不是当前访客
+			},
+		}
+		// 传 nil 的 service：stripLockedContent 只读 items 与当前用户，
+		// 不碰数据库。顺带证明它不依赖任何后端状态。
+		(&ArticleHandler{}).stripLockedContent(c, items)
+		c.JSON(http.StatusOK, gin.H{"articles": items})
+	})
+	w := doJSON(t, r, http.MethodGet, "/api/v1/articles", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，body=%s", w.Code, w.Body.String())
+	}
+
+	if bytes.Contains(w.Body.Bytes(), []byte(secretTail)) {
+		t.Error("加密文章的开头出现在列表响应里——摘要泄露了！")
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("公开摘要")) {
+		t.Error("公开文章的摘要应保留")
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("加密文章")) {
+		t.Error("加密文章的标题应保留（否则列表里凭空少一篇）")
+	}
+	// has_password 标志必须还在，前端靠它显示锁与「已加密」占位
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"has_password":true`)) {
+		t.Error("加密标记应保留，否则前端无法显示锁图标")
+	}
+}
+
+// TestBriefSkipsExcerptWhenLocked 验证相关文章卡片的同理防护。
+func TestBriefSkipsExcerptWhenLocked(t *testing.T) {
+	secret := "机密开头内容"
+	encrypted := &model.Article{
+		ID: 2, Title: "加密", Slug: "locked",
+		Excerpt:      secret,
+		ViewPassword: "somehash",
+	}
+	brief := toArticleBrief(encrypted)
+	if brief.Excerpt != "" {
+		t.Errorf("加密文章的卡片不应带摘要，得到 %q", brief.Excerpt)
+	}
+	if !brief.HasPassword {
+		t.Error("卡片应标记 has_password，前端才能显示锁")
+	}
+
+	plain := &model.Article{ID: 1, Title: "公开", Excerpt: "公开摘要"}
+	if got := toArticleBrief(plain).Excerpt; got != "公开摘要" {
+		t.Errorf("公开文章的卡片应带摘要，得到 %q", got)
+	}
 }
