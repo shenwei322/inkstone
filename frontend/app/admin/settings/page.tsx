@@ -213,6 +213,11 @@ export default function AdminSettingsPage() {
         wallpaper_opacity: extra.wallpaper_opacity ?? '100',
         wallpaper_blur: extra.wallpaper_blur ?? '0',
         article_sidebar: extra.article_sidebar ?? 'true',
+        // 游客评论开关：payload 是白名单，漏了就永远保存不上
+        // （后端会静默丢弃未提交的键，表现为"开了又变回关"）
+        guest_comment: extra.guest_comment ?? false,
+        guest_comment_free: extra.guest_comment_free ?? false,
+        guest_comment_email: extra.guest_comment_email ?? false,
       }
       if (smtpPass) payload.smtp_pass = smtpPass
       return updateAdminSettings(payload)
@@ -367,6 +372,30 @@ export default function AdminSettingsPage() {
               label="开放用户注册"
               desc="关闭后新用户将无法注册，已有用户不受影响"
             />
+            <Toggle
+              checked={form.guest_comment === true}
+              onChange={(v) => update('guest_comment', v)}
+              label="允许游客评论"
+              desc="开启后未登录访客也能发表评论（需填写昵称）；建议同时关注下方的审核与验证码设置"
+            />
+            {/* 两个子开关只在总开关打开时才有意义，关掉总开关时一并收起，
+                避免出现"审核游客评论=开，但游客评论=关"的迷惑组合 */}
+            {form.guest_comment === true && (
+              <>
+                <Toggle
+                  checked={form.guest_comment_free === true}
+                  onChange={(v) => update('guest_comment_free', v)}
+                  label="游客评论免审核"
+                  desc="关闭时游客评论进入待审核队列，需在「评论管理」页放行后才公开——推荐保持关闭以防垃圾评论"
+                />
+                <Toggle
+                  checked={form.guest_comment_email === true}
+                  onChange={(v) => update('guest_comment_email', v)}
+                  label="游客评论必填邮箱"
+                  desc="邮箱不会公开展示，仅在后台审核时可见，便于必要时联系评论者"
+                />
+              </>
+            )}
           </div>
         </Section>
 

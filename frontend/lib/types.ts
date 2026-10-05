@@ -72,12 +72,30 @@ export interface CommentItem {
   article_slug?: string
   /** 父评论 id：null/undefined 表示顶级评论，非空表示回复某条评论（楼中楼） */
   parent_id?: number | null
+  /** 父评论作者展示名：用于「回复 @某某」，后端已算好游客/登录两种情况 */
+  parent_author?: string
   content: string
   created_at: string
+  /** 审核状态与游客邮箱、IP 只在后台接口下发（公开接口不含） */
+  status?: 'pending' | 'approved' | 'rejected'
+  guest_email?: string
+  ip?: string
   author: {
     id: number
+    /** 展示名：登录用户是用户名，游客是填写的昵称 */
     username: string
+    /** 是否为游客评论：游客的 id 也是 0，不能用 id===0 代替此判断 */
+    is_guest?: boolean
+    /** 游客填写的个人网站（仅游客、且填写了才有） */
+    url?: string
   }
+}
+
+/** 游客发表评论时提交的身份信息 */
+export interface GuestCommentInput {
+  guest_name: string
+  guest_email?: string
+  guest_url?: string
 }
 
 export interface ReactionStats {
@@ -133,6 +151,12 @@ export interface SiteSettings {
   wallpaper_blur?: string
   article_sidebar?: string
   maintenance_mode?: boolean
+  /** 游客（未登录访客）评论总开关 */
+  guest_comment?: boolean
+  /** 游客评论是否免于先审后发；false 时进待审核队列 */
+  guest_comment_free?: boolean
+  /** 游客评论是否必须填写邮箱 */
+  guest_comment_email?: boolean
 }
 
 export interface ArticleListResponse {

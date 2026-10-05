@@ -64,6 +64,12 @@ export interface SiteConfig {
   articleSidebar: boolean
   allowRegistration: boolean
   maintenanceMode: boolean
+  /** 是否允许未登录访客发表评论（后台「安全防护」页开关，默认关闭） */
+  guestComment: boolean
+  /** 游客评论是否免于先审后发；false 时提交后需等管理员审核 */
+  guestCommentFree: boolean
+  /** 游客评论是否必须填写邮箱 */
+  guestCommentEmail: boolean
   /** 友情链接页显示内容（后台友链管理页编辑） */
   friendLinksTitle: string
   friendLinksIntro: string
@@ -119,6 +125,10 @@ const DEFAULT_CONFIG: SiteConfig = {
   articleSidebar: true,
   allowRegistration: true,
   maintenanceMode: false,
+  // 默认全关：与后端默认值一致，避免前端在配置未加载时就渲染出评论表单
+  guestComment: false,
+  guestCommentFree: false,
+  guestCommentEmail: false,
   friendLinksTitle: '友情链接',
   friendLinksIntro: '',
   loaded: false,
@@ -152,6 +162,9 @@ interface RawSiteConfig {
   wallpaper_blur?: string
   article_sidebar?: string
   maintenance_mode?: string
+  guest_comment?: boolean
+  guest_comment_free?: boolean
+  guest_comment_email?: boolean
   friend_links_title?: string
   friend_links_intro?: string
 }
@@ -227,6 +240,11 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
             return null
           }),
           allowRegistration: cfg.allow_registration !== false,
+          // 游客评论三开关：严格判 true（不能用 !== false），
+          // 配置缺失时必须是「不允许」，与后端默认关闭保持一致。
+          guestComment: cfg.guest_comment === true,
+          guestCommentFree: cfg.guest_comment_free === true,
+          guestCommentEmail: cfg.guest_comment_email === true,
           sidebarPosition: cfg.sidebar_position === 'left' ? 'left' : 'right',
           emailCode: {
             on_register: cfg.email_code?.on_register ?? false,

@@ -50,6 +50,15 @@ interface RequestOptions {
   method?: string
   body?: unknown
   auth?: boolean
+  /**
+   * 可选登录：有令牌就带上，没有也照常发请求。
+   *
+   * 与 auth 的区别在于 401 的处理——auth 会尝试刷新令牌、失败即清空登录态；
+   * optionalAuth 不刷新也不清空，因为这条接口本来就允许匿名访问，
+   * 401 只代表"这次没登录"，不代表令牌失效。
+   * 典型用途：发表评论（登录用户记名、游客匿名）。
+   */
+  optionalAuth?: boolean
 }
 
 let refreshPromise: Promise<boolean> | null = null
@@ -83,7 +92,7 @@ export async function tryRefresh(): Promise<boolean> {
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = false } = options
+  const { method = 'GET', body, auth = false, optionalAuth = false } = options
 
   const doFetch = async (token: string | null) => {
     const headers: Record<string, string> = {}
@@ -96,7 +105,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     })
   }
 
-  let token = auth ? getAccessToken() : null
+  let token = auth || optionalAuth ? getAccessToken() : null
   let res = await doFetch(token)
 
   // On 401 with auth, attempt one token refresh then retry.
@@ -438,15 +447,27 @@ export function fetchComments(articleId: number | string) {
 }
 
 // parentId 为空表示顶级评论；非空表示回复某条评论（嵌套回复/盖楼）。
+//
+// 登录用户与游客共用这一个接口：带令牌就按账号记名，不带则以游客身份发表
+// （需后台开启 guest_comment）。因此用 optionalAuth 而不是 auth——
+// 用 auth 会在未登录时把请求拦在客户端，游客根本没机会提交。
+//
+// guestName 等三个字段仅游客需要；服务端对已登录请求会忽略它们，
+// 防止登录用户伪装成游客。
 export function postComment(
   articleId: number | string,
   content: string,
-  extra?: CaptchaCredential & { parent_id?: number },
+  extra?: CaptchaCredential & {
+    parent_id?: number
+    guest_name?: string
+    guest_email?: string
+    guest_url?: string
+  },
 ) {
   return api<{ comment: CommentItem }>(`/articles/${articleId}/comments`, {
     method: 'POST',
     body: { content, ...extra },
-    auth: true,
+    optionalAuth: true,
   })
 }
 
@@ -601,6 +622,20 @@ export function fetchAdminComments(params: { page?: number; page_size?: number }
 
 export function deleteAdminComment(id: number) {
   return api<void>(`/admin/comments/${id}`, { method: 'DELETE', auth: true })
+}
+
+// 评论审核：通过（approved）/ 驳回（rejected）。
+// 游客评论默认进待审队列，管理员靠这个接口放行。
+export function setCommentStatus(id: number, status: 'approved' | 'rejected') {
+  return api<{ ok: boolean }>(`/admin/comments/${id}/status`, {
+    method: 'PUT',
+    body: { status },
+    auth: true,
+  })
+}
+
+export function fetchPendingCommentCount() {
+  return api<{ count: number }>('/admin/comments/pending-count', { auth: true })
 }
 
 // ---------- Uploads API ----------

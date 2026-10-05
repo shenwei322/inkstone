@@ -5,8 +5,13 @@ import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Reveal } from '@/components/motion'
 import { RowLoading } from '@/components/page-loader'
-import { MessageSquare, Trash2 } from 'lucide-react'
-import { deleteAdminComment, fetchAdminComments, ApiError } from '@/lib/api'
+import { MessageSquare, Check, Trash2, X } from 'lucide-react'
+import {
+  deleteAdminComment,
+  fetchAdminComments,
+  setCommentStatus,
+  ApiError,
+} from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { Pagination } from '@/components/pagination'
 import type { CommentItem } from '@/lib/types'
@@ -30,6 +35,19 @@ export default function AdminCommentsPage() {
       notify.success('评论已删除')
     },
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '删除失败'),
+  })
+
+  // 审核：游客评论默认进待审队列，没有这个入口就无法放行
+  const auditMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: 'approved' | 'rejected' }) =>
+      setCommentStatus(id, status),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin'] })
+      // 角标数也要跟着变，否则侧栏一直显示"有 N 条待审"
+      queryClient.invalidateQueries({ queryKey: ['pending-comments'] })
+      notify.success(vars.status === 'approved' ? '已通过，评论现已公开' : '已驳回')
+    },
+    onError: (e) => notify.error(e instanceof ApiError ? e.message : '审核失败'),
   })
 
   return (
@@ -66,10 +84,34 @@ export default function AdminCommentsPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-medium">{comment.author.username}</span>
+                  {/* 游客标记：昵称可能是「小明」，光看名字分不出是不是注册用户 */}
+                  {comment.author.is_guest && (
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      访客
+                    </span>
+                  )}
+                  {comment.status === 'pending' && (
+                    <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      待审核
+                    </span>
+                  )}
+                  {comment.status === 'rejected' && (
+                    <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500">
+                      已驳回
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground">
                     {new Date(comment.created_at).toLocaleString('zh-CN')}
                   </span>
                 </div>
+                {/* 游客邮箱与 IP 只在后台下发：审核时可能要联系本人或判断同源刷评 */}
+                {comment.author.is_guest && (comment.guest_email || comment.ip) && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {comment.guest_email && <span>{comment.guest_email}</span>}
+                    {comment.guest_email && comment.ip && <span className="mx-1.5">·</span>}
+                    {comment.ip && <span>IP {comment.ip}</span>}
+                  </p>
+                )}
                 <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-relaxed">
                   {comment.content}
                 </p>
@@ -85,23 +127,49 @@ export default function AdminCommentsPage() {
                   </p>
                 )}
               </div>
-              <button
-                onClick={async () => {
-                  const ok = await notify.confirm({
-                    title: '删除这条评论？',
-                    message: '删除后无法恢复。',
-                    confirmText: '删除',
-                    danger: true,
-                  })
-                  if (ok) deleteMutation.mutate(comment.id)
-                }}
-                disabled={deleteMutation.isPending}
-                className="shrink-0 rounded-md p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                title="删除"
-                aria-label={comment.article_title ? `删除《${comment.article_title}》下的评论` : '删除评论'}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                {/* 审核按钮只对待审评论显示：已通过的评论不需要"再次通过"，
+                    一直在那儿反而让人以为状态没保存 */}
+                {comment.status === 'pending' && (
+                  <>
+                    <button
+                      onClick={() => auditMutation.mutate({ id: comment.id, status: 'approved' })}
+                      disabled={auditMutation.isPending}
+                      className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-emerald-500/10 hover:text-emerald-600 disabled:opacity-50"
+                      title="通过审核"
+                      aria-label="通过审核"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => auditMutation.mutate({ id: comment.id, status: 'rejected' })}
+                      disabled={auditMutation.isPending}
+                      className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-amber-500/10 hover:text-amber-600 disabled:opacity-50"
+                      title="驳回"
+                      aria-label="驳回评论"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={async () => {
+                    const ok = await notify.confirm({
+                      title: '删除这条评论？',
+                      message: '删除后无法恢复。',
+                      confirmText: '删除',
+                      danger: true,
+                    })
+                    if (ok) deleteMutation.mutate(comment.id)
+                  }}
+                  disabled={deleteMutation.isPending}
+                  className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                  title="删除"
+                  aria-label={comment.article_title ? `删除《${comment.article_title}》下的评论` : '删除评论'}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             </Reveal>
           ))}
         </div>
