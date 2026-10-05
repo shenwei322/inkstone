@@ -9,7 +9,13 @@ export default async function CategoriesPage() {
   let categories: { id: number; name: string; slug: string; article_count: number }[] = []
   let failed = false
   try {
-    categories = (await fetchCategories()).categories
+    // 后端在「没有分类」时返回的是 {"categories":null}（Go 的 nil 切片，
+    // 不是空数组），而 TS 的类型标注假装它一定是数组。直接取 .length 会在
+    // 空站点上抛 TypeError 把整个页面打崩——构建期预渲染时同样命中
+    //（此时 API 往往不可达，拿到 null 更常见），表现为 next build 失败：
+    //   Error occurred prerendering page "/categories"
+    // 因此这里必须兜底成空数组，再交给下面已有的「还没有创建分类」分支。
+    categories = (await fetchCategories()).categories ?? []
   } catch {
     failed = true
   }

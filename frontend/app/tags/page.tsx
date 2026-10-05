@@ -8,7 +8,9 @@ export default async function TagsPage() {
   let tags: { id: number; name: string; slug: string; article_count: number }[] = []
   let failed = false
   try {
-    tags = (await fetchTags()).tags
+    // 同 /categories：后端「没有标签」时返回 {"tags":null}（Go 的 nil 切片），
+    // 直接取 .length 会在空站点上抛 TypeError 打崩页面与构建期预渲染
+    tags = (await fetchTags()).tags ?? []
   } catch {
     failed = true
   }
