@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -124,14 +125,24 @@ func TestStaleSnapshotIgnoredAfterSourceSwitch(t *testing.T) {
 		t.Fatal("旧快照的版本字段不应透传")
 	}
 
-	// 同代（release_image）快照正常采信
+	// 同代（release_image）快照正常采信。
+	//
+	// 目标版本必须**动态高于当前 AppVersion**：buildVersionInfo 会用
+	// compareVersions 重算 UpdateAvail，写死一个具体版本号的话，
+	// 每次给 AppVersion 升版本都可能让「更高版本」变成「同代/更低」而
+	// 莫名失败（Beta1.27 → Beta1.28 时 v1.28.0 就从"更新"变成了"同代"）。
+	cur, ok := parseVersionValue(AppVersion)
+	if !ok {
+		t.Fatalf("AppVersion %q 无法解析为版本号，测试前提不成立", AppVersion)
+	}
+	newerVersion := fmt.Sprintf("v%d.%d.0", cur.major, cur.minor+1)
 	svc.state.Check = &VersionInfo{
 		Kind:          pendingKindReleaseImage,
-		LatestVersion: "v1.28.0",
+		LatestVersion: newerVersion,
 		UpdateAvail:   true,
 	}
 	info = svc.buildVersionInfo()
-	if !info.UpdateAvail || info.LatestVersion != "v1.28.0" {
+	if !info.UpdateAvail || info.LatestVersion != newerVersion {
 		t.Fatalf("releases 模式的检查快照应被采信：%+v", info)
 	}
 }
