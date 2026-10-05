@@ -352,6 +352,8 @@ Release API 响应的 `browser_download_url`，两者不是一条路径。所以
 ```powershell
 # Windows（Docker Desktop 需先启动）
 .\deploy\package-images.ps1 -Version v1.28.0
+# 省略 -Version 时自动从后端 AppVersion 读取（避免与后端自报版本不一致）
+.\deploy\package-images.ps1
 # 前端 API 地址按部署域名传（默认 https://blog.shenv.top/api/v1，构建期注入）
 $env:INKSTONE_PUBLIC_API_URL='https://blog.shenv.top/api/v1'; .\deploy\package-images.ps1 -Version v1.28.0
 ```
