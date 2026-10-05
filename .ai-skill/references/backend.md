@@ -207,18 +207,48 @@ func resolveCover(explicit, content string) string {
 }
 ```
 
-### CommentService（含审核与嵌套）
+### CommentService（含审核、嵌套与游客评论）
 
-`Create(articleID, userID, parentID, content, ip)` 与旧的 `Create(articleID, userID, content)`
-签名不同——**新增了 parentID 与 ip 两个参数**，调用方（handler）需同步。
-`ListByArticle(articleID, viewerID)` 也多了 viewerID：返回 approved 的 + viewer 自己的 pending。
+`Create(articleID, identity CommentIdentity, parentID uint, content, ip string)` —
+身份用结构体承载（`CommentIdentity{UserID *uint, GuestName, GuestEmail, GuestURL}`），
+登录用户 `UserID` 非空、游客为空。**用结构体而不是继续加参数**：这个方法已因
+parentID / ip 改过两次签名，每加一个字段就动一次签名与全部调用方。
 
-审核判定在 `applyModeration`：`comment_audit` 开启**或**命中敏感词 → `pending`，
-否则 `approved`。敏感词匹配用 `wordSep = [\n\r,，;；|]+` 切分词表——后台 textarea 里
+`ListByArticle(articleID, viewerID)` 返回 approved 的 + viewer 自己的 pending。
+**「自己的 pending」只对登录用户成立**：游客没有账号，无从在一次请求之外认出
+自己刚发的那条，因此只能看到已过审的评论，提交后前端提示"等待审核"而不回显。
+
+审核判定在 `applyModeration`，三条来源：`comment_audit` 开启、命中敏感词、
+**或这是一条游客评论且 `guest_comment_free` 未开启**（默认未开启 → 游客评论
+一律进待审队列）。游客没有账号可封、没有历史可追溯，默认先审后发是唯一
+能在公开前挡住刷屏的位置。
+
+敏感词匹配用 `wordSep = [\n\r,，;；|]+` 切分词表——后台 textarea 里
 用户换行还是逗号全凭习惯，不做硬性规定。比对前内容与词都转小写。
 
+`DeleteComment` 的越权判定必须**先判游客再比 ID**：
+
+```go
+if isAdmin { return s.comments.Delete(commentID) }
+if comment.IsGuest() || comment.AuthorID() != userID { return ErrForbidden }
+```
+
+游客的 `AuthorID()` 是 0，未登录请求传进来的 `userID` 也是 0 —— 少了
+`IsGuest()` 这一项，`0 != 0` 不成立，等于任何人可删任意游客评论。
+
 通知是旁路：`CommentNotifier` 接口由 `pkg/mailer.CommentNotifier` 实现，
-AuthorID == UserID（作者自评）时跳过，Email 为空时跳过，发送失败只 `log.Printf`。
+`article.AuthorID == comment.AuthorID()` 时跳过（游客返回 0，与真实作者
+ID 必然不等，因此游客评论一定会通知作者），Email 为空时跳过，
+发送失败只 `log.Printf`。评论者名字走 `comment.DisplayName()`：登录用户取
+用户名，游客取昵称（缺失时回落「匿名访客」）。
+
+**游客身份校验**（`normalizeIdentity`）：
+- 登录用户：**清空全部 guest_* 字段**。请求体是客户端可控的，不清就等于
+  允许任何登录用户把自己的评论伪装成游客留言。
+- 游客：昵称必填（≤32 字符）；邮箱选填但要像邮箱，`guest_comment_email`
+  开启时改为必填；网址选填且**必须是 http/https**——`javascript:` 之类会
+  被 `<a href>` 直接执行，构成存储型 XSS（这里拒绝而不改写，让用户知道
+  自己填的地址没被接受）。
 
 ### imageutil（`pkg/imageutil`）
 

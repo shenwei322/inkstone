@@ -99,7 +99,7 @@
 | POST | `/articles` | 登录 | 创建。Body: `{title, content, status, category_id?, tags?, cover?, captcha_token?, captcha_answer?}` |
 | PUT | `/articles/:id` | 登录 | 更新（仅作者）。同上字段均可选 |
 | DELETE | `/articles/:id` | 登录 | 软删除（进回收站，不丢评论点赞） |
-| POST | `/articles/:id/comments` | 登录 | 发表评论。Body: `{content, parent_id?, captcha_token?, captcha_answer?}` |
+| POST | `/articles/:id/comments` | 可选（游客需开关） | 发表评论。Body: `{content, parent_id?, guest_name?, guest_email?, guest_url?, <验证码字段>}` |
 | POST | `/articles/:id/reactions` | 登录 | 点赞/收藏切换。Body: `{type: "like"\|"favorite"}` |
 
 **关键行为**：
@@ -108,6 +108,16 @@
 - `category`/`tag` 传 **slug**（不是 id）
 - 创建草稿（`status=draft`）**不触发人机验证**，发布才触发
 - `cover` 留空时后端自动提取正文第一张图片的 URL
+
+**发表评论的身份规则**（登录用户与游客共用同一端点，挂 `OptionalAuth`）：
+- 带有效令牌 → 按账号身份记录，**请求体里的 `guest_*` 一律丢弃**（否则登录用户能伪装成游客）
+- 无令牌 → 需后台开启 `guest_comment`，否则返回 **401「登录后才能评论」**
+- 游客必须填 `guest_name`（昵称）；`guest_email` 在 `guest_comment_email` 开启时必填；
+  `guest_url` 必须 http/https（`javascript:` 等伪协议会被拒绝，防存储型 XSS）
+- 游客评论默认进待审队列（`guest_comment_free` 未开启时），响应带 `pending: true`
+- 响应 `author` 结构：`{id, username, is_guest, url?}`。游客的 `id` 是 0，
+  **前端必须用 `is_guest` 判断而不是 `id === 0`**；`username` 已是展示名（游客取昵称）
+- 公开响应**不含游客邮箱与 IP**，只有后台接口（`toCommentResponseAdmin`）才带
 
 **路由坑（改动前必读）**：相关/邻居接口必须挂在 `/slug/:slug/...` 前缀下。
 **不能**写成 `GET /articles/:slug/related` —— 同级已有 `articles.GET("/:id")`，
@@ -458,10 +468,14 @@ CaptchaService 门面按 `captcha_provider` 设置校验；**POW 例外**——�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/comments?page=&page_size=` | 全部评论（含所属文章） |
+| GET | `/admin/comments?page=&page_size=` | 全部评论（含所属文章）。带 `status`、游客 `guest_email`、`ip` |
 | DELETE | `/admin/comments/:id` | 删除评论 |
 | PUT | `/admin/comments/:id/status` | 审核。Body: `{status: "approved"\|"rejected"}` |
 | GET | `/admin/comments/pending-count` | 待审数（侧边栏角标） |
+
+**游客评论的审核闭环**：`guest_comment` 开启后，游客评论默认落 `pending`
+（除非同时开启 `guest_comment_free`）。后台「评论管理」页对待审评论显示
+绿色通过 / 琥珀驳回按钮，通过即公开。这是游客评论唯一的放行入口。
 
 > 删除父评论时子评论的 `parent_id` 会被置空（提升为顶级），内容不丢。
 > 自引用外键直接删会被 PostgreSQL 拒绝（SQLSTATE 23503）。

@@ -180,9 +180,13 @@ type Comment struct {
     ID        uint
     ArticleID uint       // 外键 → Article
     Article   *Article
-    UserID    uint       // 外键 → User
-    User      User
+    UserID    *uint      // 外键 → User；nil = 游客评论（见下）
+    User      *User
+    GuestName  string    // 游客昵称（必填，≤64）
+    GuestEmail string    // 游客邮箱（选填，json:"-" 不公开）
+    GuestURL   string    // 游客个人网站（选填，公开展示）
     ParentID  *uint      // 被回复的评论，nil = 顶级
+    Parent    *Comment   // 自引用关联，Preload("Parent") 用
     Content   string     // text
     Status    string     // "pending" | "approved" | "rejected"，默认 approved
     IP        string     // 操作者 IP（json:"-"），审核时追溯用
@@ -190,13 +194,22 @@ type Comment struct {
 }
 ```
 
+**游客评论**：`UserID` 可空以支持未登录访客发表评论。
+
+- 为什么是 `*uint` 而不是「0 表示游客」：`comments.user_id` 有指向 `users` 的外键，写 0 会去撞不存在的 `id=0` 用户，INSERT 直接失败（23503）。NULL 才是「无关联」的正确表达。
+- **升级不需要手写 SQL**：从 `uint` 改成 `*uint` 时，AutoMigrate 会真的去掉 NOT NULL 约束。链路是 `MigrateColumn`（当前列 nullable=false，`field.NotNull`=false，`nullable == field.NotNull` 成立）→ `alterColumn=true` → postgres driver 执行 `ALTER TABLE ... DROP NOT NULL`。已部署实例直接升级即可。
+- 三个游客列只在 `UserID == nil` 时有值；登录用户即便请求体带了 `guest_*` 也会被 `normalizeIdentity` 清空，不允许两套身份并存。
+- 判定与展示统一走模型方法，**不要在调用方各写一套**：`IsGuest()`（是否游客）、`AuthorID()`（游客返回 0）、`DisplayName()`（登录用户取用户名 / 游客取昵称 / 缺失时回落「匿名访客」）。
+- `GuestEmail` 是 `json:"-"`，只由 `toCommentResponseAdmin` 手动塞进后台响应；公开出口（`toCommentResponse`）一律不含邮箱与 IP。
+
 **权限**：评论作者本人或管理员可删除（`CommentService.Delete(id, userID, isAdmin)`）。
+游客评论**只有管理员能删**——游客无法证明"这条是我发的"，而 `AuthorID()` 的 0 与未登录请求的 userID 0 相等，必须先 `IsGuest()` 短路再比 ID。
 
 **审核状态**（`model.CommentPending/Approved/Rejected`）：
 - `approved` 是默认，直接公开
-- `pending` 由两个条件触发：后台开了 `comment_audit`，或内容命中敏感词表 `comment_words`
+- `pending` 由三个条件触发：后台开了 `comment_audit`、内容命中敏感词表 `comment_words`、**或这是一条游客评论且 `guest_comment_free` 未开启**（默认未开启 → 游客评论一律先审后发）
 - **敏感词命中不直接拒绝**：拒绝会向刷评者暴露"这个词被拦了"，换写法即可绕过；转人工审核同样挡得住内容，且不留信号
-- 公开列表只返回 `approved` + **当前登录用户自己**的 `pending`（否则作者以为评论丢了会重复提交）
+- 公开列表只返回 `approved` + **当前登录用户自己**的 `pending`（否则作者以为评论丢了会重复提交）。游客没有账号，因此看不到自己的 pending，前端在提交后提示"等待审核"而不回显
 
 **嵌套回复**：`POST /articles/:id/comments` 接收 `parent_id`。跨文章回复会被拒绝（会把两条无关讨论拼在一起）。删除父评论时，回复的 `parent_id` 置空——提升为顶级，内容不丢。
 

@@ -101,6 +101,13 @@ captcha: {
 }
 ```
 
+**布尔开关用严格判等，不要用 `!== false`**：`allowRegistration` 的
+`cfg.allow_registration !== false` 是"缺省即允许"的语义；而游客评论三个开关
+（`guestComment` / `guestCommentFree` / `guestCommentEmail`）用的是
+`=== true`——**缺省必须是"不允许"**，与后端默认关闭保持一致。
+`settings_service.Public()` 已把这三项转成布尔值下发（不是字符串 `"false"`，
+那在 JS 里是真值）。
+
 > 浏览器标签页图标（favicon）由 `components/site-head.tsx` 以 React 19 metadata hoist 渲染 `<link rel="icon">`（必须在 `SiteConfigProvider` 内层，且已删除 `app/icon.svg`/`app/favicon.ico` file convention）；站点 title 由根 `layout.tsx` 的 `generateMetadata` 从后端配置生成。原来在 context 里运行时改 DOM link / `document.title` 的方式在 React 19 下会被覆盖，导致后台改了前台不生效。
 
 ### 2. AuthProvider（`lib/auth-context.tsx`）
@@ -157,13 +164,17 @@ const mutation = useMutation({
 
 ```ts
 // 通用请求封装，自动处理 token、401 刷新、错误抛出
-api<T>(path, { method, body, auth })
+api<T>(path, { method, body, auth, optionalAuth })
 ```
 
 **关键机制**：
 - `auth: true` 时自动带 `Authorization` 头
 - 收到 401 会**自动尝试 refresh token**，成功后重放请求
 - 失败抛出 `ApiError(status, message)`，message 是后端中文错误
+- `optionalAuth: true` = **可选登录**：有令牌就带上，没有也照常发请求；
+  401 时不刷新也不清空登录态（这条接口本来就允许匿名，401 只表示"这次没登录"）。
+  用于登录用户与游客共用的接口（目前是发表评论）。**别用 `auth: true` 代替**——
+  它会在未登录时把请求拦在客户端，游客根本没机会提交
 
 **新增 API 的标准写法**：
 ```ts
@@ -467,6 +478,34 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 2. **正文卡**：封面（`figure` 占满卡宽 `aspect-video`）+ 正文（`proseBody`）+ 底部标签行
 3. **互动卡**：点赞 / 收藏 / 分享（`ArticleShare`）/ 返回
 4. **评论卡**：输入框 + 评论列表
+
+**游客评论表单**（`post-detail.tsx`，未登录且 `site.guestComment` 为真时渲染）：
+登录用户与游客共用同一个提交入口 `postComment()`，差别只在提交时是否附带
+`guest_name` / `guest_email` / `guest_url`。
+
+- **三个输入框只在未登录时出现**（昵称必填 / 邮箱选填不公开 / 网站选填）。
+  邮箱占位文案随 `site.guestCommentEmail` 在"必填/选填"间切换，`canGuestSubmit`
+  也据此联动，与后端 `normalizeIdentity` 的规则保持一致。
+- **游客身份记忆**：提交成功后写 `localStorage`（键 `inkstone.guestIdentity`），
+  下次访问自动预填。读取用 **`useSyncExternalStore`**（`readGuestIdentity` +
+  空 subscribe），不用 `useEffect` + setState —— 后者会触发
+  `react-hooks/set-state-in-effect`。**`getSnapshot` 必须返回引用稳定的值**：
+  按原始字符串缓存对象，否则每次新建对象会让 React 认为快照一直在变而无限重渲染。
+  用 `guestDirty` 标记区分"用户改过输入框"与"还没动过"，改过之后不再被记忆值覆盖
+  （否则用户清空昵称会被旧值顶回来）。
+- **审核提示**：`guestCommentPending`（= `!site.guestCommentFree`）为真时，
+  输入框下方与提交成功提示都会说明"等待管理员审核后公开"。**不要统一提示
+  "已发布"**——游客刷新页面找不到自己的评论，会以为发丢了。
+- **回复框**：`CommentBubble` 收 `guestNeedsName`，昵称未填时提示
+  "请先在上方评论框填写昵称"，而不是让提交必然失败。
+- **删除入口**：`canDelete` 必须排除 `author.is_guest`。游客 `author.id` 是 0，
+  与任何真实用户 id 都不等，但显式排除可防止将来改用别的判据时误开删除入口。
+- **游客昵称外链**：填了网站时昵称渲染成 `<a rel="nofollow ugc noopener noreferrer">`
+  （`nofollow ugc` 防垃圾外链传权重，`noopener` 防目标页操作本页），
+  并在名字后加一个「访客」小标记。
+
+后台「评论管理」页（`app/admin/comments/page.tsx`）展示「访客」标记、待审核/已驳回
+徽章、游客邮箱与 IP，并对待审评论显示通过/驳回按钮（`setCommentStatus`）。
 
 元信息栏：作者首字母圆形头像 + 用户名 + `·` 分隔 + 日期 + 阅读量；分隔点在窄屏 `hidden`
 （`flex-wrap` 折行后不留孤立圆点），`aria-hidden` 不给屏幕阅读器念。

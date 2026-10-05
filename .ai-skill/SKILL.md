@@ -22,6 +22,7 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 用户状态 | `active` / `banned` |
 | 文章状态 | `draft` / `published` / `scheduled`（定时发布，到点由 `ScheduledPublisher` 每分钟扫描转 published） |
 | 评论状态 | `pending` / `approved` / `rejected`（默认 `approved`；`pending` 由后台 `comment_audit` 或敏感词命中触发） |
+| 游客评论 | `Comment.UserID` 可空（`*uint`）。游客三列 `guest_name`（必填）/`guest_email`（选填、**不公开**）/`guest_url`（选填、公开）。三个开关：`guest_comment`（总开关，默认关）、`guest_comment_free`（免审，默认关，即游客评论进待审队列）、`guest_comment_email`（邮箱必填，默认关）。展示名统一走 `Comment.DisplayName()`，游客判定走 `Comment.IsGuest()` |
 | 敏感字段 | SMTP 密码、验证码密钥（API 只返回 `xxx_set` 布尔值，不下发明文） |
 | 软删除 | Article / Page 有 `gorm.DeletedAt`。删除只置 `deleted_at` **不清关联**（还原时评论点赞还在）；彻底清关联只发生在 `purge` |
 | 文章增强 | 摘要（`excerpt` 空则自动生成）、置顶（`is_pinned`，热门榜不掺）、访问密码（`view_password` 存 bcrypt，`json:"-"`）、定时发布（`scheduled_at`）、历史版本（`article_revisions`，上限 50 版） |
@@ -272,3 +273,11 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | 更新后前端不生效 | 前端是**构建期**注入 `NEXT_PUBLIC_API_URL` 的产物：只替换源码不重新 build 前端镜像，页面仍是旧代码。宿主代理的 docker 模式已包含 `compose build`；手工更新别忘了 `--build` |
 | 更新写入的文件属主是 root | 后端容器以 root 跑，写进 `./:/app/src` 的文件在宿主属主为 root，之后普通用户 `git pull`/`git status` 会报 dubious ownership。处理：`git config --global --add safe.directory <仓库>` + `sudo git`，或更新后 `chown -R` 回部署用户（详见 `references/deployment.md`） |
 | 项目级 skill 只在 `.dsh/skills/` 一层生效 | DSH 的 `dsh-skill-filesystem` 自动扫描 `<项目根>/.dsh/skills/`（rank 100）与 `<项目根>/.agents/skills/`（rank 200），**无需注册、无需重启**，用 write/edit 改完即时生效。三条硬约束：①**只发现一层**——`<name>/SKILL.md` 或平铺 `<name>.md`，嵌套 `**/SKILL.md` 静默忽略；②frontmatter 的 `name` 必须是 kebab-case（`Bad_Name` 会被静默丢弃，无报错，只进日志）；③`description` 必填。想让规则**常驻生效**（而非等模型自己判断是否加载）时，把要点同时写进 `AGENTS.md`——skill 目录本身只提供「名字 + 截断描述」，靠模型判断该不该加载 |
+| 外键改可空是 `*uint` 不是「0 表示空」 | `Comment.UserID` 为支持游客改成 `*uint`。**不要用 0 当哨兵值**：`comments.user_id` 有指向 `users` 的外键，写 0 会去撞不存在的 `id=0` 用户，INSERT 直接失败（23503）。NULL 才是「无关联」。连带三处必须同步：①判定用 `IsGuest()`/`AuthorID()`，别再直接比 `cm.UserID == x`；②`User` 字段要从值类型改 `*User`，否则游客评论序列化出零值用户；③`toCommentResponse` 原先用 `cm.User.ID != 0` 判空，改指针后必须走 `DisplayName()` |
+| `AuthorID()` 归零会制造越权 | 游客的 `AuthorID()` 返回 0，而未登录请求传进来的 `userID` 也是 0——`Delete` 若只写 `comment.AuthorID() != userID`，则 `0 != 0` 不成立，**等于任何人可删任意游客评论**。必须先 `if comment.IsGuest() { return ErrForbidden }` 短路。同理前端 `canDelete` 判 `user.id === author.id` 时也要排除 `author.is_guest` |
+| GORM `Preload` 的关联字段不存在时不报错 | `Comment` 此前只有 `ParentID` 没有 `Parent` 字段，repository 里的 `Preload("Parent")` / `Preload("Parent.User")` **一直静默无效**（错误被 `First(...).Error` 之外的路径吞掉），前端 `parent_author` 永远为空。新增 `Parent *Comment` 自引用关联后才真正生效。**写 `Preload("X")` 前先确认模型里有 `X` 字段** |
+| GORM map 形式的 `Updates` 只写列出的列 | `ArticleRepository.Update`/`UpdateWithTags` 用 `Updates(map[string]any{...})`，**map 里没有的字段一律不落库**。`excerpt`/`is_pinned`/`view_password`/`scheduled_at` 四列曾因此完全不保存（service 层赋了值、接口返回 200、库里纹丝不动）。不用 `Save` 是对的（防 views 回滚），但改用 map 时必须把 service 触碰的每个字段都列进去。**新增文章字段时同步检查这两个 map** |
+| `settings == nil` 时的默认值方向决定安全性 | `CommentService` 的 `auditEnabled`/`guestCommentFree` 都在 `s.captcha/s.settings` 为 nil 时返回 false（要审核），测试里用 `&CommentService{}` 就能验证；而 `guestEmailRequired` 返回 false（不要求）。**权限类开关失败必须拒绝，体验类开关失败应放行**——降级方向选错，配置服务一挂就是漏洞 |
+| 新增设置项要同时改三处前端 | ①`SiteSettings` 类型（`lib/types.ts`）；②`app/admin/settings/page.tsx` 的 **payload 白名单**（漏了就永远保存不上，表现为"开了又变回关"）；③要下发到前台的话，`settings_service.Public()` 里转布尔 + `site-config-context.tsx` 的 `SiteConfig` 接口与解构。**布尔设置项别下发字符串**：`"false"` 在 JS 里是真值，`if (cfg.x)` 会永远成立 |
+| `auth: true` 会挡住匿名请求 | `lib/api.ts` 的 `api()` 在 `auth: true` 时才取令牌，且 401 会尝试刷新、失败即清空登录态。游客可用的接口（如发表评论）必须用新加的 **`optionalAuth: true`**：有令牌就带上，没有也照发，且不因 401 清空登录态 |
+| effect 里读 localStorage 会触发 ESLint | `react-hooks/set-state-in-effect` 禁止在 effect 体内同步 setState。读 localStorage 恢复表单初值的正解是 **`useSyncExternalStore`**（`post-detail.tsx` 的游客身份即此写法）：`getServerSnapshot` 返回 null 保证 SSR 无值、客户端补齐，因此不会 hydration mismatch。**getSnapshot 必须返回引用稳定的值**——每次新建对象会让 React 认为快照一直在变而无限重渲染，需按原始字符串缓存 |
