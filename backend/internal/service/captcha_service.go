@@ -43,6 +43,17 @@ func (s *CaptchaService) SetDisabled(v bool) { s.disabled = v }
 // Disabled 报告应急放行是否生效（/system/info 会把它暴露给后台）。
 func (s *CaptchaService) Disabled() bool { return s.disabled }
 
+// BoolSetting 读取一个布尔设置项，读取失败时返回 fallback。
+//
+// 存在的意义是让 handler 不必为了读一个设置再注入 SettingsService：
+// CommentHandler 已经持有本服务，游客评论开关就挂在这里读。
+func (s *CaptchaService) BoolSetting(key string, fallback bool) bool {
+	if s.settings == nil {
+		return fallback
+	}
+	return s.settings.BoolValue(key, fallback)
+}
+
 // Provider 返回当前启用的 provider，未配置或非法值回退极验（保持旧行为）。
 func (s *CaptchaService) Provider() string {
 	v, err := s.settings.Get(SettingCaptchaProvider)

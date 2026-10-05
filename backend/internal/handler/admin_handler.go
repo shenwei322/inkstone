@@ -370,7 +370,8 @@ func (h *AdminHandler) ListComments(c *gin.Context) {
 	}
 	items := make([]gin.H, 0, len(comments))
 	for i := range comments {
-		items = append(items, toCommentResponse(&comments[i]))
+		// 后台视图：带审核状态与游客邮箱（审核时可能要联系本人）
+		items = append(items, toCommentResponseAdmin(&comments[i]))
 	}
 	c.JSON(http.StatusOK, gin.H{"comments": items, "total": total, "page": page, "page_size": pageSize})
 }

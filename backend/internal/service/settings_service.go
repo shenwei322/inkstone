@@ -111,6 +111,12 @@ const (
 	SettingCommentWords    = "comment_words"     // 敏感词表，换行或逗号分隔；命中则转人工审核而非直接拒绝
 	SettingCommentNotify   = "comment_notify"    // "true"/"false" 有新评论时邮件通知文章作者
 	SettingCommentMaxDepth = "comment_max_depth" // 嵌套回复最大层级（默认 3，前端按此渲染缩进）
+	// 游客（未登录访客）评论，默认全部关闭。
+	// guest_comment 与 comment_audit 的区别：后者管"要不要先审"，
+	// 这个管"允不允许发"。
+	SettingGuestComment      = "guest_comment"       // "true"/"false" 是否允许未登录访客发表评论（默认 false）
+	SettingGuestCommentFree  = "guest_comment_free"  // "true"/"false" 游客评论是否免于先审后发（默认 false）
+	SettingGuestCommentEmail = "guest_comment_email" // "true"/"false" 游客评论是否必填邮箱（默认 false）
 )
 
 var settingDefaults = map[string]string{
@@ -145,6 +151,12 @@ var settingDefaults = map[string]string{
 	SettingCommentWords:    "",
 	SettingCommentNotify:   "false",
 	SettingCommentMaxDepth: "3",
+
+	// 游客评论默认全关：默认状态与升级前完全一致（未登录只能看不能发），
+	// 部署方升级后不会因为"多了一个功能"而突然收到垃圾评论。
+	SettingGuestComment:      "false",
+	SettingGuestCommentFree:  "false",
+	SettingGuestCommentEmail: "false",
 
 	SettingEmailCodeOnRegister: "false",
 	SettingEmailCodeOnLogin:    "false",
@@ -434,6 +446,13 @@ func (s *SettingsService) Public() (map[string]any, error) {
 			out[k] = v == "true"
 			continue
 		}
+		// 前台要据这些开关直接决定渲染（是否显示游客表单、是否提示"待审核"），
+		// 下发布尔值而不是字符串 "false" —— 字符串在 JS 里是真值，
+		// 前端若写成 if (cfg.guest_comment) 会永远为真。
+		if k == SettingGuestComment || k == SettingGuestCommentFree || k == SettingGuestCommentEmail {
+			out[k] = v == "true"
+			continue
+		}
 		out[k] = v
 	}
 	return out, nil
@@ -458,6 +477,12 @@ func (s *SettingsService) AdminView() (map[string]any, error) {
 			continue
 		}
 		if k == SettingAllowRegistration {
+			out[k] = v == "true"
+			continue
+		}
+		// 与 Public() 保持一致：后台也拿到布尔值，设置页才能用受控开关
+		// （字符串 "false" 在 JS 里为真，复选框会显示成勾选状态）。
+		if k == SettingGuestComment || k == SettingGuestCommentFree || k == SettingGuestCommentEmail {
 			out[k] = v == "true"
 			continue
 		}

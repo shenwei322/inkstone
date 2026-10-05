@@ -392,6 +392,11 @@ func main() {
 			articles.GET("/slug/:slug/unlock", articleHandler.UnlockArticle)
 			articles.GET("/:id/comments", commentHandler.List)
 			articles.GET("/:id/reactions", reactionHandler.Stats)
+			// 发表评论：登录用户与游客共用。挂 OptionalAuth 组而非 authed 组
+			// ——未登录请求要能进来，由 handler 依 guest_comment 开关决定
+			// 放行（游客）还是返回 401（未开启游客评论）。限流与验证码照旧，
+			// 游客没有账号可封，这两道是唯一的提交前防线。
+			articles.POST("/:id/comments", commentLimit, commentHandler.Create)
 
 			authed := articles.Group("", middleware.Auth(tokens, userStatusOK))
 			{
@@ -406,7 +411,6 @@ func main() {
 				authed.GET("/:id/revisions", revisionHandler.List)
 				authed.GET("/:id/revisions/:version", revisionHandler.Get)
 				authed.POST("/:id/revisions/restore", revisionHandler.Restore)
-				authed.POST("/:id/comments", commentLimit, commentHandler.Create)
 				authed.POST("/:id/reactions", reactionHandler.Toggle)
 			}
 		}

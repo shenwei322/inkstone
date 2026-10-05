@@ -93,6 +93,9 @@ func (r *CommentRepository) ListByUser(userID uint, page, pageSize int) ([]model
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
+	// 游客评论的 user_id 是 NULL，与任何 = 比较都不成立，因此这里传 0
+	// 只会命中「真的存在 id=0 的用户」这种不可能的情况——游客评论不会
+	// 混进某个用户的「我的评论」列表。
 	var total int64
 	if err := r.db.Model(&model.Comment{}).Where("user_id = ?", userID).Count(&total).Error; err != nil {
 		return nil, 0, err
