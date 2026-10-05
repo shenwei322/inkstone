@@ -30,12 +30,13 @@ func TestRealGitHubImageDownload(t *testing.T) {
 		// 加速前缀形式：开发机上 GitHub 被 Clash fake-ip 接管（解析到
 		// 198.18.x.x 而被 SSRF 守卫拒绝），走加速站可以不依赖本机 DNS。
 		proxyURL = "https://gh-proxy.com/https://github.com/shenwei322/inkstone/releases/download/Beta1.28/inkstone-images-Beta1.28.tar"
-		wantSize = int64(277837312)
-		// Beta1.28 重新发布后 GitHub 算出的 digest。
-		// ⚠️ Beta1.28 的镜像包在「镜像包下载加断点续传」那一版被替换过一次
-		// （旧包 277816320 字节 / 84a5445e…，新包带断点续传修复）。
+		wantSize = int64(277846528)
+		// Beta1.28 的镜像包被替换过两次（都随修复重新发布）：
+		//   ① 277816320 / 84a5445e…  首发（无断点续传）
+		//   ② 277837312 / 3f91af55…  加断点续传 + 镜像加速
+		//   ③ 277846528 / 4225b9bf…  下载超时改为空闲超时
 		// 若这里与 Release 上的 digest 不一致，说明包被再次替换，需同步更新。
-		wantSHA = "3f91af5508e791f4e7e7cab8436b278072512d4f28dc40e31cefac952b70da1c"
+		wantSHA = "4225b9bf51c67b853be3c3c11cce8cdba868cdc3c05b0116e03d5bd5dc5f32bd"
 	)
 
 	rawURL := directURL
