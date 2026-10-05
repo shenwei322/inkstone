@@ -152,51 +152,225 @@ type downloadResult struct {
 	Source string
 }
 
+// downloadResumeMaxAttempts 是单次 download 内部的重试次数上限。
+//
+// 为什么必须重试：镜像包 265 MB 级别，国内网络下「下到一半被掐断」是常态
+// 而不是异常。改前失败即整体报错并删掉半截文件，等于每次都要从 0 开始，
+// 实测 58.5 MB 就 context deadline exceeded，反复重来永远到不了终点。
+const downloadResumeMaxAttempts = 6
+
+// downloadRetryBaseDelay 是首次重试前的等待，之后按 2 的幂退避并封顶 30s。
+// 断流往往是瞬时的，稍等一下成功率明显更高；但也不能等太久，否则
+// 用户看到进度条长时间不动会以为卡死。
+const downloadRetryBaseDelay = 2 * time.Second
+
 // download 流式下载到 destPath，边下边算 SHA-256，并在写完后校验 Content-Length。
+//
+// 支持**断点续传**：中途断流时保留半截文件，下一轮用 Range 头从断点继续，
+// 而不是丢弃重来。判定与限制：
+//   - 只有服务器返回 Accept-Ranges/206 才续传，否则回退为整包重下；
+//   - 续传前比对 ETag/Last-Modified，资源变了就放弃半截文件重下
+//     （否则会拼出「前半段旧版 + 后半段新版」的损坏包）；
+//   - 续传时 SHA-256 无法沿用（哈希器不支持从中间状态恢复），改为对
+//     已落盘的半截文件重新摘要后再接着算，保证最终摘要覆盖全文件。
 func (c *httpClient) download(ctx context.Context, rawURL, destPath string, onProgress func(done, total int64)) (downloadResult, error) {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return downloadResult{Source: rawURL}, err
 	}
-	out, err := os.Create(destPath)
-	if err != nil {
-		return downloadResult{Source: rawURL}, err
-	}
-	// 失败路径统一清理半截文件
-	success := false
-	defer func() {
-		out.Close()
-		if !success {
-			_ = os.Remove(destPath)
+
+	var lastErr error
+	for attempt := 1; attempt <= downloadResumeMaxAttempts; attempt++ {
+		res, err := c.downloadOnce(ctx, rawURL, destPath, onProgress)
+		if err == nil {
+			return res, nil
 		}
-	}()
+		lastErr = err
+
+		// 上下文被取消（用户点了取消 / 进程退出）不必再试
+		if ctx.Err() != nil {
+			break
+		}
+		// 明确的「不该重试」错误直接返回：4xx/5xx、超限等，重试只会
+		// 浪费时间并刷日志。
+		//
+		// 不删半截文件：调用方（downloadImageAsset）可能换一个等价地址
+		// 继续下，保留已下的字节就能续传。安全性由 ETag/If-Range 保证——
+		// 换到不同源时校验值不同，downloadOnce 会自行放弃续传重下。
+		var noRetry *noRetryError
+		if errors.As(err, &noRetry) {
+			return downloadResult{Source: rawURL}, err
+		}
+		if attempt == downloadResumeMaxAttempts {
+			break
+		}
+
+		delay := downloadRetryBaseDelay << (attempt - 1)
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+		// 半截文件保留给下一轮续传；这里只等待退避
+		select {
+		case <-ctx.Done():
+			lastErr = ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	// 重试耗尽：保留半截文件交给调用方。
+	//
+	// 这里刻意不删——downloadImageAsset 会换下一个地址继续，同源时能靠
+	// ETag/Range 接着下完，删掉等于白下。真正的收尾由它在所有地址都
+	// 失败后完成（删文件 + 删续传元数据）。
+	// 续传元数据也一并留着，否则换地址后就失去 If-Range 的比对依据，
+	// 而缺依据时 downloadOnce 会拒绝续传、退回整包重下。
+	return downloadResult{Source: rawURL}, lastErr
+}
+
+// noRetryError 标记「重试也没有意义」的失败，避免对 4xx 之类反复重连。
+type noRetryError struct{ err error }
+
+func (e *noRetryError) Error() string { return e.err.Error() }
+func (e *noRetryError) Unwrap() error { return e.err }
+
+// downloadOnce 是一次完整的下载尝试（可能从半截文件续传）。
+func (c *httpClient) downloadOnce(ctx context.Context, rawURL, destPath string, onProgress func(done, total int64)) (downloadResult, error) {
+	// 检查是否已有半截文件可供续传
+	var resumeFrom int64
+	var partETag, partModTime string
+	if st, err := os.Stat(destPath); err == nil && st.Size() > 0 {
+		resumeFrom = st.Size()
+		partETag, partModTime = readResumeMeta(destPath)
+		// 没有 ETag / Last-Modified 就不能安全续传。
+		//
+		// 缺了比对依据，If-Range 无从下手，服务器会按范围直接给内容——
+		// 万一这期间 Release 资产被换成另一个版本（重新构建、重传同名包），
+		// 就会拼出「前半段旧 + 后半段新」的包。它长度正确、能通过大小
+		// 检查，只有在 docker load 时才炸，甚至悄悄装上错的镜像。
+		// 相比之下重下一次只是慢，所以这里一律选择重下。
+		if partETag == "" && partModTime == "" {
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return downloadResult{Source: rawURL}, err
+			}
+			resumeFrom = 0
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return downloadResult{Source: rawURL}, err
 	}
 	c.applyHeaders(req)
+	if resumeFrom > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeFrom))
+		// 条件请求：资源若已变化，服务器回 200 而非 206，下面按「重下」处理
+		if partETag != "" {
+			req.Header.Set("If-Range", partETag)
+		} else if partModTime != "" {
+			req.Header.Set("If-Range", partModTime)
+		}
+	}
+
 	resp, err := c.downloader.Do(req)
 	if err != nil {
 		return downloadResult{Source: rawURL}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return downloadResult{Source: rawURL}, fmt.Errorf("下载源码包失败：HTTP %d", resp.StatusCode)
+
+	// 4xx 是确定性失败，重试无意义（403 可能是限流，但也会一直 403）
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return downloadResult{Source: rawURL}, &noRetryError{
+			err: fmt.Errorf("下载镜像包失败：HTTP %d", resp.StatusCode),
+		}
 	}
-	total := resp.ContentLength
+	// 5xx 也直接换地址，不在原地退避重试。
+	//
+	// 动机是实测出来的：镜像加速站返回 502 时，原地重试 6 次要耗掉
+	// 一分钟（2+4+8+16+30+30），而这期间该做的其实是立刻试下一个地址。
+	// 「服务器挂了」不是瞬时抖动，重试同一个地址几乎没有意义。
+	if resp.StatusCode >= 500 {
+		return downloadResult{Source: rawURL}, &noRetryError{
+			err: fmt.Errorf("下载镜像包失败：HTTP %d（服务端错误，换地址重试）", resp.StatusCode),
+		}
+	}
+
+	// 服务器没答应续传（返回 200 而非 206）：放弃半截文件，从头下，
+	// 否则会把整包内容追加到半截文件后面，拼出一个更大的坏包。
+	if resumeFrom > 0 && resp.StatusCode != http.StatusPartialContent {
+		resumeFrom = 0
+		partETag, partModTime = "", ""
+		if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+			return downloadResult{Source: rawURL}, err
+		}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return downloadResult{Source: rawURL}, fmt.Errorf("下载镜像包失败：HTTP %d", resp.StatusCode)
+	}
+
+	// 总长度 = 已下载 + 本次剩余（206 的 Content-Length 只是剩余部分）
+	var total int64
+	if resp.StatusCode == http.StatusPartialContent {
+		if cr, ok := parseContentRange(resp.Header.Get("Content-Range")); ok {
+			total = cr
+		} else if resp.ContentLength > 0 {
+			total = resumeFrom + resp.ContentLength
+		}
+	} else {
+		total = resp.ContentLength
+	}
 	if total > maxArchiveBytes {
-		return downloadResult{Source: rawURL}, fmt.Errorf("源码包过大（%d 字节），已超过 1 GB 上限", total)
+		return downloadResult{Source: rawURL}, &noRetryError{
+			err: fmt.Errorf("镜像包过大（%d 字节），已超过上限", total),
+		}
 	}
 
 	hasher := sha256.New()
+	if resumeFrom > 0 {
+		// 哈希器无法从中间状态恢复：先对已落盘的半截内容重算摘要，
+		// 再接着往下算，最终摘要才能真正覆盖整个文件。
+		// 这也是为什么不能简单地「保留 hasher 接着写」。
+		existing, err := os.Open(destPath)
+		if err != nil {
+			return downloadResult{Source: rawURL}, err
+		}
+		if _, err := io.Copy(hasher, existing); err != nil {
+			existing.Close()
+			// 半截文件读不动（如被截断）——删掉重下，不留坏状态
+			_ = os.Remove(destPath)
+			return downloadResult{Source: rawURL}, err
+		}
+		existing.Close()
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if resumeFrom > 0 {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	out, err := os.OpenFile(destPath, flags, 0o644)
+	if err != nil {
+		return downloadResult{Source: rawURL}, err
+	}
+
+	// 只在本次尝试失败时保留半截文件供下次续传；成功才关闭。
+	attemptOK := false
+	defer func() {
+		out.Close()
+		if !attemptOK {
+			// 关键区别：这里**不删**文件，留给下一轮 Range 续传
+			writeResumeMeta(destPath, resp.Header)
+		}
+	}()
+
 	writer := io.MultiWriter(out, hasher)
-	var written int64
+	written := resumeFrom
 	buf := make([]byte, 256<<10)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if written+int64(n) > maxArchiveBytes {
-				return downloadResult{Source: rawURL}, errors.New("源码包超过 1 GB 上限，已中止下载")
+				return downloadResult{Source: rawURL}, &noRetryError{
+					err: errors.New("镜像包超过上限，已中止下载"),
+				}
 			}
 			if _, err := writer.Write(buf[:n]); err != nil {
 				return downloadResult{Source: rawURL}, err
@@ -210,22 +384,86 @@ func (c *httpClient) download(ctx context.Context, rawURL, destPath string, onPr
 			break
 		}
 		if readErr != nil {
+			// 断流：把已收内容落盘，下一轮从 written 处续
+			_ = out.Sync()
 			return downloadResult{Source: rawURL}, readErr
 		}
 	}
 	if total > 0 && written != total {
+		_ = out.Sync()
 		return downloadResult{Source: rawURL}, fmt.Errorf("下载不完整：期望 %d 字节，实际 %d 字节", total, written)
 	}
 	if err := out.Sync(); err != nil {
 		return downloadResult{Source: rawURL}, err
 	}
-	success = true
+	attemptOK = true
+	clearResumeMeta(destPath)
 	return downloadResult{
 		Path:   destPath,
 		Bytes:  written,
 		SHA256: hex.EncodeToString(hasher.Sum(nil)),
 		Source: rawURL,
 	}, nil
+}
+
+// parseContentRange 从 "bytes 100-999/1000" 里取出总长度 1000。
+func parseContentRange(v string) (int64, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	slash := strings.LastIndex(v, "/")
+	if slash < 0 || slash == len(v)-1 {
+		return 0, false
+	}
+	total, err := strconv.ParseInt(strings.TrimSpace(v[slash+1:]), 10, 64)
+	if err != nil || total <= 0 {
+		return 0, false
+	}
+	return total, true
+}
+
+// ---------------------------------------------------------------------------
+// 断点续传的元数据
+//
+// 续传前必须确认「远端资源还是同一份」。否则内容一变，前半段是旧版、
+// 后半段是新版，拼出来的是个能通过长度检查却完全损坏的包——比直接失败
+// 更危险（它会一路走到 docker load 才炸，甚至悄悄装上错的镜像）。
+// 因此把上一轮的 ETag/Last-Modified 存成旁路文件，下一轮用 If-Range 送出去。
+// ---------------------------------------------------------------------------
+
+// resumeMetaPath 返回半截文件对应的元数据路径。
+func resumeMetaPath(destPath string) string { return destPath + ".resume-meta" }
+
+// writeResumeMeta 记录本次响应的 ETag/Last-Modified，供下一轮 If-Range 使用。
+func writeResumeMeta(destPath string, header http.Header) {
+	etag := header.Get("ETag")
+	mod := header.Get("Last-Modified")
+	if etag == "" && mod == "" {
+		return
+	}
+	_ = os.WriteFile(resumeMetaPath(destPath), []byte(etag+"\n"+mod), 0o644)
+}
+
+// readResumeMeta 读回上一轮记录的校验值。返回空串表示没有可用的比对依据。
+func readResumeMeta(destPath string) (etag, modTime string) {
+	b, err := os.ReadFile(resumeMetaPath(destPath))
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.SplitN(string(b), "\n", 2)
+	if len(parts) > 0 {
+		etag = strings.TrimSpace(parts[0])
+	}
+	if len(parts) > 1 {
+		modTime = strings.TrimSpace(parts[1])
+	}
+	return etag, modTime
+}
+
+// clearResumeMeta 在下载完成后清掉旁路文件，避免残留误导下一轮。
+func clearResumeMeta(destPath string) {
+	_ = os.Remove(resumeMetaPath(destPath))
 }
 
 // applyHeaders 统一请求头：GitHub API 需要 UA 与 Accept；

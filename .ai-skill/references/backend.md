@@ -513,7 +513,8 @@ Stats()                   // 各分类计数（旧接口）
 | `update_service.go` | 状态机与状态文件（`UPDATE_DIR/update-state.json`）、`Status()` / `Check()`、版本信息组装、预览缓存 |
 | `update_remote.go` | HTTP 客户端（`getJSON` / `download` 流式 + SHA256）、更新源响应解析（GitHub 形状 / 自建 JSON）、仓库地址与哈希工具 |
 | `update_changelog.go` | 提交差异：compare 接口 → 提交列表分页回溯 → 空日志 + 说明（**绝不假装「已是最新」**） |
-| `update_release.go` | **releases 更新源**：Releases 拉取与解析、版本号解析/比较（兼容 `Beta1.27` 与 `v1.28.0`）、镜像包资产挑选与下载、部署版本记录（`deployed-version.json`）与安装历史（`release-history.json`） |
+| `update_remote.go` | HTTP 客户端与下载：元数据接口短超时、下载长超时、SSRF 防护（拨号前 + 逐跳重定向校验）。`download` 支持**断点续传**（Range + If-Range 比对 ETag/Last-Modified，无依据则不续）与退避重试（4xx/5xx 用 `noRetryError` 立刻上抛）。失败时刻意保留半截文件供上层换地址续传 |
+| `update_release.go` | **releases 更新源**：Releases 拉取与解析、版本号解析/比较（兼容 `Beta1.27` 与 `v1.28.0`）、镜像包资产挑选与下载（`imageAssetURLs` 生成多候选地址、`downloadImageAsset` 逐个尝试并做最终的清理与校验）、部署版本记录（`deployed-version.json`）与安装历史（`release-history.json`） |
 | `update_archive.go` | 镜像包候选地址、下载 → 校验 → 安全解压（tar.gz / zip）→ 源码完整性校验 |
 | `update_swap.go` | 变更计算、备份、原子替换（临时文件 + rename）、回滚、受保护路径 |
 | `update_apply.go` | `Apply` / `Rollback` / 后台流程 `runUpdate`、阶段进度、历史、备份列表 |

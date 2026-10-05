@@ -449,42 +449,131 @@ func (s *UpdateService) maxImageBytes() int64 {
 	return s.cfg.UpdateImageMaxMB << 20
 }
 
+// imageAssetURLs 生成镜像包的候选下载地址，按顺序尝试：
+//  1. 加速前缀 + 原始地址（UPDATE_IMAGE_MIRROR，默认 gh-proxy）；
+//  2. 原始地址直连（兜底）。
+//
+// 为什么要多候选：镜像包 265 MB 级别，国内直连 GitHub 会在中途被掐断
+// （实测 58.5 MB 就 context deadline exceeded）。加速前缀能显著提高成功率，
+// 但它本身也会挂——挂了就必须能退回直连，否则更新功能彻底不可用。
+//
+// 加速只对 GitHub 域生效：自建更新源常给内网地址（http://10.x/pkg.tar），
+// 套公网加速前缀只会 404，反而把唯一可用的地址搞坏。
+func (s *UpdateService) imageAssetURLs(rawURL string) []string {
+	raw := strings.TrimSpace(rawURL)
+	if raw == "" {
+		return nil
+	}
+	return s.imageAssetURLsWithPrefix(raw, strings.TrimSpace(s.cfg.UpdateImageMirror))
+}
+
+// imageAssetURLsWithPrefix 是 imageAssetURLs 的实际逻辑，prefix 显式传入
+// 以便测试注入本地服务器地址（httptest 是 127.0.0.1，本就不是 GitHub 域，
+// 走真实配置永远进不了加速分支，那条路径就会缺测）。
+func (s *UpdateService) imageAssetURLsWithPrefix(raw, prefix string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var urls []string
+	seen := map[string]bool{}
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u == "" || seen[u] {
+			return
+		}
+		seen[u] = true
+		urls = append(urls, u)
+	}
+	if prefix != "" && isGitHubURL(raw) {
+		add(strings.TrimRight(prefix, "/") + "/" + raw)
+	}
+	add(raw)
+	return urls
+}
+
+// isGitHubURL 判断是否为 GitHub 域的地址（github.com / objects.githubusercontent.com）。
+func isGitHubURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "github.com" || strings.HasSuffix(host, ".github.com") ||
+		host == "githubusercontent.com" || strings.HasSuffix(host, ".githubusercontent.com")
+}
+
 // downloadImageAsset 流式下载镜像包到 UPDATE_DIR/images/，边下边算 SHA-256，
 // 写完后依次与 Release 资产声明的 size、以及信任根（UPDATE_CHECKSUM 或
 // checksums.txt）对账。
+//
+// 下载本身已在 httpClient.download 里做了断点续传与退避重试；这里的多地址
+// 循环是更外层的兜底——一个地址彻底不可达时换下一个，而不是让整次更新失败。
 func (s *UpdateService) downloadImageAsset(ctx context.Context, version string, rel ReleaseBrief, asset ReleaseAssetBrief, report func(progress int, message string)) (res downloadResult, verified bool, err error) {
 	if err := os.MkdirAll(s.imageDir(), 0o755); err != nil {
 		return downloadResult{}, false, err
 	}
 	dest := filepath.Join(s.imageDir(), sanitizeFileName(version)+"-"+sanitizeFileName(asset.Name))
-	report(20, "下载镜像包："+redactURL(asset.URL))
-	d, err := s.client.download(ctx, asset.URL, dest, func(done, total int64) {
-		if total <= 0 {
-			total = asset.Size
-		}
-		progress := 20
-		message := fmt.Sprintf("下载镜像包 %.1f MB", float64(done)/1024/1024)
-		if total > 0 {
-			progress = 20 + int(float64(done)/float64(total)*55)
-			if progress > 75 {
-				progress = 75
-			}
-			message = fmt.Sprintf("下载镜像包 %.1f / %.1f MB", float64(done)/1024/1024, float64(total)/1024/1024)
-		}
-		report(progress, message)
-	})
-	if err != nil {
-		return downloadResult{}, false, err
+
+	urls := s.imageAssetURLs(asset.URL)
+	if len(s.imageURLOverride) > 0 {
+		urls = s.imageURLOverride
 	}
-	if asset.Size > 0 && d.Bytes != asset.Size {
-		_ = os.Remove(d.Path)
-		return downloadResult{}, false, fmt.Errorf("镜像包大小与 Release 资产不一致：期望 %d 字节，实际 %d 字节", asset.Size, d.Bytes)
+	if len(urls) == 0 {
+		return downloadResult{}, false, fmt.Errorf("镜像包下载地址为空")
+	}
+
+	var lastErr error
+	for i, u := range urls {
+		if i > 0 {
+			report(20, fmt.Sprintf("换用备用地址重试（%d/%d）：%s", i+1, len(urls), redactURL(u)))
+		} else {
+			report(20, "下载镜像包："+redactURL(u))
+		}
+		d, err := s.client.download(ctx, u, dest, func(done, total int64) {
+			if total <= 0 {
+				total = asset.Size
+			}
+			progress := 20
+			message := fmt.Sprintf("下载镜像包 %.1f MB", float64(done)/1024/1024)
+			if total > 0 {
+				progress = 20 + int(float64(done)/float64(total)*55)
+				if progress > 75 {
+					progress = 75
+				}
+				message = fmt.Sprintf("下载镜像包 %.1f / %.1f MB", float64(done)/1024/1024, float64(total)/1024/1024)
+			}
+			report(progress, message)
+		})
+		if err != nil {
+			lastErr = err
+			// 半截文件留给下一次尝试续传；换地址时内容相同仍可续，
+			// 但若换的是不同镜像站，ETag 不同，download() 会自行放弃续传。
+			if ctx.Err() != nil {
+				return downloadResult{}, false, err
+			}
+			continue
+		}
+		res = d
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		// 所有地址都失败：清掉半截文件与续传元数据，不留垃圾占盘。
+		// 中途换地址时是刻意保留的（可续传），但确定走不下去就要收尾。
+		_ = os.Remove(dest)
+		clearResumeMeta(dest)
+		return downloadResult{}, false, fmt.Errorf("镜像包下载失败（已尝试 %d 个地址）：%w", len(urls), lastErr)
+	}
+	if asset.Size > 0 && res.Bytes != asset.Size {
+		_ = os.Remove(res.Path)
+		return downloadResult{}, false, fmt.Errorf("镜像包大小与 Release 资产不一致：期望 %d 字节，实际 %d 字节", asset.Size, res.Bytes)
 	}
 	// 信任根校验：有期望值就必须一致，否则拒绝安装（防镜像被污染）
 	expected, haveExpected := s.expectedChecksum(ctx, rel, asset.Name)
-	ok, verr := verifyChecksum(d.SHA256, expected)
+	ok, verr := verifyChecksum(res.SHA256, expected)
 	if verr != nil {
-		_ = os.Remove(d.Path)
+		_ = os.Remove(res.Path)
 		return downloadResult{}, false, verr
 	}
 	if haveExpected && ok {
@@ -492,7 +581,7 @@ func (s *UpdateService) downloadImageAsset(ctx context.Context, version string, 
 	} else {
 		report(76, "镜像包下载完成（未找到校验值，未经完整性校验）")
 	}
-	return d, ok, nil
+	return res, ok, nil
 }
 
 // imageDir 是镜像包的存放目录（UPDATE_DIR/images）。

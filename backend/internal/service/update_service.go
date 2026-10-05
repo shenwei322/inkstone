@@ -231,6 +231,14 @@ type UpdateService struct {
 
 	// 进度落盘节流：内存里的 stage 每次都更新，但状态文件最多每秒写一次
 	lastPersist time.Time
+
+	// imageURLOverride 覆盖镜像包的候选下载地址，仅测试用。
+	//
+	// 为什么需要这个接缝：加速分支要求地址是 GitHub 域
+	// （isGitHubURL），而测试服务器只能跑在 127.0.0.1 上，走真实配置
+	// 永远进不了「加速失败→回退直连」那条路径，最该测的分支反而缺测。
+	// 生产环境留 nil，行为不变。
+	imageURLOverride []string
 }
 
 func NewUpdateService(cfg *config.Config, logs *LogService) *UpdateService {

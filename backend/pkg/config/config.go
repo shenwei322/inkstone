@@ -40,17 +40,24 @@ type Config struct {
 	TrustedProxies []string
 
 	// 在线更新系统（后台「系统更新」页）
-	UpdateEnabled      bool   // 总开关（UPDATE_ENABLED）
-	UpdateRepoURL      string // 上游仓库（UPDATE_REPO_URL）
-	UpdateBranch       string // 跟踪分支（UPDATE_BRANCH）
-	UpdateSource       string // 更新源类型：commits（默认：提交+源码包）/ releases（GitHub Releases+镜像包）
-	UpdateReleasesAPI  string // Releases 最新版本接口模板（默认 {UPDATE_GITHUB_API}/repos/{owner}/{name}/releases/latest）
-	UpdateImageAsset   string // 镜像包资产名匹配（正则；默认 inkstone-images-.*\.tar$）
-	UpdateImageMaxMB   int64  // 镜像包大小上限（MB，默认 2048）
-	UpdateChecksum     string // 期望的下载内容 SHA-256（十六进制，可空）。非空则强制校验，不一致直接拒绝安装
-	UpdateVersionFile  string // 部署版本记录文件（默认自动探测 data/deployed-version.json）
-	UpdateComposeFile  string // 镜像更新使用的 compose 文件（默认自动探测）
-	UpdateMirror       string // 源码包镜像地址模板，支持 {repo} {owner} {name} {ref} {commit} {short} 占位
+	UpdateEnabled     bool   // 总开关（UPDATE_ENABLED）
+	UpdateRepoURL     string // 上游仓库（UPDATE_REPO_URL）
+	UpdateBranch      string // 跟踪分支（UPDATE_BRANCH）
+	UpdateSource      string // 更新源类型：commits（默认：提交+源码包）/ releases（GitHub Releases+镜像包）
+	UpdateReleasesAPI string // Releases 最新版本接口模板（默认 {UPDATE_GITHUB_API}/repos/{owner}/{name}/releases/latest）
+	UpdateImageAsset  string // 镜像包资产名匹配（正则；默认 inkstone-images-.*\.tar$）
+	UpdateImageMaxMB  int64  // 镜像包大小上限（MB，默认 2048）
+	UpdateChecksum    string // 期望的下载内容 SHA-256（十六进制，可空）。非空则强制校验，不一致直接拒绝安装
+	UpdateVersionFile string // 部署版本记录文件（默认自动探测 data/deployed-version.json）
+	UpdateComposeFile string // 镜像更新使用的 compose 文件（默认自动探测）
+	UpdateMirror      string // 源码包镜像地址模板，支持 {repo} {owner} {name} {ref} {commit} {short} 占位
+	// UpdateImageMirror 是**镜像包**的加速前缀（UPDATE_IMAGE_MIRROR）。
+	//
+	// 与 UpdateMirror 的区别：那个是完整模板、只用于源码包（含
+	// archive/{commit}.tar.gz 路径），这个是纯前缀，套在 Release 资产
+	// 的完整地址前面（如 https://gh-proxy.com/https://github.com/...）。
+	// 留空表示直连 GitHub。
+	UpdateImageMirror  string
 	UpdateGitHubAPI    string // GitHub API 基址，内网镜像可指向自建代理
 	UpdateCommitsAPI   string // 提交列表 JSON 接口模板（自建更新服务器）
 	UpdateLatestAPI    string // 「仅返回最新 commit」的接口模板（自建更新服务器）
@@ -89,7 +96,17 @@ type Config struct {
 // 而 codeload 在国内通常不可达）。
 const defaultUpdateMirror = "https://gh-proxy.com/https://github.com/{owner}/{name}/archive/{commit}.tar.gz"
 
-// 更新源类型：commits 是历史行为（对比提交 + 下载源码包替换源码）；
+// defaultImageMirror 是默认镜像包加速前缀，格式与 defaultUpdateMirror 一致。
+//
+// 为什么镜像包需要单独的开关：它的下载地址来自 Release API 的
+// browser_download_url，不经过 UPDATE_MIRROR（那是源码包的模板），
+// 因此国内服务器上 releases 模式一直是在直连 GitHub 拉 265 MB 的包。
+//
+// 前缀可以留空（UPDATE_IMAGE_MIRROR= 或 none）表示直连，此时若下载失败，
+// 会退到直连地址重试。
+const defaultImageMirror = "https://gh-proxy.com"
+
+// UpdateSource 类型：commits 是历史行为（对比提交 + 下载源码包替换源码）；
 // releases 走 GitHub Releases（版本号 + 发布说明 + 镜像包资产）。
 const (
 	UpdateSourceCommits  = "commits"
@@ -112,6 +129,20 @@ func normalizeUpdateSource(raw string) string {
 	default:
 		return UpdateSourceCommits
 	}
+}
+
+// normalizeImageMirror 归一化镜像包加速前缀。
+//
+// 允许用 none/off/direct/0 显式关闭加速退回直连——国内加速服务本身也会挂，
+// 那时运维需要一个不改代码就能切回直连的开关。去掉结尾斜杠，避免拼出
+// 「https://x.com//https://github.com/...」这种双斜杠地址。
+func normalizeImageMirror(raw string) string {
+	v := strings.TrimSpace(raw)
+	switch strings.ToLower(v) {
+	case "none", "off", "direct", "0", "false":
+		return ""
+	}
+	return strings.TrimRight(v, "/")
 }
 
 func getEnvInt(key string, fallback int64) int64 {
@@ -234,6 +265,7 @@ func Load() *Config {
 		UpdateVersionFile:  getEnv("UPDATE_VERSION_FILE", ""),
 		UpdateComposeFile:  getEnv("UPDATE_COMPOSE_FILE", ""),
 		UpdateMirror:       getEnv("UPDATE_MIRROR", defaultUpdateMirror),
+		UpdateImageMirror:  normalizeImageMirror(getEnv("UPDATE_IMAGE_MIRROR", defaultImageMirror)),
 		UpdateGitHubAPI:    strings.TrimRight(getEnv("UPDATE_GITHUB_API", "https://api.github.com"), "/"),
 		UpdateCommitsAPI:   getEnv("UPDATE_COMMITS_API", ""),
 		UpdateLatestAPI:    getEnv("UPDATE_LATEST_API", ""),

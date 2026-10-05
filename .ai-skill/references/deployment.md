@@ -122,6 +122,7 @@ server {
 | `UPDATE_GITHUB_API` | `https://api.github.com` | 元数据接口基址（可指向自建代理） |
 | `UPDATE_RELEASES_API` | `{UPDATE_GITHUB_API}/repos/{owner}/{name}/releases/latest` | releases 模式的 Release 接口模板（`{api}` `{owner}` `{name}` `{repo}` `{branch}` 占位） |
 | `UPDATE_IMAGE_ASSET` | `inkstone-images-.*\.tar$` | releases 模式镜像包资产名匹配（正则；多个命中优先版本号出现在文件名里的） |
+| `UPDATE_IMAGE_MIRROR` | `https://gh-proxy.com` | **镜像包**加速前缀（纯前缀，套在 Release 资产完整地址前面）。与 `UPDATE_MIRROR` 的区别：后者是完整模板、只作用于源码包。填 `none`/`off`/`direct`/`0` 关闭加速退回直连。详见下方「镜像包下载为什么会断」 |
 | `UPDATE_IMAGE_MAX_MB` | `2048` | releases 模式镜像包大小上限（MB） |
 | `UPDATE_CHECKSUM` | 空 | **信任根**：期望的下载内容 SHA-256（十六进制，可带 `sha256:` 前缀）。配了就在下载后强制校验，不一致直接拒绝安装并删除文件。不配则尝试读 Release 里的 `checksums.txt`；两者都没有时不阻断，但状态里 `verified=false`，界面会提示「本次更新未经完整性校验」 |
 | `UPDATE_ALLOW_PRIVATE_HOSTS` | `false` | 是否放行内网目标。默认 `false`：下载链路会校验实际拨号地址与每一跳重定向，拒绝回环 / 私网 / 链路本地（含云元数据 `169.254.169.254`）——因为下载地址可能来自上游 API 响应或第三方镜像，一旦被污染就能借更新通道打内网。**只有更新源本身就是内网自建服务器时才置 `true`**，置位即关闭该防护 |
@@ -308,6 +309,42 @@ journalctl -u inkstone-update-agent -f      # 观察更新过程
   不是源码备份：回滚 = 重新 load 旧镜像包 + compose up -d；
 - 镜像包大小上限 `UPDATE_IMAGE_MAX_MB`（默认 2048），超限直接拒绝下载。
 
+#### 镜像包下载为什么会断（以及现在怎么处理）
+
+**现象**：后台更新卡在「下载镜像包 58.5 / 264.9 MB」，随后
+`context deadline exceeded (Client.Timeout or context cancellation while reading body)`。
+
+**原因**：镜像包 265 MB 级别，国内直连 GitHub 大概率在中途被掐断。而
+`UPDATE_MIRROR` 对镜像包**完全无效**——它是源码包的完整模板，镜像包地址来自
+Release API 响应的 `browser_download_url`，两者不是一条路径。所以 releases 模式
+在国内实际上一直是在硬拉 GitHub。
+
+**改前的行为更糟**：下载失败即报错并**删掉半截文件**，没有重试。每次都从 0
+开始，反复重来永远到不了终点。
+
+**现在的三层保障**（`internal/service/update_remote.go` 的 `downloadOnce`）：
+
+1. **断点续传**：断流后保留半截文件，下一轮用 `Range: bytes=<已下载>-` 继续。
+   仅在服务器给出 `ETag`/`Last-Modified` 时才续传——没有比对依据就无法确认远端
+   资源没变，一旦这期间资产被换成另一版本，会拼出「前半段旧 + 后半段新」的包，
+   它长度正确、能过 size 检查，直到 `docker load` 才炸。**宁可重下也不拼坏**。
+2. **退避重试**：最多 6 次（2s/4s/8s/16s/30s/30s 封顶）。4xx/5xx 不在此列——
+   服务端错误立刻交给上层换地址，原地重试会白等一分钟。
+3. **多地址兜底**：`UPDATE_IMAGE_MIRROR` 加速地址失败后自动回退直连地址。
+   加速只对 GitHub 域生效，自建更新源的内网地址不会被套前缀（套上去只会 404）。
+
+**运维须知**：
+
+- 正常情况**不需要改任何配置**；三层保障里前两层自动生效；
+- 加速服务自己挂了（502/超时）时，会自动回退直连——但要慢一些，因为每个
+  地址都要试到失败；
+- 想强制走直连：`UPDATE_IMAGE_MIRROR=none`；
+- 想换别的加速站：填它的前缀即可（如 `https://mirror.example.com/gh`），
+  不要带尾斜杠（会自动去掉）；
+- 断流后残留的半截文件在 `UPDATE_DIR/images/`，文件名形如
+  `Beta1.28-inkstone-images-Beta1.28.tar`，旁边有 `.resume-meta` 记着 ETag。
+  所有地址都失败时会自动清理；手动排查时可以留它们，下次更新会接着用。
+
 ### 打包镜像包并发 Release（deploy/package-images.ps1 / .sh）
 
 上游发版 = 一个 Release（tag 版本号）+ 资产 `inkstone-images-<版本>.tar`：
@@ -398,6 +435,9 @@ sudo chown -R deploy:deploy /opt/inkstone
 | 页面提示「未能探测到源码目录」 | 容器内找不到仓库根 | 显式设置 `UPDATE_SOURCE_DIR`（如 `/app/src`）并挂载源码目录（releases 模式不依赖源码目录） |
 | 检查更新报「更新源不可用」 | 服务器连不上 `api.github.com` | 保留 `UPDATE_MIRROR` 代理地址；或配 `UPDATE_LATEST_API` 指向自建/镜像接口 |
 | releases 模式提示「没有找到镜像包资产」 | Release 资产名与 `UPDATE_IMAGE_ASSET` 不匹配 | 按发布实际命名调整正则（默认 `inkstone-images-.*\.tar$`） |
+| **下载镜像包卡在某个百分比后报 `context deadline exceeded`** | 国内直连 GitHub 被中途掐断；`UPDATE_MIRROR` 管不到镜像包 | 已内置断点续传 + 重试 + 镜像加速回退，正常无需干预。若确认是加速站故障：`UPDATE_IMAGE_MIRROR=none` 走直连，或换其他加速前缀。详见「镜像包下载为什么会断」 |
+| 更新一直停在「换用备用地址重试」 | 加速地址与直连地址都不可达 | 服务器到 GitHub 完全不通：配 `UPDATE_RELEASES_API` / `UPDATE_GITHUB_API` 指向自建代理 |
+| 磁盘出现 `*-.resume-meta` 与半截镜像包 | 上次下载断流的现场，供续传用 | 属正常，下次更新会接着下；想清掉可删 `UPDATE_DIR/images/` 里的半截文件（会重下） |
 | 镜像包更新卡在「等待宿主代理」 | 代理没运行 / 读不到清单 | `systemctl status inkstone-update-agent`；核对 `INKSTONE_UPDATE_DIR` 是否指向数据卷里的 `update` 目录 |
 | 代理日志报 `docker load` 失败 | 镜像包损坏 / 磁盘满 | 重新触发更新；核对 SHA-256 对账信息与 `df -h` |
 | 更新后版本号没变 | 后端没重启（还是旧进程） | `docker compose restart backend`；用 `GET /api/v1/system/info` 看 `commit` 是否变化 |
