@@ -81,6 +81,13 @@ func (c *httpClient) applySSRFGuard(client *http.Client) {
 			}
 			for _, ip := range ips {
 				if !isPublicIP(ip) {
+					if isFakeIPRange(ip) {
+						return nil, fmt.Errorf(
+							"更新下载目标 %s 解析到 %s，这是代理软件（Clash/Mihomo 等）的 fake-ip 虚拟地址，"+
+								"本机无法直连。请在代理里把 %s 加入直连/真实 IP 解析规则，"+
+								"或改走镜像前缀 UPDATE_IMAGE_MIRROR（默认 gh-proxy，不依赖本机 DNS）",
+							host, ip, host)
+					}
 					return nil, fmt.Errorf("更新下载目标 %s 解析到非公网地址 %s，已拒绝（如需使用内网更新源，请设置 UPDATE_ALLOW_PRIVATE_HOSTS=true）", host, ip)
 				}
 			}
@@ -109,6 +116,9 @@ func (c *httpClient) applySSRFGuard(client *http.Client) {
 		}
 		for _, ip := range ips {
 			if !isPublicIP(ip) {
+				if isFakeIPRange(ip) {
+					return fmt.Errorf("重定向目标 %s 解析到 %s（代理 fake-ip 虚拟地址），已拒绝；请为其配置直连规则", host, ip)
+				}
 				return fmt.Errorf("重定向目标 %s 解析到非公网地址 %s，已拒绝", host, ip)
 			}
 		}
@@ -223,6 +233,28 @@ func (c *httpClient) download(ctx context.Context, rawURL, destPath string, onPr
 	// 续传元数据也一并留着，否则换地址后就失去 If-Range 的比对依据，
 	// 而缺依据时 downloadOnce 会拒绝续传、退回整包重下。
 	return downloadResult{Source: rawURL}, lastErr
+}
+
+// isFakeIPRange 判断地址是否落在代理软件 fake-ip 模式使用的虚拟网段。
+//
+// Clash / Mihomo / Surge 等在 fake-ip 模式下会把**所有**被代理的域名解析到
+// 一个保留网段（Clash 默认 198.18.0.0/15，即 RFC 2544 基准测试段），真实的
+// 连接由代理进程接管。于是后端看到的"目标 IP"根本不是真实地址，
+// isPublicIP 会判它非公网并拒绝——**这不是误报，而是这类部署下必然发生**：
+// 用代理访问 GitHub 的自建博客全都更新不了。
+//
+// 这里只用来给出可操作的错误信息（告诉用户去改代理规则），
+// **不改变拒绝行为**。放行会真的削弱 SSRF 防护：198.18.0.0/15 在本机
+// 不可路由，但若宿主机恰好有该网段的路由或网卡，就能被当作内网跳板。
+// 换句话说，凭 IP 段无法区分"代理虚拟地址"与"真实内网目标"，
+// 所以让用户显式配置（UPDATE_ALLOW_PRIVATE_HOSTS 或改代理规则）才安全。
+func isFakeIPRange(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	// 198.18.0.0/15 —— Clash / Mihomo 的默认 fake-ip-filter 外网段
+	return v4[0] == 198 && (v4[1] == 18 || v4[1] == 19)
 }
 
 // noRetryError 标记「重试也没有意义」的失败，避免对 4xx 之类反复重连。

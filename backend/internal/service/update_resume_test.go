@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -333,6 +334,40 @@ func TestDownloadServerErrorIsNotRetriedInPlace(t *testing.T) {
 	}
 	if elapsed > 3*time.Second {
 		t.Fatalf("502 应在 3 秒内返回，实际耗时 %v（说明还在原地退避重试）", elapsed)
+	}
+}
+
+// TestIsFakeIPRange 锁定 fake-ip 网段的识别范围。
+//
+// 这个判定只影响错误信息（告诉用户去改代理规则），不影响是否放行，
+// 但范围必须准：判宽了会把真实内网目标说成"代理问题"，误导排查方向。
+func TestIsFakeIPRange(t *testing.T) {
+	cases := map[string]bool{
+		"198.18.0.51":     true, // Clash 默认 fake-ip 起点
+		"198.18.0.203":    true,
+		"198.19.255.1":    true, // /15 的上半段
+		"198.20.0.1":      false,
+		"198.17.0.1":      false,
+		"10.0.0.1":        false, // 真实内网，不该被说成代理问题
+		"192.168.1.1":     false,
+		"169.254.169.254": false, // 云元数据，必须保持"非公网"的原始措辞
+		"8.8.8.8":         false,
+	}
+	for ipStr, want := range cases {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			t.Fatalf("测试数据有误：%s", ipStr)
+		}
+		if got := isFakeIPRange(ip); got != want {
+			t.Errorf("isFakeIPRange(%s) = %v，期望 %v", ipStr, got, want)
+		}
+	}
+	// IPv6 不该误判
+	if isFakeIPRange(net.ParseIP("2001:db8::1")) {
+		t.Error("IPv6 地址不该被当作 fake-ip")
+	}
+	if isFakeIPRange(nil) {
+		t.Error("nil 应返回 false")
 	}
 }
 

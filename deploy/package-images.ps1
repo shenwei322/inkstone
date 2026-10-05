@@ -7,13 +7,15 @@
 #   docker compose --env-file .env -f docker-compose.offline.yml up -d
 #
 # 用法：
-#   .\deploy\package-images.ps1                          # 默认版本 Beta1.27
+#   .\deploy\package-images.ps1                          # 默认版本取自后端 AppVersion
 #   .\deploy\package-images.ps1 -Version v1.28.0
 #   $env:INKSTONE_PUBLIC_API_URL='https://blog.shenv.top/api/v1'; .\deploy\package-images.ps1
 # =============================================================================
 [CmdletBinding()]
 param(
-    [string]$Version = $(if ($env:INKSTONE_VERSION) { $env:INKSTONE_VERSION } else { 'Beta1.27' }),
+    # 版本号默认从后端 system_service.go 的 AppVersion 读，避免发版时忘了改这里
+    # （曾长期停在 Beta1.27，打出来的包版本与后端自报版本不一致）。
+    [string]$Version = $(if ($env:INKSTONE_VERSION) { $env:INKSTONE_VERSION } else { '' }),
     # 前端 API 地址：NEXT_PUBLIC_* 是构建期注入，打进镜像后改不了，按部署域名传
     [string]$ApiUrl = $(if ($env:INKSTONE_PUBLIC_API_URL) { $env:INKSTONE_PUBLIC_API_URL } else { 'https://blog.shenv.top/api/v1' }),
     # 站点自身地址：NEXT_PUBLIC_SITE_URL 也是构建期注入，用于 canonical / OG / JSON-LD。
@@ -45,6 +47,22 @@ function Invoke-Step {
 }
 
 Need-Docker
+
+# 版本号兜底：从后端 AppVersion 读，保证镜像 tag 与后端自报版本一致。
+# 读取失败就报错退出——宁可让人显式传 -Version，也不要打出一个
+# 版本号来源不明的包（Release 资产名必须与版本号对得上）。
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $svcFile = Join-Path $repo 'backend\internal\service\system_service.go'
+    if (Test-Path $svcFile) {
+        $m = Select-String -Path $svcFile -Pattern 'AppVersion\s*=\s*"([^"]+)"' |
+            Select-Object -First 1
+        if ($m) { $Version = $m.Matches[0].Groups[1].Value }
+    }
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        throw '无法从 backend\internal\service\system_service.go 读到 AppVersion，请显式传 -Version'
+    }
+    Write-Host "==> 版本号取自后端 AppVersion：$Version"
+}
 
 $backendTags = @("inkstone-backend:$Version")
 $frontendTags = @("inkstone-frontend:$Version")
