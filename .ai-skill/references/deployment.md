@@ -324,6 +324,12 @@ Release API 响应的 `browser_download_url`，两者不是一条路径。所以
 
 **现在的三层保障**（`internal/service/update_remote.go` 的 `downloadOnce`）：
 
+0. **空闲超时而非总时长超时**：下载客户端 `Timeout=0`（不限总时长），改成
+   「连续 3 分钟没收到任何字节」才判定卡死（`downloadIdleTimeout`）。
+   原实现是 30 分钟总时长上限，而实测同一个 265 MB 包，快时 1m52s、
+   慢时 **30m35s**（差 16 倍）——已经贴着天花板，再慢一点就被本地超时
+   误杀，报出来的却是 `context deadline exceeded (Client.Timeout...)`，
+   让人误以为是网络断了。**只要还有数据进来就不该算超时**。
 1. **断点续传**：断流后保留半截文件，下一轮用 `Range: bytes=<已下载>-` 继续。
    仅在服务器给出 `ETag`/`Last-Modified` 时才续传——没有比对依据就无法确认远端
    资源没变，一旦这期间资产被换成另一版本，会拼出「前半段旧 + 后半段新」的包，
@@ -344,6 +350,30 @@ Release API 响应的 `browser_download_url`，两者不是一条路径。所以
 - 断流后残留的半截文件在 `UPDATE_DIR/images/`，文件名形如
   `Beta1.28-inkstone-images-Beta1.28.tar`，旁边有 `.resume-meta` 记着 ETag。
   所有地址都失败时会自动清理；手动排查时可以留它们，下次更新会接着用。
+
+#### 代理 fake-ip 环境会被 SSRF 守卫拒绝
+
+如果服务器上装了 Clash / Mihomo 等代理并开了 **fake-ip 模式**，更新会直接失败：
+
+```
+更新下载目标 github.com 解析到非公网地址 198.18.0.51，已拒绝
+```
+
+**这不是 bug，也不能靠放行解决**：fake-ip 会把所有被代理域名解析到
+`198.18.0.0/15`（RFC 2544 基准测试段），后端看到的根本不是真实 IP。
+该网段在本机不可路由，但若宿主恰好有对应路由或网卡，就能当作内网跳板；
+单看 IP 段无法区分「代理虚拟地址」与「真实内网目标」。所以守卫保持拒绝，
+但会识别出这种情况并给出可操作的指引（`isFakeIPRange`）。
+
+三种解决办法，任选：
+
+1. **让更新域名走直连**（推荐）：在代理规则里给 `github.com`、
+   `objects.githubusercontent.com`、`gh-proxy.com` 加 DIRECT，或把它们
+   排除出 fake-ip-filter；
+2. **走镜像前缀**：`UPDATE_IMAGE_MIRROR` 默认已是 gh-proxy，但若 `UPDATE_GITHUB_API`
+   仍指向 api.github.com 仍会被拦，需要一并处理；
+3. **显式放行**：`UPDATE_ALLOW_PRIVATE_HOSTS=true`。⚠️ 这会**整体关闭**
+   SSRF 防护，只应在能确保更新源可信时使用。
 
 ### 打包镜像包并发 Release（deploy/package-images.ps1 / .sh）
 

@@ -24,14 +24,27 @@ const (
 	maxArchiveBytes = 1 << 30 // 源码包上限 1 GB
 )
 
-// downloadTimeout 是**下载源码包**的客户端超时，必须远大于元数据接口：
-// 源码包几十 MB、经国内代理可能只有几十 KB/s，20 秒必然超时。
-// 真实踩过：apply 跑到 1.5 MB 就 context deadline exceeded。
-const downloadTimeout = 30 * time.Minute
+// downloadIdleTimeout 是**下载**的空闲超时：连续这么久没有收到任何字节才
+// 判定卡死。它不是总时长上限。
+//
+// 为什么不能再用总时长：原实现给下载客户端设了 30 分钟的 Client.Timeout，
+// 而那是「整个请求（含读 body）」的上限。实测同一台机器、同一个 265 MB
+// 镜像包，快的时候 1m52s、慢的时候 30m35s（差 16 倍）——已经贴着 30 分钟
+// 的天花板，再慢一点就会被误杀，报的正是最初那个
+// context deadline exceeded (Client.Timeout or context cancellation while
+// reading body)。用户看到的是「网络中断」，实际是本地超时提前放弃。
+//
+// 大文件下载的正确语义是「只要还有数据进来就不算超时」，所以改成空闲
+// 超时：慢速但持续可完成，真正卡住（连接僵死）才会中断并触发重试/续传。
+const downloadIdleTimeout = 3 * time.Minute
+
+// downloadDialTimeout 是建立连接的超时（与空闲超时分开）。
+const downloadDialTimeout = 30 * time.Second
 
 type httpClient struct {
 	client *http.Client // 元数据接口：短超时，避免检查更新卡住
-	// downloader 只用于下载源码包：长超时（进度回调依赖它不被打断）
+	// downloader 只用于下载源码包/镜像包：无总时长限制，仅按「多久没数据」
+	// 判定卡死（见 downloadIdleTimeout）。进度回调依赖它不被打断。
 	downloader *http.Client
 	token      string // 私有仓库 / 提高 API 限额
 	// allowPrivate 放行内网目标（UPDATE_ALLOW_PRIVATE_HOSTS=true）。
@@ -46,14 +59,116 @@ func newHTTPClient(timeout time.Duration, token string) *httpClient {
 // allowPrivate 对应 UPDATE_ALLOW_PRIVATE_HOSTS（默认 false = 校验公网地址）。
 func newHTTPClientWithGuard(timeout time.Duration, token string, allowPrivate bool) *httpClient {
 	hc := &httpClient{
-		client:       &http.Client{Timeout: timeout},
-		downloader:   &http.Client{Timeout: downloadTimeout},
-		token:        strings.TrimSpace(token),
+		client:     &http.Client{Timeout: timeout},
+		downloader: newDownloadClient(),
+		token:      strings.TrimSpace(token),
+		// allowPrivate 放行内网目标（UPDATE_ALLOW_PRIVATE_HOSTS=true）。
 		allowPrivate: allowPrivate,
 	}
 	hc.applySSRFGuard(hc.client)
 	hc.applySSRFGuard(hc.downloader)
+	// 必须在 applySSRFGuard 之后：它会整体替换 Transport
+	applyIdleTimeout(hc.downloader, downloadIdleTimeout)
 	return hc
+}
+
+// newDownloadClient 造一个「不设总时长上限」的下载客户端。
+//
+// Timeout 必须为 0（不限总时长），卡死检测交给 applyIdleTimeout——
+// 否则慢速但持续的下载会被总时长上限误杀（见 downloadIdleTimeout）。
+func newDownloadClient() *http.Client {
+	return &http.Client{Timeout: 0}
+}
+
+// applyIdleTimeout 给下载客户端装上空闲超时：把响应体的读取包一层，
+// 每次成功读到数据就重置计时；连续 idle 没有任何数据才让请求失败。
+//
+// 实现方式是在 Transport 层包裹响应体，而不是用 Client.Timeout——
+// 后者无差别地限制总时长，会把「慢速但在下载」误判为失败。
+func applyIdleTimeout(client *http.Client, idle time.Duration) {
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	client.Transport = &idleTimeoutTransport{base: base, idle: idle}
+}
+
+// idleTimeoutTransport 为每次响应体读取加一个空闲计时器。
+type idleTimeoutTransport struct {
+	base http.RoundTripper
+	idle time.Duration
+}
+
+func (t *idleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	// 计时器挂在请求上下文上：到期即取消，正在阻塞的 Read 会立刻返回错误。
+	ctx, cancel := context.WithCancel(req.Context())
+	resp.Body = &idleTimeoutBody{
+		ReadCloser: resp.Body,
+		cancel:     cancel,
+		reset:      newIdleTimer(ctx, t.idle),
+	}
+	return resp, nil
+}
+
+// idleTimer 是一个可重置的「空闲到期即取消」计时器。
+type idleTimer struct {
+	cancel context.CancelFunc
+	timer  *time.Timer
+	d      time.Duration
+}
+
+func newIdleTimer(ctx context.Context, d time.Duration) *idleTimer {
+	ctx, cancel := context.WithCancel(ctx)
+	it := &idleTimer{cancel: cancel, d: d}
+	it.timer = time.AfterFunc(d, cancel)
+	// 请求结束时释放计时器，避免泄漏
+	go func() {
+		<-ctx.Done()
+		it.timer.Stop()
+	}()
+	return it
+}
+
+func (it *idleTimer) Reset() {
+	if it.timer != nil {
+		it.timer.Reset(it.d)
+	}
+}
+
+func (it *idleTimer) Stop() {
+	if it.timer != nil {
+		it.timer.Stop()
+	}
+	if it.cancel != nil {
+		it.cancel()
+	}
+}
+
+// idleTimeoutBody 在每次读到数据后重置空闲计时器。
+type idleTimeoutBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	reset  *idleTimer
+}
+
+func (b *idleTimeoutBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.reset.Reset()
+	}
+	return n, err
+}
+
+func (b *idleTimeoutBody) Close() error {
+	b.reset.Stop()
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return b.ReadCloser.Close()
 }
 
 // applySSRFGuard 给客户端装上「拨号前校验 + 逐跳重定向校验」。
