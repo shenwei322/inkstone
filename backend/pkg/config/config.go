@@ -19,11 +19,24 @@ type Config struct {
 	JWTSecret    string
 	AccessTTL    time.Duration
 	RefreshTTL   time.Duration
+	RememberTTL  time.Duration
 	FrontendURL  string
 	AdminURL     string
 	PublicAPIURL string
 	UploadDir    string
 	FilesDir     string
+
+	// SessionCookieName 后端读取会话 Cookie 时使用的名字。
+	//
+	// 前缀必须是 __Host-：该前缀由浏览器强制校验（Secure + Path=/ + 无
+	// Domain 属性），反代/子域无法用 Set-Cookie 覆盖本 Cookie，
+	// 等于免费拿到一层 Cookie 投毒/Session fixation 防护。
+	// http 开发环境浏览器会静默丢弃带该前缀的 Cookie，故 SessionCookieInsecure
+	// 为 true 时自动降级为不带前缀的名字。
+	SessionCookieName string
+	// SessionCookieInsecure 表示本次运行允许 __Host- 前缀降级（本地 http 开发用）。
+	// 生产（APP_ENV=production）必须为 false，否则前缀保护失效。
+	SessionCookieInsecure bool
 
 	// ImageMaxEdge 原图最大边长（像素），0 或负数表示不压缩原图，默认 2560。
 	// 上传图片任一边超过该值时等比压缩到该值以内再落盘。
@@ -174,6 +187,25 @@ func getEnvIntAllowZero(key string, fallback int) int {
 	return n
 }
 
+// 会话 Cookie 的两个候选名字。
+//
+// 生产用带 __Host- 前缀的名字：浏览器只接受 Secure + Path=/ 且不带 Domain
+// 的此类 Cookie，于是「用子域或其他路径覆盖会话」这条攻击路径被浏览器
+// 自己封死。开发环境走 http://localhost，带前缀的 Cookie 会被浏览器直接
+// 丢弃（表现为「登录成功但刷新即掉线」），因此必须降级成普通名字。
+const (
+	SessionCookieNameSecure   = "__Host-inkstone_session"
+	SessionCookieNameInsecure = "inkstone_session"
+)
+
+// SessionCookieName 按运行环境返回应使用的会话 Cookie 名。
+func SessionCookieName(insecure bool) string {
+	if insecure {
+		return SessionCookieNameInsecure
+	}
+	return SessionCookieNameSecure
+}
+
 // defaultTrustedProxies 是未显式配置 TRUSTED_PROXIES 时采信的代理网段。
 //
 // 只包含本机与私网：标准部署是同一台机器（或同一个 compose 网络）里的
@@ -231,8 +263,14 @@ func Load() *Config {
 			updateDir = filepath.Join(filepath.Dir(filepath.Clean(uploadDir)), "update")
 		}
 	}
+	appEnv := getEnv("APP_ENV", "development")
+	// Cookie 前缀是否可降级：只有非生产环境才允许。
+	// 生产必须用 __Host- 前缀（浏览器强制 Secure + Path=/ + 无 Domain），
+	// 否则同域下任意子站点都能覆盖我们的会话 Cookie。
+	cookieInsecure := !strings.EqualFold(appEnv, "production")
+
 	return &Config{
-		AppEnv:       getEnv("APP_ENV", "development"),
+		AppEnv:       appEnv,
 		Port:         getEnv("PORT", "8080"),
 		DBHost:       getEnv("DB_HOST", "localhost"),
 		DBPort:       getEnv("DB_PORT", "5432"),
@@ -242,11 +280,18 @@ func Load() *Config {
 		JWTSecret:    getEnv("JWT_SECRET", "dev-only-secret-change-in-production"),
 		AccessTTL:    15 * time.Minute,
 		RefreshTTL:   7 * 24 * time.Hour,
+		// 「记住我」的服务端硬上限：即便客户端要求更长的会话，也封顶 90 天。
+		// 用独立常量而不是复用 RefreshTTL，是为了让「7 天 token 有效期」与
+		// 「30 天免登录」两个语义解耦——改一个不会悄悄改掉另一个。
+		RememberTTL: 90 * 24 * time.Hour,
 		FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:3000"),
 		AdminURL:     getEnv("ADMIN_URL", "http://localhost:3001"),
 		PublicAPIURL: getEnv("PUBLIC_API_URL", ""),
 		UploadDir:    uploadDir,
 		FilesDir:     filesDir,
+
+		SessionCookieName:     SessionCookieName(cookieInsecure),
+		SessionCookieInsecure: cookieInsecure,
 
 		// 上传图片的自动处理：原图压缩 + 缩略图（见 imageutil 包）。
 		ImageMaxEdge:   getEnvIntAllowZero("INKSTONE_IMAGE_MAX_EDGE", 2560),

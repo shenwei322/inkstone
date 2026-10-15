@@ -32,7 +32,20 @@ func main() {
 		log.Printf("[warn] JWT_SECRET 长度 %d < 32，生产环境请使用更长的随机密钥（openssl rand -hex 32）", len(cfg.JWTSecret))
 	}
 
-	tokens := service.NewTokenManager(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
+	// tokenManager 的 refresh 上限取自配置的 RememberTTL：让「记住我」的
+	// 服务端硬上限只有一个定义处，客户端传再长的 TTL 也会被截到这里。
+	tokens := service.NewTokenManagerWithMax(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL, cfg.RememberTTL)
+
+	// 会话 Cookie 配置：HttpOnly refresh Cookie，用于「每次访问免登录」。
+	// 生产带 __Host- 前缀（浏览器强制 Secure + Path=/ + 无 Domain），
+	// 本地 http 开发自动降级，否则浏览器会静默丢弃整枚 Cookie。
+	sessionCookie := service.SessionCookieConfig{
+		Name:     cfg.SessionCookieName,
+		Insecure: cfg.SessionCookieInsecure,
+		TTL:      cfg.RefreshTTL,
+	}
+	log.Printf("[auth] 会话 Cookie：name=%s insecure=%v refresh_ttl=%s remember_ttl=%s",
+		sessionCookie.Name, sessionCookie.Insecure, cfg.RefreshTTL, cfg.RememberTTL)
 
 	userRepo := repository.NewUserRepository(db)
 	articleRepo := repository.NewArticleRepository(db)
@@ -104,6 +117,7 @@ func main() {
 	articleSvc.SetRevisions(revisionSvc)
 	revisionHandler := handler.NewRevisionHandler(revisionSvc, articleSvc)
 	authHandler := handler.NewAuthHandler(authSvc, emailCodeSvc, captchaSvc, apiLimiter, logSvc)
+	authHandler.SetSessionCookieConfig(sessionCookie)
 	articleHandler := handler.NewArticleHandler(articleSvc, logSvc)
 	// 定时发布扫描器：每分钟把到点的 scheduled 文章改成 published。
 	// 在 goroutine 里跑，进程退出时由 defer 里 Stop() 收尾。
@@ -216,6 +230,11 @@ func main() {
 		}
 	}
 	router.Use(middleware.CORS(allowedOrigins))
+	// CSRF：会话凭据进 Cookie 之后，「浏览器自动携带凭据」既是免登录的
+	// 来源也是跨站代发的入口。此中间件只拦「确实带了会话 Cookie 的写请求」，
+	// 且判据是浏览器写入、页面脚本无法伪造的 Origin / Sec-Fetch-Site，
+	// 不能用 UA 或自定义头（那两者都能伪造）。
+	router.Use(middleware.CSRFGuard(allowedOrigins))
 	router.MaxMultipartMemory = 12 << 20
 
 	securityEnabled := func() bool {
@@ -300,6 +319,16 @@ func main() {
 		return middleware.UserStatus{Username: u.Username, Role: u.Role}, true
 	}
 
+	// 鉴权中间件的统一装配点：全部走 *WithSession 版本，使请求在
+	// 「access 令牌过期但会话 Cookie 仍有效」时依然被识别为已登录。
+	// 这一点直接决定用户会不会在令牌过期的瞬间被踢出登录页。
+	requireAuth := func() gin.HandlerFunc {
+		return middleware.AuthWithSession(tokens, userStatusOK, sessionCookie)
+	}
+	optionalAuth := func() gin.HandlerFunc {
+		return middleware.OptionalAuthWithSession(tokens, userStatusOK, sessionCookie)
+	}
+
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
@@ -313,7 +342,7 @@ func main() {
 
 	api := router.Group("/api/v1", rateLimitMiddle)
 	{
-		uploads := api.Group("/uploads", middleware.Auth(tokens, userStatusOK))
+		uploads := api.Group("/uploads", requireAuth())
 		{
 			uploads.POST("", uploadsHandler.Create)
 		}
@@ -324,12 +353,17 @@ func main() {
 			auth.POST("/email-code", registerLimit, emailCodeHandler.Send)
 			auth.POST("/login", loginLimit, authHandler.Login)
 			auth.POST("/refresh", authHandler.Refresh)
+			// 登出刻意挂在**无鉴权**组：会话 Cookie 可能已经失效
+			// （令牌被撤销/过期），但用户仍然需要一个能确定清掉 Cookie 的
+			// 端点。挂在 requireAuth 后面会变成「令牌坏了就登不出去」。
+			// 它本身只清 Cookie 与记日志，不读取任何受保护数据。
+			auth.POST("/logout", authHandler.Logout)
 			// 忘记密码：走注册同级限流（默认 20/小时），防邮件轰炸。
 			// 邮箱不存在时也返回成功提示，因此限流是这里唯一的批量探测防线。
 			auth.POST("/password/forgot", registerLimit, authHandler.ForgotPassword)
 			auth.POST("/password/reset", registerLimit, authHandler.ResetPassword)
-			auth.GET("/me", middleware.Auth(tokens, userStatusOK), authHandler.Me)
-			authAuthed := api.Group("/auth", middleware.Auth(tokens, userStatusOK))
+			auth.GET("/me", requireAuth(), authHandler.Me)
+			authAuthed := api.Group("/auth", requireAuth())
 			{
 				authAuthed.PUT("/password", authHandler.ChangePassword)
 				authAuthed.PUT("/profile", authHandler.UpdateProfile)
@@ -375,7 +409,7 @@ func main() {
 		})
 		api.POST("/link-applications", friendApplyLimit, linkAppHandler.Submit)
 
-		articles := api.Group("/articles", middleware.OptionalAuth(tokens, userStatusOK))
+		articles := api.Group("/articles", optionalAuth())
 		{
 			articles.GET("", articleHandler.List)
 			articles.GET("/:id", articleHandler.Get)
@@ -398,7 +432,7 @@ func main() {
 			// 游客没有账号可封，这两道是唯一的提交前防线。
 			articles.POST("/:id/comments", commentLimit, commentHandler.Create)
 
-			authed := articles.Group("", middleware.Auth(tokens, userStatusOK))
+			authed := articles.Group("", requireAuth())
 			{
 				authed.POST("", articleLimit, articleHandler.Create)
 				// 更新同样受限流约束：否则可以「建草稿 → 反复更新为已发布」
@@ -415,12 +449,12 @@ func main() {
 			}
 		}
 
-		comments := api.Group("/comments", middleware.Auth(tokens, userStatusOK))
+		comments := api.Group("/comments", requireAuth())
 		{
 			comments.DELETE("/:id", commentHandler.Delete)
 		}
 
-		admin := api.Group("/admin", middleware.Auth(tokens, userStatusOK), middleware.RequireRole(model.RoleAdmin))
+		admin := api.Group("/admin", requireAuth(), middleware.RequireRole(model.RoleAdmin))
 		{
 			admin.GET("/stats", adminHandler.Stats)
 			admin.GET("/stats/traffic", statHandler.Traffic)

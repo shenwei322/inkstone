@@ -31,7 +31,14 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			// 白名单必须覆盖前端实际会发的所有请求头：漏一个就会在预检阶段
+			// 被浏览器拦下，且错误只出现在预检响应里，排查起来很费劲。
+			// X-Requested-With 是 axios / jQuery 类客户端默认会加的。
+			c.Header("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, Accept, Origin, X-Requested-With, X-CSRF-Token")
+			// 会话 Cookie 的失效需要前端能看到响应头里的信息时，这里必须
+			// 显式暴露——默认 CORS 只放行少数几个简单响应头。
+			c.Header("Access-Control-Expose-Headers", "Content-Disposition")
 			c.Header("Access-Control-Max-Age", "86400")
 		}
 

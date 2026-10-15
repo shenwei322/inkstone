@@ -19,20 +19,84 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080/api/v
 
 const ACCESS_KEY = 'blog_access_token'
 const REFRESH_KEY = 'blog_refresh_token'
+/**
+ * 「本浏览器有服务端会话」的标记。
+ *
+ * 为什么需要它：会话 Cookie 是 HttpOnly 的，JS 读不到，因此无法用
+ * 「Cookie 是否存在」来判断登录态。而仅凭 localStorage 里的 access 令牌
+ * 判断会漏掉一个关键场景——移动端 Safari 等环境会清理脚本可写存储，
+ * 令牌没了但 Cookie 还在，此时若直接判定「未登录」就会让用户看到登录页，
+ * 尽管服务端其实完全认识他。
+ *
+ * 这个标记只表达「据我所知服务端还认我」，**不表达任何权限**：
+ * 真正的鉴权永远由服务端与 Cookie 决定。它存的是会话到期时间戳，
+ * 过期的标记不会触发任何请求。
+ */
+const SESSION_HINT_KEY = 'blog_has_session'
 
 export function getAccessToken(): string | null {
   if (typeof window === 'undefined') return null
   return localStorage.getItem(ACCESS_KEY)
 }
 
-export function saveTokens(access: string, refresh: string) {
+/**
+ * 记录会话到期时刻（毫秒时间戳）。
+ *
+ * 单独一个写入点，保证「有会话标记」与「有到期时间」永远同时存在：
+ * 分成两个 key 时，任何一处漏写都会让判断分支读到 null 而误以为无会话。
+ */
+export function markSession(expiresInSeconds?: number) {
+  if (typeof window === 'undefined') return
+  const seconds = expiresInSeconds && expiresInSeconds > 0 ? expiresInSeconds : DEFAULT_SESSION_SECONDS
+  localStorage.setItem(SESSION_HINT_KEY, String(Date.now() + seconds * 1000))
+}
+
+/** 返回会话标记记录的到期时刻；无标记或已过期返回 null。 */
+export function sessionExpiresAt(): number | null {
+  if (typeof window === 'undefined') return null
+  const raw = localStorage.getItem(SESSION_HINT_KEY)
+  if (!raw) return null
+  const at = Number(raw)
+  if (!Number.isFinite(at) || at <= Date.now()) return null
+  return at
+}
+
+/** 本浏览器是否可能持有服务端会话（Cookie 侧无法直接探测）。 */
+export function hasSessionHint(): boolean {
+  return sessionExpiresAt() !== null
+}
+
+export function saveTokens(access: string, refresh: string, sessionExpiresIn?: number) {
+  if (typeof window === 'undefined') return
   localStorage.setItem(ACCESS_KEY, access)
   localStorage.setItem(REFRESH_KEY, refresh)
+  // 只要拿到了令牌对，就说明服务端已经给了会话 Cookie：标记必须同步写上，
+  // 否则下次刷新时前端会因为「没有 access 令牌 + 没有标记」而误判未登录。
+  markSession(sessionExpiresIn)
 }
 
 export function clearTokens() {
+  if (typeof window === 'undefined') return
   localStorage.removeItem(ACCESS_KEY)
   localStorage.removeItem(REFRESH_KEY)
+  localStorage.removeItem(SESSION_HINT_KEY)
+}
+
+/** 默认会话时长（7 天），与后端 RefreshTTL 保持一致，仅在响应缺字段时兜底。 */
+const DEFAULT_SESSION_SECONDS = 7 * 24 * 60 * 60
+
+/**
+ * 会话失效事件名。
+ *
+ * 令牌刷新彻底失败时用事件通知 UI 层（auth-context 监听后清空 user 状态），
+ * 而不是在这里直接跳转登录页：api.ts 是纯数据层，不应持有路由知识，
+ * 且后台、文章页、评论区对「掉线」的期望行为并不相同。
+ */
+export const AUTH_EXPIRED_EVENT = 'inkstone:auth-expired'
+
+function emitAuthExpired() {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
 }
 
 export class ApiError extends Error {
@@ -59,14 +123,39 @@ interface RequestOptions {
    * 典型用途：发表评论（登录用户记名、游客匿名）。
    */
   optionalAuth?: boolean
+  /**
+   * 只带 Cookie、不带 Authorization 头发请求。
+   *
+   * 用于登出这类「凭 Cookie 生效」的端点：请求一旦带上 Authorization 头，
+   * 服务端的鉴权分支就会去校验 access 令牌，而登出恰恰常常发生在
+   * access 已过期的时刻——那会让登出被 401 挡掉，用户点了退出却登不出去。
+   */
+  credentialsOnly?: boolean
 }
 
 let refreshPromise: Promise<boolean> | null = null
 
+/**
+ * 用 Cookie（或 localStorage 里的 refresh 令牌）换一对新令牌。
+ *
+ * 三条设计要点，每一条都对应一个「无缘无故要重新登录」的真实成因：
+ *
+ *  1. **credentials: 'include'** —— 服务端把 refresh 令牌放进了 HttpOnly
+ *     Cookie，不带这个选项时浏览器不会发送它，等于白拿一个新的刷新机制。
+ *
+ *  2. **refresh_token 变成可选** —— 请求体里仍带着 localStorage 里的副本
+ *     （兼容尚未写 Cookie 的旧部署），但服务端优先用 Cookie。
+ *     移动端浏览器清空 localStorage 之后，就剩 Cookie 这一条路。
+ *
+ *  3. **只有服务端明确说「这个令牌无效」才清除本地登录态。**
+ *     网络错误（离线、DNS 抖动、容器重启中）绝不能当作登录失效——
+ *     否则一次断网刷新页面就会把用户登出，而他会觉得「每次访问都要重登」。
+ */
 export async function tryRefresh(): Promise<boolean> {
   if (typeof window === 'undefined') return false
   const refresh = localStorage.getItem(REFRESH_KEY)
-  if (!refresh) return false
+  // 没有本地令牌也不要立刻放弃：Cookie 里可能还有服务端会话。
+  if (!refresh && !hasSessionHint()) return false
 
   // Coalesce concurrent refresh attempts into a single request.
   if (!refreshPromise) {
@@ -75,13 +164,29 @@ export async function tryRefresh(): Promise<boolean> {
         const res = await fetch(`${API_BASE}/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refresh }),
+          body: JSON.stringify(refresh ? { refresh_token: refresh } : {}),
+          credentials: 'include',
         })
-        if (!res.ok) return false
-        const data = (await res.json()) as AuthResponse
-        saveTokens(data.token.access_token, data.token.refresh_token)
-        return true
+        if (res.ok) {
+          const data = (await res.json()) as AuthResponse
+          saveTokens(
+            data.token.access_token,
+            data.token.refresh_token,
+            data.token.session_expires_in,
+          )
+          return true
+        }
+        // 401/403：服务端明确拒绝（令牌过期/被撤销/账号被封）。
+        // 这是唯一可以判定「会话真的没了」的状态码，清掉本地状态并通知 UI。
+        if (res.status === 401 || res.status === 403) {
+          clearTokens()
+          emitAuthExpired()
+          return false
+        }
+        // 5xx 或限流：服务端暂时不可用，保留登录态以便稍后重试。
+        return false
       } catch {
+        // 网络层失败：保留登录态。用户下次操作或页面重新聚焦时会再试。
         return false
       } finally {
         refreshPromise = null
@@ -92,7 +197,7 @@ export async function tryRefresh(): Promise<boolean> {
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = false, optionalAuth = false } = options
+  const { method = 'GET', body, auth = false, optionalAuth = false, credentialsOnly = false } = options
 
   const doFetch = async (token: string | null) => {
     const headers: Record<string, string> = {}
@@ -102,10 +207,19 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // 会话 Cookie 必须随请求发送：它是「刷新页面仍保持登录」的核心，
+      // 也是 access 令牌被清（移动端存储回收）后唯一的身份来源。
+      credentials: 'include',
     })
   }
 
   let token = auth || optionalAuth ? getAccessToken() : null
+  if (credentialsOnly) token = null
+  // access 令牌可能已被移动端存储回收清掉，但 Cookie 仍在——此时先尝试
+  // 续期拿一份新的，避免把「本来还登录着」的用户直接判成未登录。
+  if (auth && !token && hasSessionHint()) {
+    if (await tryRefresh()) token = getAccessToken()
+  }
   let res = await doFetch(token)
 
   // On 401 with auth, attempt one token refresh then retry.
@@ -114,7 +228,11 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     if (refreshed) {
       token = getAccessToken()
       res = await doFetch(token)
-    } else {
+    } else if (!hasSessionHint()) {
+      // 只有在确认会话确实失效时才抹掉本地令牌。
+      // 若 hasSessionHint() 仍为真，说明刷新失败是网络/服务端临时问题，
+      // 保留令牌等下次重试——否则容器重启、断网这类瞬时故障会把所有
+      // 在线用户一起登出。
       clearTokens()
     }
   }
@@ -254,15 +372,34 @@ export function register(
 
 // totp_code 只在账号开启了两步验证时提交；后端会在密码正确后要求它，
 // 并以 need_totp 标记告诉前端"还差一步"。
+//
+// remember_me 只影响**会话时长**（勾选后 30 天免登录），不跳过任何校验：
+// 密码、2FA、邮箱验证码、人机验证、失败锁定照旧执行。把它理解成
+// 「跳过验证」是错的——那属于实现层面的越权。
 export function login(
   email: string,
   password: string,
-  extra?: { email_code?: string; totp_code?: string } & CaptchaCredential,
+  extra?: { email_code?: string; totp_code?: string; remember_me?: boolean } & CaptchaCredential,
 ) {
   return api<AuthResponse>('/auth/login', {
     method: 'POST',
     body: { email, password, ...extra },
   })
+}
+
+/**
+ * 退出登录：让服务端清掉 HttpOnly 会话 Cookie。
+ *
+ * 必须调服务端而不是只清 localStorage —— 后者清得掉 access 令牌，
+ * 却清不掉 Cookie，结果是「点了退出登录，刷新页面又登上了」。
+ * 失败时不抛错：这个接口的唯一职责是清理，网络不通时本地清理照做。
+ */
+export async function logout(): Promise<void> {
+  try {
+    await api<{ message: string }>('/auth/logout', { method: 'POST', credentialsOnly: true })
+  } catch {
+    // 服务端不可达也要保证本地退出：用户点了退出就该退出。
+  }
 }
 
 /** 忘记密码：申请重置验证码。邮箱未注册时后端同样返回成功（防枚举）。 */
@@ -646,7 +783,12 @@ export async function uploadImage(file: File): Promise<string> {
   const token = getAccessToken()
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
-  const res = await fetch(`${API_BASE}/uploads`, { method: 'POST', headers, body: form })
+  const res = await fetch(`${API_BASE}/uploads`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  })
   if (!res.ok) {
     let message = `上传失败 (${res.status})`
     try {
@@ -828,7 +970,10 @@ export async function downloadFile(id: number, filename: string): Promise<void> 
   const token = getAccessToken()
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
-  const res = await fetch(`${API_BASE}/admin/files/${id}/download`, { headers })
+  const res = await fetch(`${API_BASE}/admin/files/${id}/download`, {
+    headers,
+    credentials: 'include',
+  })
   if (!res.ok) {
     let message = `下载失败 (${res.status})`
     try {
@@ -863,6 +1008,9 @@ export function uploadFile(
 
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `${API_BASE}/admin/files`)
+    // 会话 Cookie 必须随上传一起发：大文件上传常常耗时数十秒，
+    // 期间 access 令牌很可能刚好过期，Cookie 是兜底的身份来源。
+    xhr.withCredentials = true
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) {
@@ -1338,7 +1486,10 @@ export async function downloadBackup(name: string): Promise<void> {
   const token = getAccessToken()
   const res = await fetch(
     `${API_BASE}/admin/system/backups/${encodeURIComponent(name)}/download`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
+    },
   )
   if (!res.ok) throw new Error('下载备份失败')
   const blob = await res.blob()

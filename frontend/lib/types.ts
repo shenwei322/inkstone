@@ -11,6 +11,14 @@ export interface TokenPair {
   access_token: string
   refresh_token: string
   expires_in: number
+  /**
+   * 会话（refresh）剩余有效秒数。
+   *
+   * 与 expires_in 的区别必须分清：expires_in 是 access 令牌的寿命
+   * （15 分钟），session_expires_in 才决定「多久需要重新登录」。
+   * 旧后端不返回该字段，故声明为可选；缺失时前端按 7 天兜底。
+   */
+  session_expires_in?: number
 }
 
 export interface AuthResponse {

@@ -20,6 +20,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [emailCode, setEmailCode] = useState('')
+  // 默认勾选：「每次访问都要重新登录」是这个页面最常被抱怨的问题，
+  // 默认免登录符合博客站点的普遍预期。取消勾选则退化为会话级登录
+  // （关掉浏览器即需重登），供共用电脑的场景使用。
+  const [rememberMe, setRememberMe] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -37,7 +41,11 @@ export default function LoginPage() {
   const doLogin = async (credential?: CaptchaCredential) => {
     setSubmitting(true)
     try {
-      const loggedIn = await login(email, password, { email_code: emailCode, ...credential })
+      const loggedIn = await login(email, password, {
+        email_code: emailCode,
+        remember_me: rememberMe,
+        ...credential,
+      })
       router.push(loggedIn.role === 'admin' ? '/admin' : '/')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '登录失败，请稍后重试')
@@ -132,6 +140,24 @@ export default function LoginPage() {
                 onChange={setEmailCode}
               />
             )}
+
+            {/* 「记住我」：勾选后 30 天免登录。文案刻意写明是「30 天」而不是
+                含糊的「记住我」——用户需要知道这个勾选到底把登录态延长多久，
+                这也是它与「不勾选」的唯一区别（后者关掉浏览器即失效）。 */}
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-border accent-[var(--accent)]"
+              />
+              <span>
+                <span className="font-medium">记住我</span>
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  （30 天内无需重新登录；共用电脑请取消勾选）
+                </span>
+              </span>
+            </label>
 
             {error && (
               <p

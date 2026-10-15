@@ -23,6 +23,14 @@ var (
 	ErrTOTPRequired  = errors.New("请输入两步验证码")
 	ErrTOTPInvalid   = errors.New("两步验证码不正确")
 	ErrResetCodeSent = errors.New("验证码已发送，请查收邮件")
+	// ErrInvalidRefreshToken 表示 refresh 令牌本身无效（签名不符 / 已过期 /
+	// 类型不对）。必须是与「账号问题」区分开的哨兵错误：
+	// handler 需要靠它返回 401，让前端的续期逻辑正确判定「会话真的没了」，
+	// 而不是把 500 当成服务端抖动后无限重试。
+	ErrInvalidRefreshToken = errors.New("登录状态已失效，请重新登录")
+	// ErrUserVanished 表示令牌合法但账号已不存在（被删除）。
+	// 同样归入 401：这是一个不可恢复的登录态问题。
+	ErrUserVanished = errors.New("账号不存在，请重新登录")
 )
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
@@ -111,6 +119,12 @@ type LoginInput struct {
 	Identifier string
 	Password   string
 	TOTPCode   string // 两步验证码；账号未启用 2FA 时忽略
+	// RememberMe 表示这次登录要一个长会话（「记住我」勾选）。
+	//
+	// 语义边界必须说清：它**只影响会话时长**，不会绕过任何校验——
+	// 密码、2FA、邮箱验证码、人机验证、失败锁定、IP 限流全部照旧执行。
+	// 把它做成「跳过验证」的开关是实现层面的越权，不是产品特性。
+	RememberMe bool
 }
 
 // Login accepts either the account email or the username as identifier.
@@ -166,11 +180,26 @@ func (s *AuthService) Login(in LoginInput) (*model.User, *TokenPair, error) {
 	if err := s.users.ResetLoginState(user.ID); err != nil {
 		log.Printf("[auth] 重置登录状态失败 user=%d: %v", user.ID, err)
 	}
-	pair, err := s.tokens.GeneratePair(user.ID, user.Username, user.Role, user.TokenVersion)
+	pair, err := s.tokens.GeneratePairWithTTL(user.ID, user.Username, user.Role, user.TokenVersion, s.sessionTTL(in.RememberMe))
 	if err != nil {
 		return nil, nil, err
 	}
 	return user, pair, nil
+}
+
+// RememberMeTTL 是「记住我」勾选后会话的目标时长。
+//
+// 它只是**请求值**，真正生效的上限由 TokenManager.maxRefreshTTL 截断
+// （见 NewTokenManagerWithMax）。放在这里而不是 handler，是为了让
+// 「免登录多久」这一个策略只有一处定义。
+const RememberMeTTL = 30 * 24 * time.Hour
+
+// sessionTTL 返回本次登录应使用的 refresh 有效期。
+func (s *AuthService) sessionTTL(rememberMe bool) time.Duration {
+	if rememberMe {
+		return RememberMeTTL
+	}
+	return s.tokens.RefreshTTL()
 }
 
 // RequestPasswordReset 走"忘记密码"流程：给该地址发一封重置验证码。
@@ -304,14 +333,28 @@ var ErrTokenRevoked = errors.New("令牌已失效，请重新登录")
 //  1. 账号当前可用（存在、未被封禁）——库为准；
 //  2. 令牌代次与库中 TokenVersion 一致——改密码/强制下线后旧 refresh
 //     与 access 全部立即失效（此前 refresh 无撤销机制，7 天内可反复重放）。
+//
+// 会话时长的继承规则（这里最容易出错的地方）：
+// **新 refresh 的 TTL = 旧 refresh 的剩余有效期**，而不是默认 TTL。
+// 若照搬默认值，「记住我 30 天」的用户在第一次刷新后就会被打回 7 天，
+// 表现为「明明勾了记住我，过一周还是要重新登录」——而这类故障只在
+// 长期使用后才暴露，测试里很容易漏掉。
 func (s *AuthService) Refresh(refreshToken string) (*model.User, *TokenPair, error) {
 	claims, err := s.tokens.Parse(refreshToken, TokenTypeRefresh)
 	if err != nil {
-		return nil, nil, errors.New("invalid refresh token")
+		// 用哨兵错误而不是 errors.New：handler 靠它映射 401，
+		// 前端的续期逻辑再靠 401 判断「会话真的失效」。
+		return nil, nil, ErrInvalidRefreshToken
 	}
 	user, err := s.users.FindByID(claims.UserID)
 	if err != nil {
-		return nil, nil, errors.New("user no longer exists")
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil, ErrUserVanished
+		}
+		// 其他错误（数据库不可用等）原样上抛：这是**可恢复**的故障，
+		// 必须让它走 500，前端据此保留登录态等下次重试。
+		// 若这里也归成「令牌无效」，一次数据库抖动就能把所有在线用户登出。
+		return nil, nil, err
 	}
 	if user.IsBanned() {
 		return nil, nil, ErrUserBanned
@@ -319,7 +362,12 @@ func (s *AuthService) Refresh(refreshToken string) (*model.User, *TokenPair, err
 	if claims.TokenVersionOf() != user.TokenVersion {
 		return nil, nil, ErrTokenRevoked
 	}
-	pair, err := s.tokens.GeneratePair(user.ID, user.Username, user.Role, user.TokenVersion)
+	// 继承剩余有效期；取不到 exp（异常令牌）时回落到默认 TTL。
+	ttl := claims.TTLOf(time.Now())
+	if ttl <= 0 {
+		ttl = s.tokens.RefreshTTL()
+	}
+	pair, err := s.tokens.GeneratePairWithTTL(user.ID, user.Username, user.Role, user.TokenVersion, ttl)
 	if err != nil {
 		return nil, nil, err
 	}

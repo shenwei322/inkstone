@@ -268,6 +268,9 @@ export function Navbar() {
                 <button
                   onClick={() => {
                     setMenuOpen(false)
+                    // logout() 内部已做两件事的顺序保证：先清本地状态让 UI
+                    // 立刻响应，再调服务端清 HttpOnly 会话 Cookie。
+                    // 少了后一步就会出现「退出后刷新又被登录回去」。
                     logout()
                     router.push('/')
                   }}

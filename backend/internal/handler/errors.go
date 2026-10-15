@@ -27,6 +27,18 @@ func errorResponse(c *gin.Context, err error) {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrRegistrationClosed):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+	// 刷新令牌无效/过期/已被撤销：必须是 401 而不是 500。
+	//
+	// 落进 default 分支的后果不只是状态码难看：前端的续期逻辑靠
+	// 「401/403 才算会话真的没了」来区分「令牌失效」与「服务端临时故障」。
+	// 若这里返回 500，前端会把它当成瞬时错误而保留登录态，于是每次
+	// 访问都重试一次注定失败的刷新 —— 用户看到的正是「每次访问都要重新登录」。
+	// 三个错误都在此列：令牌本身无效、账号已删除、令牌代次被作废
+	// （改密码 / 强制下线 / 封禁），对用户而言都是「需要重新登录」。
+	case errors.Is(err, service.ErrInvalidRefreshToken),
+		errors.Is(err, service.ErrUserVanished),
+		errors.Is(err, service.ErrTokenRevoked):
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "登录状态已失效，请重新登录"})
 	case errors.Is(err, service.ErrForbidden):
 		c.JSON(http.StatusForbidden, gin.H{"error": "没有权限执行此操作"})
 	case errors.Is(err, repository.ErrNotFound):

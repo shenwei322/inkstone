@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shenwei/inkstone/backend/internal/middleware"
@@ -16,10 +17,21 @@ type AuthHandler struct {
 	captcha   *service.CaptchaService
 	limiter   *middleware.SlidingLimiter
 	logs      *service.LogService
+	// session 描述如何写/清会话 Cookie。零值时退化为「不写 Cookie」，
+	// 让只跑单元测试的路径不必构造完整配置。
+	session service.SessionCookieConfig
 }
 
 func NewAuthHandler(auth *service.AuthService, emailCode *service.EmailCodeService, captcha *service.CaptchaService, limiter *middleware.SlidingLimiter, logs *service.LogService) *AuthHandler {
 	return &AuthHandler{auth: auth, emailCode: emailCode, captcha: captcha, limiter: limiter, logs: logs}
+}
+
+// SetSessionCookieConfig 注入会话 Cookie 配置（main.go 在装配阶段调用）。
+//
+// 用 setter 而不是改构造函数签名：NewAuthHandler 在测试里被大量直接调用，
+// 多一个参数会让所有既有测试一起改，收益为零。
+func (h *AuthHandler) SetSessionCookieConfig(cfg service.SessionCookieConfig) {
+	h.session = cfg
 }
 
 // resetAuthLimit clears the rate-limit budget for the caller after a
@@ -47,6 +59,9 @@ type loginRequest struct {
 	Password  string `json:"password" binding:"required"`
 	TOTPCode  string `json:"totp_code"`
 	EmailCode string `json:"email_code"`
+	// RememberMe 请求一个长会话（前端「记住我」勾选框）。
+	// 缺省 false 时行为与升级前完全一致。
+	RememberMe bool `json:"remember_me"`
 	service.CaptchaParams
 }
 
@@ -91,6 +106,9 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// 注册成功：清空该 IP 的计数，避免共享出口 IP 被误伤
 	h.resetAuthLimit(c)
 
+	// 注册即登录：同样下发会话 Cookie，否则新用户注册完一刷新又要重新登录
+	h.issueSession(c, pair)
+
 	h.logs.Record(service.Entry{
 		UserID:    user.ID,
 		Username:  user.Username,
@@ -106,6 +124,30 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		"user":  toUserResponse(user),
 		"token": pair,
 	})
+}
+
+// issueSession 把 refresh 令牌写进 HttpOnly 会话 Cookie，并把它写进响应的
+// Cache-Control，确保中间层不会把「带 Set-Cookie 的登录响应」缓存下来
+// 派发给下一个访客（那会让后来者直接拿到别人的会话）。
+func (h *AuthHandler) issueSession(c *gin.Context, pair *service.TokenPair) {
+	if h.session.Name == "" || pair == nil {
+		return
+	}
+	cfg := h.session
+	if pair.SessionExpiresIn > 0 {
+		cfg.TTL = time.Duration(pair.SessionExpiresIn) * time.Second
+	}
+	service.SetRefreshCookie(c, cfg, pair.RefreshToken)
+	c.Header("Cache-Control", "no-store")
+}
+
+// clearSession 删除会话 Cookie。
+func (h *AuthHandler) clearSession(c *gin.Context) {
+	if h.session.Name == "" {
+		return
+	}
+	service.ClearSessionCookie(c, h.session)
+	c.Header("Cache-Control", "no-store")
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -129,6 +171,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Identifier: req.Email,
 		Password:   req.Password,
 		TOTPCode:   req.TOTPCode,
+		RememberMe: req.RememberMe,
 	})
 	if err != nil {
 		// 两步验证缺码时单独标记：前端据此把密码框换成验证码输入框，
@@ -152,12 +195,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// 登录成功：清空该 IP 的失败计数，避免正常用户被限流锁死
 	h.resetAuthLimit(c)
 
+	// 下发 HttpOnly 会话 Cookie：浏览器每次访问自动携带，即便
+	// localStorage 被清空（隐私模式 / 移动端存储回收 / 用户清站点数据）
+	// 也仍能续期，这是「每次访问都要重新登录」的根治点。
+	h.issueSession(c, pair)
+
 	h.logs.Record(service.Entry{
 		UserID:    user.ID,
 		Username:  user.Username,
 		Category:  model.LogCategoryAuth,
 		Action:    "登录成功",
-		Detail:    "角色：" + user.Role,
+		Detail:    sessionDetail(user.Role, req.RememberMe),
 		IP:        middleware.ClientIP(c),
 		UserAgent: c.Request.UserAgent(),
 		Success:   true,
@@ -169,25 +217,71 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+// sessionDetail 生成登录日志里的会话说明。
+//
+// 「是否记住我」必须写进审计日志：会话时长从 7 天变成 30 天是安全相关的
+// 状态变更，事后追查「这个账号为什么三个月没登录还能操作」时要能解释。
+func sessionDetail(role string, rememberMe bool) string {
+	if rememberMe {
+		return "角色：" + role + "（记住我：长会话）"
+	}
+	return "角色：" + role
+}
+
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req refreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 refresh_token"})
-		return
+	// 会话 Cookie 优先，请求体作为兼容回退：老客户端只发 body，
+	// 新客户端（浏览器）Cookie 由浏览器自动携带。
+	token := ""
+	if v, err := service.ReadRefreshCookie(c, h.session); err == nil {
+		token = v
+	}
+	if token == "" {
+		if err := c.ShouldBindJSON(&req); err != nil || req.RefreshToken == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 refresh_token"})
+			return
+		}
+		token = req.RefreshToken
 	}
 
-	user, pair, err := h.auth.Refresh(req.RefreshToken)
+	user, pair, err := h.auth.Refresh(token)
 	if err != nil {
-		// 刷新令牌失败值得记录：可能是 token 伪造 / 过期重放的信号
+		// 刷新失败分两种，处置必须不同：
+		//   - 令牌确实无效/被撤销/账号没了 → 清 Cookie，让浏览器别再带着它
+		//     反复重试（这是不可恢复的登录态问题）；
+		//   - 其他错误（库暂时不可用等）→ **保留** Cookie，否则一次数据库
+		//     抖动会把所有在线用户的会话一起抹掉，症状正是「每次访问都要重新登录」。
+		if errors.Is(err, service.ErrTokenRevoked) ||
+			errors.Is(err, service.ErrUserBanned) ||
+			errors.Is(err, service.ErrInvalidRefreshToken) ||
+			errors.Is(err, service.ErrUserVanished) {
+			h.clearSession(c)
+		}
 		recordOp(h.logs, c, model.LogCategoryAuth, "刷新令牌失败", "refresh token 无效或已过期", false)
 		errorResponse(c, err)
 		return
 	}
 
+	// 续期时同步续写 Cookie：会话 Cookie 的 Max-Age 必须跟着新令牌走，
+	// 否则会出现「令牌有效但 Cookie 已被浏览器按旧时间丢弃」。
+	h.issueSession(c, pair)
+
 	c.JSON(http.StatusOK, gin.H{
 		"user":  toUserResponse(user),
 		"token": pair,
 	})
+}
+
+// Logout handles POST /auth/logout —— 清掉浏览器侧的会话 Cookie。
+//
+// 这是**无状态**登出：服务端不维护会话表，无法只作废「一个」refresh 令牌
+// （要作废全部设备请走改密码/强制下线，那条路会自增 TokenVersion）。
+// 对「用户点了退出登录」这个场景，清 Cookie + 前端丢令牌已经足够：
+// 攻击者若另有令牌副本，本来也不受这次登出影响。
+func (h *AuthHandler) Logout(c *gin.Context) {
+	h.clearSession(c)
+	recordOp(h.logs, c, model.LogCategoryAuth, "退出登录", "已清除本机会话", true)
+	c.JSON(http.StatusOK, gin.H{"message": "已退出登录"})
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
