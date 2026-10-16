@@ -72,7 +72,7 @@ function AccountTab() {
       <Reveal
         y={12}
         duration={0.4}
-        className="rounded-xl border border-border bg-card p-5"
+        className="card-flat rounded-xl border border-border bg-card p-5"
       >
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <UserRoundCog className="h-4 w-4 text-accent" />
@@ -115,7 +115,7 @@ function AccountTab() {
         y={12}
         delay={0.08}
         duration={0.4}
-        className="rounded-xl border border-border bg-card p-5"
+        className="card-flat rounded-xl border border-border bg-card p-5"
       >
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <KeyRound className="h-4 w-4 text-accent" />
@@ -235,7 +235,7 @@ function MyArticlesTab() {
               y={10}
               delay={i * 0.04}
               duration={0.3}
-              className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
+              className="card-flat flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -326,7 +326,7 @@ function MyCommentsTab() {
           y={10}
           delay={i * 0.04}
           duration={0.3}
-          className="rounded-xl border border-border bg-card p-4"
+          className="card-flat rounded-xl border border-border bg-card p-4"
         >
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
@@ -398,7 +398,7 @@ function MyFavoritesTab() {
           y={10}
           delay={i * 0.04}
           duration={0.3}
-          className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
+          className="card-flat flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
         >
           <div className="min-w-0">
             <Link

@@ -94,7 +94,13 @@ const (
 	SettingSiteWallpaper    = "site_wallpaper"    // 全站壁纸图片地址
 	SettingWallpaperOpacity = "wallpaper_opacity" // 壁纸不透明度（0-100）
 	SettingWallpaperBlur    = "wallpaper_blur"    // 壁纸模糊（px）
-	SettingArticleSidebar   = "article_sidebar"   // 文章页是否显示侧边栏："true"/"false"
+	// 壁纸遮罩强度（0-100）：壁纸之上再铺一层「暗化/亮化」纯色，
+	// 使文字与半透明卡片在图上也保持可读。0 = 不加遮罩。
+	SettingWallpaperOverlay = "wallpaper_overlay"
+	// 壁纸饱和度（0-200，默认 100）：低于 100 去色显灰调，高于 100 更浓艳；
+	// 0 相当于纯灰度，适合花花绿绿的壁纸压住干扰。
+	SettingWallpaperSaturate = "wallpaper_saturate"
+	SettingArticleSidebar    = "article_sidebar" // 文章页是否显示侧边栏："true"/"false"
 
 	// 站点状态
 	SettingMaintenanceMode = "maintenance_mode" // "true"/"false" 全站维护（关闭）模式
@@ -195,9 +201,13 @@ var settingDefaults = map[string]string{
 	SettingPowRounds:    "12",
 	SettingPowMinEvents: "3",
 
-	SettingSiteWallpaper:      "",
-	SettingWallpaperOpacity:   "100",
-	SettingWallpaperBlur:      "0",
+	SettingSiteWallpaper:    "",
+	SettingWallpaperOpacity: "100",
+	SettingWallpaperBlur:    "0",
+	// 默认不加遮罩、不做去色：保持与升级前完全一致的观感，
+	// 由部署方按自己的壁纸明暗在后台调。
+	SettingWallpaperOverlay:   "0",
+	SettingWallpaperSaturate:  "100",
 	SettingArticleSidebar:     "true",
 	SettingMaintenanceMode:    "false",
 	SettingFriendApplyEnabled: "true",

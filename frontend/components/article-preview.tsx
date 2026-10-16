@@ -32,7 +32,7 @@ export function ArticlePreview({
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       {/* 标题卡 */}
-      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8">
+      <div className="card-flat rounded-2xl border border-border bg-card p-6 sm:p-8">
         {categoryName && (
           <span className="inline-block rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
             {categoryName}
@@ -61,7 +61,7 @@ export function ArticlePreview({
       </div>
 
       {/* 正文白卡 */}
-      <div className="mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-10">
+      <div className="card-flat mt-6 rounded-2xl border border-border bg-card p-6 sm:p-10">
         <div
           ref={contentRef}
           className="prose prose-neutral dark:prose-invert max-w-none overflow-x-auto prose-headings:font-semibold prose-a:text-accent prose-pre:bg-muted prose-code:bg-muted prose-code:rounded prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.9em] prose-code:before:content-none prose-code:after:content-none prose-img:rounded-xl prose-blockquote:border-l-accent"

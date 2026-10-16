@@ -157,7 +157,7 @@ export default function AdminArticlesPage() {
               y={12}
               delay={i * 0.04}
               duration={0.3}
-              className="group flex items-center justify-between rounded-2xl border border-border bg-card px-5 py-4 transition-colors hover:border-accent/30"
+              className="group flex items-center justify-between card-flat rounded-2xl border border-border bg-card px-5 py-4 transition-colors hover:border-accent/30"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2.5">

@@ -95,7 +95,7 @@ export default function AdminBackupsPage() {
 
       {/* 汇总 */}
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
+        <div className="card-flat rounded-2xl border border-border bg-card px-4 py-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Database className="h-3.5 w-3.5" />
             备份份数
@@ -105,7 +105,7 @@ export default function AdminBackupsPage() {
             <span className="ml-1 text-sm font-normal text-muted-foreground">份</span>
           </p>
         </div>
-        <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
+        <div className="card-flat rounded-2xl border border-border bg-card px-4 py-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <HardDrive className="h-3.5 w-3.5" />
             总占用空间
@@ -114,7 +114,7 @@ export default function AdminBackupsPage() {
             {data ? formatSize(data.total_size) : '—'}
           </p>
         </div>
-        <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
+        <div className="card-flat rounded-2xl border border-border bg-card px-4 py-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Database className="h-3.5 w-3.5" />
             单份体积
@@ -139,7 +139,7 @@ export default function AdminBackupsPage() {
           </p>
         </div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-2xl border border-border bg-card shadow-sm">
+        <div className="card-flat mt-6 overflow-x-auto rounded-2xl border border-border bg-card">
           <table className="w-full min-w-[620px] whitespace-nowrap text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -168,7 +168,7 @@ export default function AdminBackupsPage() {
       )}
 
       {/* 恢复流程说明：刻意不做成一键还原 */}
-      <div className="mt-6 rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="card-flat mt-6 rounded-2xl border border-border bg-card p-5">
         <h2 className="text-sm font-semibold">如何恢复备份</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           后台<strong className="text-foreground">不提供一键还原</strong>，这是有意的设计：导出的快照是

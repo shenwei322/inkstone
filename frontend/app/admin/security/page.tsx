@@ -104,7 +104,7 @@ function Section({
   return (
     <section
       ref={sectionRef}
-      className="rounded-xl border border-border bg-card"
+      className="card-flat rounded-xl border border-border bg-card"
     >
       <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
         {icon}

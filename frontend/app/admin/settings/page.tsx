@@ -77,7 +77,7 @@ function Section({
   return (
     <section
       ref={sectionRef}
-      className="rounded-xl border border-border bg-card"
+      className="card-flat rounded-xl border border-border bg-card"
     >
       <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
         {icon}
@@ -176,6 +176,113 @@ function ImageField({
   )
 }
 
+/** 滑块 + 数字输入的组合控件：拖动即改，也能看到精确数值 */
+function SliderField({
+  label,
+  desc,
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  label: string
+  desc: string
+  min: number
+  max: number
+  value: string
+  onChange: (v: string) => void
+}) {
+  const num = Number(value)
+  const safe = Number.isFinite(num) ? num : min
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <label className="text-sm font-medium">{label}</label>
+        <span className="font-mono text-xs text-muted-foreground">{safe}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={safe}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-accent"
+      />
+      <p className="text-xs text-muted-foreground">{desc}</p>
+    </div>
+  )
+}
+
+/**
+ * 壁纸实时预览：用与前台 SiteWallpaper 相同的分层逻辑
+ * （底色 → 图片 → 遮罩）在小方块里重现效果，
+ * 后台调参时不必来回切前台页面确认。
+ */
+function WallpaperPreview({
+  url,
+  opacity,
+  blur,
+  overlay,
+  saturate,
+}: {
+  url: string
+  opacity: string
+  blur: string
+  overlay: string
+  saturate: string
+}) {
+  const o = Math.min(100, Math.max(0, Number(opacity) || 0)) / 100
+  const b = Math.min(20, Math.max(0, Number(blur) || 0))
+  const ov = Math.min(100, Math.max(0, Number(overlay) || 0))
+  const sa = Math.min(200, Math.max(0, Number(saturate) || 100))
+  const scale = b > 0 ? 1 + b / 40 : 1
+
+  const filters: string[] = []
+  if (b > 0) filters.push(`blur(${b}px)`)
+  if (sa !== 100) filters.push(`saturate(${sa}%)`)
+
+  return (
+    <div className="mt-4 space-y-1.5">
+      <label className="text-sm font-medium">效果预览</label>
+      <div className="relative h-40 overflow-hidden rounded-xl border border-border bg-background">
+        {url ? (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={url}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{
+              opacity: o,
+              filter: filters.length > 0 ? filters.join(' ') : undefined,
+              transform: `scale(${scale})`,
+              transformOrigin: 'center',
+            }}
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+            尚未设置壁纸
+          </div>
+        )}
+        {ov > 0 && (
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundColor: `color-mix(in srgb, var(--wallpaper-tone, #000) ${ov}%, transparent)`,
+            }}
+          />
+        )}
+        {/* 预览卡片：模拟前台 has-wallpaper 的半透明表面 */}
+        <div className="absolute inset-x-4 top-4 rounded-lg border border-border bg-card/80 px-3 py-2 backdrop-blur-md">
+          <p className="text-xs font-semibold">标题示例</p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            正文示例文字，用来判断壁纸上的可读性。
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminSettingsPage() {
   const notify = useNotify()
   const { refresh: refreshSiteConfig } = useSiteConfigActions()
@@ -212,6 +319,8 @@ export default function AdminSettingsPage() {
         site_wallpaper: extra.site_wallpaper ?? '',
         wallpaper_opacity: extra.wallpaper_opacity ?? '100',
         wallpaper_blur: extra.wallpaper_blur ?? '0',
+        wallpaper_overlay: extra.wallpaper_overlay ?? '0',
+        wallpaper_saturate: extra.wallpaper_saturate ?? '100',
         article_sidebar: extra.article_sidebar ?? 'true',
         // 游客评论开关：payload 是白名单，漏了就永远保存不上
         // （后端会静默丢弃未提交的键，表现为"开了又变回关"）
@@ -324,30 +433,6 @@ export default function AdminSettingsPage() {
               onChange={(url) => update('site_wallpaper' as never, url as never)}
             />
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">壁纸不透明度（%）</label>
-              <input
-                type="number"
-                min={5}
-                max={100}
-                value={(form as unknown as Record<string, string>).wallpaper_opacity ?? '100'}
-                onChange={(e) => update('wallpaper_opacity' as never, e.target.value as never)}
-                className={inputClass}
-              />
-              <p className="text-xs text-muted-foreground">建议 20-60，过高会影响文字可读性</p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">壁纸模糊（px）</label>
-              <input
-                type="number"
-                min={0}
-                max={20}
-                value={(form as unknown as Record<string, string>).wallpaper_blur ?? '0'}
-                onChange={(e) => update('wallpaper_blur' as never, e.target.value as never)}
-                className={inputClass}
-              />
-              <p className="text-xs text-muted-foreground">0 表示不模糊，2-8 效果较自然</p>
-            </div>
-            <div className="space-y-1.5">
               <label className="text-sm font-medium">文章页侧边栏</label>
               <select
                 value={(form as unknown as Record<string, string>).article_sidebar ?? 'true'}
@@ -359,6 +444,51 @@ export default function AdminSettingsPage() {
               </select>
             </div>
           </div>
+
+          {/* 壁纸调色区：不透明度 / 模糊 / 遮罩 / 饱和度。
+              配一个实时预览块，边拖边看，不用来回切前台。 */}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <SliderField
+              label="不透明度（%）"
+              desc="壁纸本身的透明程度，越低底色越明显"
+              min={5}
+              max={100}
+              value={(form as unknown as Record<string, string>).wallpaper_opacity ?? '100'}
+              onChange={(v) => update('wallpaper_opacity' as never, v as never)}
+            />
+            <SliderField
+              label="模糊（px）"
+              desc="柔化壁纸细节，让文字更清楚；0 不模糊，2-8 较自然"
+              min={0}
+              max={20}
+              value={(form as unknown as Record<string, string>).wallpaper_blur ?? '0'}
+              onChange={(v) => update('wallpaper_blur' as never, v as never)}
+            />
+            <SliderField
+              label="遮罩强度（%）"
+              desc="壁纸之上压一层暗色（深色主题）或亮色（浅色主题），0 不加"
+              min={0}
+              max={100}
+              value={(form as unknown as Record<string, string>).wallpaper_overlay ?? '0'}
+              onChange={(v) => update('wallpaper_overlay' as never, v as never)}
+            />
+            <SliderField
+              label="饱和度（%）"
+              desc="100 为原图；调低去色压干扰，0 为纯灰度"
+              min={0}
+              max={200}
+              value={(form as unknown as Record<string, string>).wallpaper_saturate ?? '100'}
+              onChange={(v) => update('wallpaper_saturate' as never, v as never)}
+            />
+          </div>
+
+          <WallpaperPreview
+            url={(form as unknown as Record<string, string>).site_wallpaper ?? ''}
+            opacity={(form as unknown as Record<string, string>).wallpaper_opacity ?? '100'}
+            blur={(form as unknown as Record<string, string>).wallpaper_blur ?? '0'}
+            overlay={(form as unknown as Record<string, string>).wallpaper_overlay ?? '0'}
+            saturate={(form as unknown as Record<string, string>).wallpaper_saturate ?? '100'}
+          />
         </Section>
 
         <Section

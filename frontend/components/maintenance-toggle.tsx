@@ -45,7 +45,7 @@ export function MaintenanceToggle() {
   }
 
   return (
-    <GsapReveal className="rounded-2xl border border-border bg-card p-5 shadow-sm" y={12}>
+    <GsapReveal className="card-flat rounded-2xl border border-border bg-card p-5" y={12}>
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div

@@ -42,7 +42,7 @@ export default async function CategoriesPage() {
             {categories.map((c) => (
               <li key={c.id}>
                 <Link href={`/category/${c.slug}`} className="block">
-                  <div className="group rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+                  <div className="group rounded-xl border border-border bg-card p-5 shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)]">
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="text-base font-semibold transition-colors group-hover:text-accent">
                         {c.name}

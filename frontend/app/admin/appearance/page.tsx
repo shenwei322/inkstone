@@ -126,7 +126,7 @@ function MenuTab() {
         <Reveal
           key={`${item.label}-${i}`}
           y={8}
-          className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3"
+          className="card-flat flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3"
         >
           <IconPicker
             value={item.icon}
@@ -198,7 +198,7 @@ function MenuTab() {
       {addPageOpen && (
         <Reveal
           y={8}
-          className="rounded-2xl border border-border bg-card p-3"
+          className="card-flat rounded-2xl border border-border bg-card p-3"
         >
           <p className="mb-2 text-xs text-muted-foreground">
             选择已发布的页面（在页面管理中创建），将自动添加为菜单项
@@ -341,7 +341,7 @@ function WidgetsTab() {
         <Reveal
           key={`${w.type}-${i}`}
           y={8}
-          className="rounded-2xl border border-border bg-card p-4"
+          className="card-flat rounded-2xl border border-border bg-card p-4"
         >
           <div className="flex items-center gap-2">
             <span className="rounded-md bg-accent/10 px-2 py-1 text-xs font-medium text-accent">
@@ -638,7 +638,7 @@ export default function AdminAppearancePage() {
         key={tab}
         y={12}
         duration={0.35}
-        className="mt-6 rounded-2xl border border-border bg-card p-5"
+        className="card-flat mt-6 rounded-2xl border border-border bg-card p-5"
       >
         {tab === 'menu' ? <MenuTab /> : tab === 'widgets' ? <WidgetsTab /> : <SidebarPositionTab />}
       </Reveal>

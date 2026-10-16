@@ -208,7 +208,7 @@ export function PageList() {
               key={page.id}
               delay={i * 0.04}
               duration={0.3}
-              className="group flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4 transition-colors hover:border-accent/30"
+              className="card-flat group flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4 transition-colors hover:border-accent/30"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">

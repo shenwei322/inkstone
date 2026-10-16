@@ -398,7 +398,7 @@ function LinkApplicationsPanel() {
             <Reveal
               key={app.id}
               y={10}
-              className="rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+              className="card-flat rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <p className="font-medium">{app.site_name}</p>
@@ -652,7 +652,7 @@ export default function AdminLinksPage() {
               y={10}
               delay={i * 0.04}
               duration={0.3}
-              className="flex flex-wrap items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+              className="card-flat flex flex-wrap items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
             >
               <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
                 {link.icon_url ? (

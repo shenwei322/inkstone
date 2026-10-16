@@ -1,6 +1,16 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // RSS 订阅源由后端 gin 根路由提供（/feed.xml）。
+  // 生产环境由 Nginx 的 `location = /feed.xml` 精确匹配直接转发到后端，
+  // 请求根本到不了前端；这条 rewrite 只服务于「没有 Nginx」的场景
+  // （本地 dev、直接跑 next start、二次部署），否则页脚的订阅链接会 404。
+  async rewrites() {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
+    // 从 API 基址推出后端源站：去掉末尾的 /api/v1
+    const backendOrigin = apiBase.replace(/\/api\/v1\/?$/, "");
+    return [{ source: "/feed.xml", destination: `${backendOrigin}/feed.xml` }];
+  },
   images: {
     // 封面图由后端 /uploads 提供（开发环境为 localhost:8080）。
     // next/image 会经优化代理加载这些远端图片；生产若改用绝对域名，需在此追加对应 hostname。

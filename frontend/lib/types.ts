@@ -157,6 +157,10 @@ export interface SiteSettings {
   site_wallpaper?: string
   wallpaper_opacity?: string
   wallpaper_blur?: string
+  /** 壁纸遮罩强度（0-100）：壁纸之上的暗化/亮化层，提升文字可读性 */
+  wallpaper_overlay?: string
+  /** 壁纸饱和度（0-200，100 为原图）：<100 去色，0 为灰度 */
+  wallpaper_saturate?: string
   article_sidebar?: string
   maintenance_mode?: boolean
   /** 游客（未登录访客）评论总开关 */

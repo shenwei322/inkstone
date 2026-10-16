@@ -10,6 +10,7 @@ import {
   Globe,
   ListTree,
   Map as MapIcon,
+  Rss,
   Search,
   X,
 } from 'lucide-react'
@@ -91,7 +92,7 @@ function GroupSection({ group, delay }: { group: SitemapGroup; delay: number }) 
   return (
     <section
       ref={ref}
-      className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+      className="card-flat overflow-hidden rounded-2xl border border-border bg-card"
     >
       <header className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5">
         <h2 className="text-sm font-semibold">{group.label}</h2>
@@ -127,6 +128,12 @@ export default function AdminSitemapPage() {
   useReveal(headerRef, { y: 16, duration: 0.4 })
 
   const sitemap = data?.data
+  // RSS 订阅源地址：后端 /feed.xml 挂在 gin 根路由（不在 /api/v1 下），
+  // 所以由前端域名拼出，而不是从 API 基址推。
+  // frontend_url 末位可能带 /，去掉避免出现双斜杠。
+  const feedUrl = sitemap?.frontend_url
+    ? `${sitemap.frontend_url.replace(/\/+$/, '')}/feed.xml`
+    : ''
   const groups = useMemo(() => {
     if (!sitemap) return []
     const q = filter.trim().toLowerCase()
@@ -169,13 +176,14 @@ export default function AdminSitemapPage() {
           <PageLoading minHeight="16rem" />
         ) : (
           <>
-            {/* 统计 + 入口 */}
+            {/* 统计 + 入口：共 4 张卡（统计/sitemap/robots/RSS），
+                用 2→4 列而非 3 列——3 列会让第 4 张单独掉到下一行左侧。 */}
             <Reveal
               y={16}
               delay={0.05}
-              className="grid gap-4 sm:grid-cols-3"
+              className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
             >
-              <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+              <div className="card-flat rounded-2xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <ListTree className="h-4 w-4 text-accent" /> 收录 URL 总数
                 </p>
@@ -189,7 +197,7 @@ export default function AdminSitemapPage() {
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+              <div className="card-flat rounded-2xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <Globe className="h-4 w-4 text-accent" /> sitemap.xml
                 </p>
@@ -207,7 +215,7 @@ export default function AdminSitemapPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+              <div className="card-flat rounded-2xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <FileCode2 className="h-4 w-4 text-accent" /> robots.txt
                 </p>
@@ -216,6 +224,31 @@ export default function AdminSitemapPage() {
                 </pre>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <CopyButton text={sitemap.robots} label="复制内容" />
+                </div>
+              </div>
+
+              {/* RSS 订阅源：地址由前端域名拼出（后端 /feed.xml 挂在 gin 根路由，
+                  不走 API 前缀）。这里只提供地址与复制，不预览内容——
+                  订阅源是写给阅读器的，不是给人读的。 */}
+              <div className="card-flat rounded-2xl border border-border bg-card p-5">
+                <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <Rss className="h-4 w-4 text-accent" /> feed.xml（RSS 订阅源）
+                </p>
+                <p className="mt-2 break-all font-mono text-xs">{feedUrl}</p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  最新 20 篇已发布文章，含全文。站点 head 已内置自动发现标签，
+                  读者输入域名即可在阅读器里订阅。
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <a
+                    href={feedUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-95"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> 打开
+                  </a>
+                  <CopyButton text={feedUrl} label="复制地址" />
                 </div>
               </div>
             </Reveal>

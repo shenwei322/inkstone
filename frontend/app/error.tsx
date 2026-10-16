@@ -24,7 +24,7 @@ export default function Error({ error, retry }: { error: Error & { digest?: stri
   return (
     <PageTransition>
       <div className="mx-auto max-w-3xl px-4 py-16 sm:py-24">
-        <Reveal y={16} className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm sm:p-12">
+        <Reveal y={16} className="card-flat rounded-2xl border border-border bg-card p-8 text-center sm:p-12">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10">
             <AlertTriangle className="h-8 w-8 text-red-500" />
           </div>

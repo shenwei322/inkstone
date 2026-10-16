@@ -375,7 +375,7 @@ export default function AdminUsersPage() {
           <RowLoading rows={4} />
         </div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-xl border border-border bg-card">
+        <div className="card-flat mt-6 overflow-x-auto rounded-xl border border-border bg-card">
           {/* 判断「是否仍在锁定期」需要当前时间。在渲染表格时取一次并传给
               每一行，而不是让每行各自调 Date.now()——后者违反
               react-hooks/purity（纯函数约束），且行间取到的时刻不同会

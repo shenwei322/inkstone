@@ -94,7 +94,7 @@ export default function AdminTrashPage() {
           </p>
         </div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-2xl border border-border bg-card shadow-sm">
+        <div className="card-flat mt-6 overflow-x-auto rounded-2xl border border-border bg-card">
           <table className="w-full min-w-[680px] whitespace-nowrap text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">

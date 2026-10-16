@@ -37,7 +37,7 @@ export function CollapsibleCard({
   const [open, setOpen] = useState(defaultOpen)
 
   return (
-    <section className={`mt-6 overflow-hidden rounded-2xl border border-border bg-card shadow-sm ${className}`}>
+    <section className={`card-flat mt-6 overflow-hidden rounded-2xl border border-border bg-card ${className}`}>
       <header className="flex flex-wrap items-center gap-3 px-5 py-4">
         <button
           type="button"

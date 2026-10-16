@@ -119,7 +119,7 @@ export function Navbar() {
     'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95'
 
   const menuLink =
-    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+    'menu-item flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground'
 
   return (
     <header
@@ -274,7 +274,7 @@ export function Navbar() {
                     logout()
                     router.push('/')
                   }}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-red-500 transition-colors hover:bg-red-500/10"
+                  className="menu-item flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-red-500/10"
                 >
                   <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-500/10">
                     <LogOut className="h-4 w-4" />
@@ -359,9 +359,9 @@ export function Navbar() {
                   target={item.href.startsWith('http') ? '_blank' : undefined}
                   rel={item.href.startsWith('http') ? 'noreferrer' : undefined}
                   onClick={() => setNavOpen(false)}
-                  className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
+                  className={`menu-item flex items-center gap-3 px-3 py-2.5 text-sm ${
                     active
-                      ? 'bg-accent/10 font-medium text-accent'
+                      ? 'menu-item-active bg-accent/10 font-medium text-accent'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   }`}
                 >
@@ -416,7 +416,7 @@ export function Navbar() {
                   logout()
                   router.push('/')
                 }}
-                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-red-500 transition-colors hover:bg-red-500/10"
+                className="menu-item flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-red-500/10"
               >
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10">
                   <LogOut className="h-4 w-4" />

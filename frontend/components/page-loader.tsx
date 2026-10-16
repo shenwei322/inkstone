@@ -114,7 +114,7 @@ export function RowLoading({ rows = 5 }: { rows?: number }) {
       {Array.from({ length: rows }, (_, i) => (
         <div
           key={i}
-          className="flex h-14 items-center gap-3 rounded-xl border border-border bg-card px-4"
+          className="card-flat flex h-14 items-center gap-3 rounded-xl border border-border bg-card px-4"
         >
           {i === 0 ? (
             <>

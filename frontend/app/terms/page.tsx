@@ -19,7 +19,7 @@ export default function TermsPage() {
   return (
     <PageTransition>
       <div className="mx-auto max-w-3xl px-4 py-10">
-        <Reveal y={16} className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-10">
+        <Reveal y={16} className="card-flat rounded-2xl border border-border bg-card p-6 sm:p-10">
           <article className={proseBody}>
             <h1>用户协议</h1>
             <p>

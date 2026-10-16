@@ -604,7 +604,7 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
       <div className="px-4 py-8">
         <Reveal
           duration={0.45}
-          className="rounded-xl border border-border bg-card p-6 sm:p-10"
+          className="card-flat rounded-xl border border-border bg-card p-6 sm:p-10"
         >
           {restoredHint && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-muted-foreground">

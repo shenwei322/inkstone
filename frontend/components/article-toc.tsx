@@ -78,7 +78,7 @@ export function ArticleToc({ items, contentRef }: { items: TocItem[]; contentRef
 
   return (
     <aside className="hidden lg:block">
-      <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto rounded-xl border border-border bg-card/60 p-3">
+      <div className="card-flat sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto rounded-xl border border-border bg-card/60 p-3">
         <p className="mb-2 flex items-center gap-1.5 px-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
           <ListTree className="h-3.5 w-3.5" /> 目录
         </p>

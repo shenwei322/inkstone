@@ -24,6 +24,8 @@
 | `site_wallpaper` | `""` | 全站壁纸 URL |
 | `wallpaper_opacity` | `100` | 壁纸不透明度（5-100） |
 | `wallpaper_blur` | `0` | 壁纸模糊 px（0-20） |
+| `wallpaper_overlay` | `0` | 壁纸遮罩强度（0-100）。壁纸之上再铺一层纯色，色调随主题：浅色主题用白（`--wallpaper-tone: #fff`）、深色主题用黑，用于压住过亮/过花的壁纸，保证文字可读 |
+| `wallpaper_saturate` | `100` | 壁纸饱和度（0-200）。100 为原图，低于 100 去色，0 为灰度 |
 | `article_sidebar` | `true` | 文章页是否显示侧边栏 |
 | `sidebar_position` | `right` | 侧边栏位置 `right` / `left` |
 

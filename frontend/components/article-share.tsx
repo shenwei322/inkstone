@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, Link2, Mail, Send, Share2 } from 'lucide-react'
+import { Check, Link2, Mail, Rss, Send, Share2 } from 'lucide-react'
 import { useNotify } from './toast'
 
 /**
  * 文章分享：移动端优先调系统原生分享（navigator.share），
- * 桌面端弹出小菜单（复制链接 / 微博 / Twitter / 邮件）。
+ * 桌面端弹出小菜单（复制链接 / 微博 / Twitter / 邮件 / 订阅本站）。
  */
 export function ArticleShare({ title }: { title: string }) {
   const notify = useNotify()
@@ -94,7 +94,7 @@ export function ArticleShare({ title }: { title: string }) {
           <button
             type="button"
             onClick={() => void copyLink()}
-            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="menu-item flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Link2 className="h-4 w-4" />}
             {copied ? '已复制链接' : '复制链接'}
@@ -102,7 +102,7 @@ export function ArticleShare({ title }: { title: string }) {
           <button
             type="button"
             onClick={() => openExternal(`https://service.weibo.com/share/share.php?url=${enc(url)}&title=${enc(title)}`)}
-            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="menu-item flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <Send className="h-4 w-4" />
             分享到微博
@@ -110,17 +110,29 @@ export function ArticleShare({ title }: { title: string }) {
           <button
             type="button"
             onClick={() => openExternal(`https://twitter.com/intent/tweet?url=${enc(url)}&text=${enc(title)}`)}
-            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="menu-item flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <Send className="h-4 w-4" />
             分享到 Twitter
           </button>
           <a
             href={`mailto:?subject=${enc(title)}&body=${enc(url)}`}
-            className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="menu-item flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <Mail className="h-4 w-4" />
             邮件分享
+          </a>
+          {/* 订阅入口：RSS 是「订阅这个站」而不是「分享这篇文章」，
+              但读者读到一半想订阅的时机就在这里，放在分享菜单末尾最顺手。
+              用 <a> 而非 openExternal：让浏览器/阅读器自己接管，
+              装了 RSS 扩展的浏览器会直接弹出添加订阅。 */}
+          <div className="my-1 border-t border-border" />
+          <a
+            href="/feed.xml"
+            className="menu-item flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Rss className="h-4 w-4" />
+            订阅本站
           </a>
         </div>
       )}

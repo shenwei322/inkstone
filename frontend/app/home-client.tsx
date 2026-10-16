@@ -4,7 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { Suspense, useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { ChevronDown, Eye, PenLine, Search, X } from 'lucide-react'
+import { ChevronDown, Eye, PenLine, Rss, Search, X } from 'lucide-react'
 import { fetchArticles, fetchCategories, fetchTags } from '@/lib/api'
 import type { Article } from '@/lib/types'
 import { PageLoading, RowLoading, Spinner } from '@/components/page-loader'
@@ -51,17 +51,17 @@ function ArticleCard({ article }: { article: Article }) {
     <StaggerItem>
       <HoverLift>
         <Link href={`/posts/${article.slug}`} className="block">
-          <article className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5 sm:flex-row sm:gap-5 sm:p-5">
+          <article className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)] sm:flex-row sm:gap-6 sm:p-6">
             {/* 顶部 accent 渐变条：悬停时从左展开（scaleX，不做 width 动画） */}
             <div className="absolute inset-x-0 top-0 z-10 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-accent to-purple-500 transition-transform duration-300 group-hover:scale-x-100" />
 
             {cover && (
-              <div className="relative aspect-video w-full shrink-0 overflow-hidden bg-muted sm:aspect-auto sm:h-28 sm:w-44 sm:rounded-lg">
+              <div className="relative aspect-video w-full shrink-0 overflow-hidden bg-muted sm:aspect-auto sm:h-36 sm:w-60 sm:rounded-lg">
                 <Image
                   src={cover}
                   alt={article.title}
                   fill
-                  sizes="(max-width: 640px) 100vw, 176px"
+                  sizes="(max-width: 640px) 100vw, 240px"
                   className="object-cover transition-transform duration-500 group-hover:scale-110"
                   onError={(e) => {
                     ;(e.currentTarget.parentElement as HTMLElement).style.display = 'none'
@@ -72,7 +72,7 @@ function ArticleCard({ article }: { article: Article }) {
 
             <div className="flex min-w-0 flex-1 flex-col p-5 sm:p-0">
               <div className="flex items-start justify-between gap-3">
-                <h2 className="text-lg font-semibold leading-snug tracking-tight text-balance transition-colors group-hover:text-accent">
+                <h2 className="text-lg font-semibold leading-snug tracking-tight text-balance transition-colors group-hover:text-accent sm:text-xl">
                   {article.title}
                 </h2>
                 {article.category && (
@@ -81,8 +81,8 @@ function ArticleCard({ article }: { article: Article }) {
                   </span>
                 )}
               </div>
-              {/* 摘要：两行截断，行高放宽提升可读性 */}
-              <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+              {/* 摘要：三行截断（后端摘要上限 120 字，两行放不下），行高放宽提升可读性 */}
+              <p className="mt-2.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
                 {excerpt}
               </p>
               {/* 底部元信息：作者/日期/阅读量，标签贴右侧（仅 sm 以上） */}
@@ -102,7 +102,7 @@ function ArticleCard({ article }: { article: Article }) {
                   {article.views}
                 </span>
                 {article.tags && article.tags.length > 0 && (
-                  <span className="ml-auto hidden items-center gap-1.5 sm:flex">
+                  <span className="ml-auto flex items-center gap-1.5">
                     {article.tags.slice(0, 3).map((tag) => (
                       <span
                         key={tag.id}
@@ -134,7 +134,9 @@ export function HomeClient({
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-5xl px-4 py-10">
+        // 宽度对齐「有侧栏」这一默认配置（88rem），否则加载态比内容态窄，
+        // 数据到达时会出现整块横向跳动。
+        <div className="mx-auto max-w-[88rem] px-4 py-10">
           <RowLoading rows={3} />
         </div>
       }
@@ -187,7 +189,7 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
 
   return (
     <PageTransition>
-      <div className={`mx-auto px-4 py-10 ${widgets.length > 0 ? 'max-w-7xl' : 'max-w-5xl'}`}>
+      <div className={`mx-auto px-4 py-10 ${widgets.length > 0 ? 'max-w-[88rem]' : 'max-w-6xl'}`}>
         {/* 筛选时显示标题；默认「最新文章」不显示，避免冗余 */}
         {hasFilter && (
           <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -315,7 +317,7 @@ function ArticleListSection({
             type="button"
             onClick={onLoadMore}
             disabled={isFetchingMore}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isFetchingMore ? (
               <>
@@ -331,6 +333,21 @@ function ArticleListSection({
           </button>
         </div>
       )}
+
+      {/* 订阅提示：翻到列表末尾的读者正是「想持续跟进」的人，
+          这里给一处不打断阅读的 RSS 入口。href 用 /feed.xml ——
+          dev / 直跑 next start 由 next.config 的 rewrite 转发到后端，
+          生产由 Nginx 精确匹配接管，两条路径都通。 */}
+      <div className="mt-10 flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Rss className="h-4 w-4" />
+        <span>订阅本站更新</span>
+        <a
+          href="/feed.xml"
+          className="font-medium text-accent underline underline-offset-4 transition-opacity hover:opacity-80"
+        >
+          RSS
+        </a>
+      </div>
     </>
   ) : (
     <Reveal

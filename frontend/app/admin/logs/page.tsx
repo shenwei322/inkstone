@@ -180,7 +180,7 @@ export default function AdminLogsPage() {
         ].map((card) => (
           <div
             key={card.label}
-            className="rounded-2xl border border-border bg-card px-4 py-3 shadow-sm"
+            className="card-flat rounded-2xl border border-border bg-card px-4 py-3"
           >
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <card.icon className="h-3.5 w-3.5" />
@@ -281,7 +281,7 @@ export default function AdminLogsPage() {
           <p className="mt-4 text-muted-foreground">暂无符合条件的日志记录</p>
         </div>
       ) : (
-        <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+        <div className="card-flat mt-5 overflow-hidden rounded-2xl border border-border bg-card">
           {/* 表头（桌面端） */}
           <div className="hidden border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground md:grid md:grid-cols-[18px_minmax(0,1fr)_150px_110px_130px] md:gap-3">
             <span />

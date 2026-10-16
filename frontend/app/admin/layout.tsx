@@ -119,9 +119,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           key={item.href}
           href={item.href}
           onClick={closeOnClick ? () => setMobileNavOpen(false) : undefined}
-          className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors duration-200 ${
+          className={`menu-item flex items-center gap-2.5 px-3 py-2 text-sm ${
             active
-              ? 'bg-accent text-white shadow-sm shadow-accent/25'
+              ? 'menu-item-active bg-accent text-white'
               : 'text-muted-foreground hover:bg-muted hover:text-foreground'
           }`}
         >

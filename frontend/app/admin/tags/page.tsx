@@ -71,7 +71,7 @@ export default function AdminTagsPage() {
       <Reveal
         y={12}
         duration={0.4}
-        className="mt-6 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-4"
+        className="card-flat mt-6 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-4"
       >
         <input
           value={newName}
@@ -118,7 +118,7 @@ export default function AdminTagsPage() {
               y={8}
               delay={i * 0.03}
               duration={0.25}
-              className="flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 transition-colors hover:border-accent/40"
+              className="card-flat flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 transition-colors hover:border-accent/40"
             >
               <TagIcon className="h-4 w-4 shrink-0 text-accent" />
 

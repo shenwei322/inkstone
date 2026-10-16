@@ -150,7 +150,7 @@ export default function AdminAboutPage() {
       {/* 系统介绍 */}
       <section
         ref={introRef}
-        className="mt-4 rounded-2xl border border-border bg-card p-5"
+        className="card-flat mt-4 rounded-2xl border border-border bg-card p-5"
       >
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Info className="h-4 w-4 text-accent" />
@@ -167,7 +167,7 @@ export default function AdminAboutPage() {
       {/* 技术栈 */}
       <section
         ref={stackRef}
-        className="mt-4 rounded-2xl border border-border bg-card p-5"
+        className="card-flat mt-4 rounded-2xl border border-border bg-card p-5"
       >
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Code2 className="h-4 w-4 text-accent" />
@@ -184,7 +184,7 @@ export default function AdminAboutPage() {
       {/* 功能特性 */}
       <section
         ref={featureRef}
-        className="mt-4 rounded-2xl border border-border bg-card p-5"
+        className="card-flat mt-4 rounded-2xl border border-border bg-card p-5"
       >
         <h2 className="text-sm font-semibold">功能特性</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">

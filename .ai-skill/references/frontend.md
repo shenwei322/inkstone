@@ -455,7 +455,26 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
   不会闪骨架
 
 ### 壁纸（`components/site-wallpaper.tsx`）
-从 `site.wallpaper` 读取，固定背景层。有壁纸时 `body.has-wallpaper` 类生效，卡片变半透明（`globals.css`）。
+从 `site.wallpaper` 读取，作为 `fixed inset-0 -z-10 pointer-events-none` 的固定背景层。
+
+容器内自下而上分四层，缺一层都会出观感问题：
+1. **底色层** `bg-background`：图片解码完成前先顶上，避免首屏闪白；
+2. **图片层**：`object-cover` 铺满，应用 `opacity` / `blur` / `saturate`；
+   模糊会把图边往内收出透明边，故 `scale = 1 + blur/40` 略微放大盖住；
+3. **遮罩层**：`wallpaper_overlay > 0` 时叠加 `color-mix(in srgb, var(--wallpaper-tone) N%, transparent)`，
+   色调变量在 `globals.css` 的 `:root`（白）/ `.dark`（黑）里切换；
+4. **上下渐隐**：顶部与底部各 40 高度的 `from-background/80` 渐变，避免滚动时生硬切边。
+
+用 `new Image()` 预解码后再淡入：state 存的是**已就绪的 URL**而非布尔量，
+地址一变 `loaded = loadedUrl === site.wallpaper` 自然为 false，避免在 effect 里同步 setState
+（会触发 `react-hooks/set-state-in-effect` 报错）。
+
+有壁纸时 `site-config-context.tsx` 给 `body` 挂 `has-wallpaper` 类，
+`globals.css` 中该类的规则把各类「表面」统一为半透明 + `backdrop-filter`：
+卡片、导航、页脚、输入框、下拉菜单、代码块、引用块都覆盖，
+参数集中在 `--surface-alpha`（78%）与 `--surface-blur`（12px）两个自定义属性里。
+菜单/对话框这类浮层用更高不透明度（92%）避免与背后内容打架。
+另有两段无障碍降级：`prefers-reduced-transparency` 退回实心，`prefers-reduced-motion` 关掉模糊。
 
 ### 菜单图标（`components/menu-icon.tsx`）
 36 个 lucide 图标的注册表 + `IconPicker` 选择器。`MenuIcon({name})` 按名字渲染。
@@ -537,12 +556,46 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 - **站点 title/description**：`app/layout.tsx` 用 `export async function generateMetadata()` fetch `${NEXT_PUBLIC_API_URL}/site-config` 取 `site_name`/`site_description`，`next: { revalidate: 30 }`（与后端 settings 30s 缓存对齐）+ try/catch 兜底。**不要**在 SiteHead 里渲染 `<title>`（React 19 hoist title 不复用 Next 注入的节点→多个 title 而 Chrome 只读第一个），**也不要**在 context 里 `document.title =`（会被 Next metadata 管理覆盖，实测 navbar 已显示新名而 title 不变）。副作用：全站变为 **ISR 30s**。
 - **不要再在 site-config-context 里用 querySelector/appendChild 改 favicon**——运行时 DOM 操作会被 React 19 metadata 管理覆盖/清理，后台改了前台不生效（踩过）。
 
+### RSS 订阅（后端 `/feed.xml` + 前端三处入口）
+
+订阅源本身由后端提供（见 `backend.md` / `api.md`：gin 根路由 `/feed.xml`，
+RSS 2.0 + `content:encoded` 全文，加密文章只给标题链接）。前端负责三件事：
+
+1. **自动发现标签**（`site-head.tsx`）：
+   ```tsx
+   <link rel="alternate" type="application/rss+xml" title={`${site.siteName} · RSS`} href="/feed.xml" />
+   ```
+   这是 RSS 能否被用起来的关键。Reeder / Inoreader / FreshRSS 与浏览器扩展
+   都靠它识别订阅源 —— 读者只输入域名就能订阅。缺了它，访客必须手动把
+   `/feed.xml` 拼到域名后，等于把门槛抬到「得先知道 RSS 是什么」。
+
+2. **`/feed.xml` 的可达性**（`next.config.ts` 的 `rewrites`）：
+   ```ts
+   { source: "/feed.xml", destination: `${backendOrigin}/feed.xml` }
+   ```
+   `backendOrigin` 从 `NEXT_PUBLIC_API_URL` 去掉末尾 `/api/v1` 推出。
+   生产环境请求**到不了这条 rewrite** —— Nginx 的 `location = /feed.xml`
+   （精确匹配，优先级高于 `location /`）直接转发给后端。这条 rewrite 只服务
+   「没有 Nginx」的场景：本地 dev、直跑 `next start`、二次部署。
+   **缺了它这些环境里页脚订阅链接会 404**（实测 dev 下就是 404）。
+
+3. **三处订阅入口**：
+   - 页脚：图标按钮 + 导航菜单项（`site-footer.tsx`，原有）
+   - 首页列表底部：翻到末尾的读者正是想持续跟进的人，给一处不打断阅读的
+     文字入口（`home-client.tsx` 的 `ArticleListSection`）
+   - 文章页分享菜单末尾：用 `<a href="/feed.xml">` 而非 `window.open`，
+     让装了 RSS 扩展的浏览器直接接管（`components/article-share.tsx`）
+
+后台「站点地图」页另有一张 `feed.xml` 卡片（地址由 `sitemap.frontend_url`
+拼出，`/feed.xml` 不在 `/api/v1` 下所以不能从 API 基址推），提供打开与复制。
+
 ### 管理后台（博客站 `/admin` 全功能）
 `frontend/app/admin/`（21 页，全部管理功能）：站内 `layout.tsx` 做**权限守卫**（未登录跳 `/login`，非管理员显示「需要管理员权限」）+ 侧边栏导航；navbar「后台管理」按钮、登录分流（admin 角色跳 `/admin`）、首页空态「写文章」都指向这里。侧边栏导航顺序（15 项）：概览/用户管理/文章管理/标签管理/页面管理/评论管理/文件管理/站点地图/友情链接/外观管理/安全防护/网站管理/系统更新/网站日志/关于系统。
 
 #### 站点地图页（`frontend/app/admin/sitemap/page.tsx`）
 - 数据：`useQuery(['admin','sitemap'], fetchSitemapData)`（GET `/admin/sitemap`）
-- 统计卡：URL 总数 + 分组计数徽章；sitemap.xml 入口卡（打开/复制地址）；robots.txt 预览卡（复制内容）
+- 统计卡：URL 总数 + 分组计数徽章；sitemap.xml 入口卡（打开/复制地址）；robots.txt 预览卡（复制内容）；
+  feed.xml 卡片（RSS 订阅源地址，由 `sitemap.frontend_url` 拼出 + 打开/复制）
 - 分组列表：基础页面/文章/独立页/分类/标签（后端 `collectEntries()` 分组顺序），条目表格（名称/地址/频率/权重/最后更新）
 - 顶部搜索框按名称或地址前端过滤（服务端数据一次性拿全）
 
@@ -587,6 +640,9 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 ### 视觉层次约定
 - **入场时机**：Section 用 `<InView>`（长页面进入视口才播）、悬停微浮用 `{...hoverLift}`；
   tab/导航高亮滑块用 `key` 重挂 + `gsap.fromTo(scaleX)`（单元素，非列表）
+- **层次靠阴影而非加粗边框**：卡片一律带 `.card-flat`（或 `.card-hover` / `.card-raised`），
+  不要用更深的 `border` 颜色来制造层次——深浅主题下同一 `border` 值的对比度差异很大。
+  详见下方「卡片阴影」与「菜单项的圆角与阴影」两节
 
 ### 统一的设计令牌（`app/globals.css`）
 ```css
@@ -595,14 +651,109 @@ useEffect/事件回调里 `gsap.to/fromTo`，用 `prefersReducedMotion()` 守卫
 ```
 Tailwind 中直接用 `bg-card`、`text-muted-foreground`、`border-border`、`text-accent` 等。
 
+除颜色外还有三组「效果令牌」，都在 `:root` / `.dark` 里成对定义（浅色与深色取不同强度，
+深色背景吸光，阴影必须加重才可见）：
+
+```css
+--wallpaper-tone      /* 壁纸遮罩色调：浅色 #fff / 深色 #000，见「壁纸」节 */
+--menu-shadow-hover / --menu-shadow-active / --menu-glow-active   /* 菜单项阴影 */
+--card-shadow-flat / --card-shadow-hover / --card-shadow-raised    /* 卡片阴影 */
+```
+
 ### 常用样式组合
 ```
-卡片：    rounded-xl border border-border bg-card p-5
+卡片：    card-flat rounded-xl border border-border bg-card p-5
+可点击卡片：card-hover rounded-xl border border-border bg-card p-5（悬停时抬升 2px + 加深阴影）
+浮层卡片：card-raised rounded-2xl border border-border bg-card（下拉菜单等，另有 shadow-2xl 的除外）
 按钮(主)：rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25
 按钮(次)：rounded-lg border border-border px-4 py-2 text-sm hover:border-accent/40 hover:text-accent
 输入框：  lib/ui.ts 的 inputClass
+勾选框：  见下方「自定义勾选框」
 加载态：  PageLoading / RowLoading / Spinner（components/page-loader.tsx，GSAP；skeleton 已移除）
 ```
+
+### 卡片阴影（`.card-flat` / `.card-hover` / `.card-raised`）
+
+项目里的卡片统一是「`rounded-xl border border-border bg-card`」这一套。
+此前只有首页/搜索/分类等列表卡带 `shadow-sm`，后台分区卡片**完全没有阴影**，
+页面整体偏平、层次全靠边框硬撑。现在收口为三个类，全站 57 处卡片共用：
+
+| 类 | 用途 | 静息 → 悬停 |
+|---|---|---|
+| `.card-flat` | 静息卡片（绝大多数） | 一层轻阴影 → 不变 |
+| `.card-hover` | 可点击卡片（列表项） | 轻阴影 → 加深 + `translateY(-2px)` |
+| `.card-raised` | 需强调的浮层卡片 | 明显抬升阴影 → 不变 |
+
+三条硬约束：
+
+1. **不要直接给 `.bg-card` 加阴影**。`.bg-card` 被导航按钮、下拉项等小元素大量复用，
+   统一加阴影会让这些本不该有阴影的元素一起变脏。必须用显式类。
+2. **同一元素不要同时挂 `card-flat` 与 `shadow-sm` / `hover:shadow-lg`**。
+   两套阴影会叠加成脏影。已把旧代码里的 `shadow-sm ... hover:shadow-lg hover:shadow-accent/5`
+   全部归并到 `card-flat` / `card-hover`。
+3. **壁纸模式下阴影自动降一档**。`body.has-wallpaper` 下卡片本身已是半透明 + `backdrop-filter`，
+   再叠重阴影会显脏，故统一压到最轻一层（`.card-flat`/`.card-hover`/`.card-raised` 都受影响）。
+   注意这条只作用于**类**，用内联 `shadow-[var(--card-shadow-flat)]` 的首页文章卡片不受影响——
+   它外层已有 `HoverLift` 的 GSAP 位移，若再加 `.card-hover` 的 transform 会两套位移打架。
+
+### 菜单项的圆角与阴影（`.menu-item` / `.menu-item-active`）
+
+后台侧边栏、前台用户下拉、前台移动端抽屉三处菜单共用同一套观感：
+
+```tsx
+// 普通项
+className="menu-item flex items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+// 激活项（当前所在页）
+className="menu-item menu-item-active flex items-center gap-2.5 px-3 py-2 text-sm bg-accent text-white"
+```
+
+- **圆角 0.75rem**（原为 `rounded-lg` 的 0.5rem）。菜单项高度约 36-40px，
+  0.75rem 接近半高的一半，是「柔感但保留矩形轮廓」的取舍：比 0.5rem 饱满，
+  又不像 `rounded-full` 那样在长标签上失衡。
+- **阴影三档**：静息无阴影（不干扰阅读）→ 悬停 `translateY(-1px)` + 轻阴影
+  → 激活态两段中性阴影 + **accent 着色光晕** + 1px 内描边（`outline`），三重强调叠加，
+  避免只靠背景色在深浅主题下对比度不一。
+- **只过渡 `background-color / color / box-shadow / transform`**，不动 layout 属性，避免悬停时文字抖动。
+- **`prefers-reduced-motion` 下移除位移**，只保留颜色与阴影变化；
+  壁纸模式下悬停阴影减淡一档，避免与背景模糊叠加显脏。
+
+### 自定义勾选框（`app/login/page.tsx` 的「记住我」）
+原生 `<input type="checkbox">` 各平台渲染差异大（Windows 偏方、macOS 偏圆），且 `accent-color`
+只能改填充色、改不了尺寸圆角与选中动效，因此表单里的勾选框统一走「原生控件降级 + 自绘视觉」：
+
+```tsx
+<label className="group flex cursor-pointer items-start gap-2.5 text-sm">
+  {/* sr-only 只保留语义、键盘焦点与 checked 状态 */}
+  <input type="checkbox" checked={...} onChange={...} className="peer sr-only" />
+  {/* 视觉方框：18×18、圆角 5px；选中填 accent + 白勾 + 柔和投影 */}
+  <span aria-hidden="true"
+    className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px]
+      border transition-all duration-200 ease-out
+      peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40
+      peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-card
+      ${checked ? 'border-accent bg-accent shadow-[0_2px_8px_-2px_var(--accent)]'
+                : 'border-border bg-background group-hover:border-accent/60 group-hover:bg-muted/50'}`}>
+    <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"
+      className={`h-3 w-3 text-white transition-all duration-200 ease-out
+        ${checked ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`}>
+      <path d="M2.6 6.2 4.9 8.5 9.4 3.9" stroke="currentColor" strokeWidth="1.7"
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  </span>
+  <span className="font-medium transition-colors group-hover:text-accent">记住我</span>
+</label>
+```
+
+约定与理由：
+- **输入用 `peer sr-only`，方框是它的兄弟节点**：`peer-focus-visible:ring-*` 靠 `~` 兄弟选择器生效，
+  键盘 Tab 聚焦时方框出现光环；鼠标点击不触发 `:focus-visible`，不会有多余光环
+- **选中外观用受控 state 的条件类名，不用 `peer-checked:`**：对勾 `<svg>` 在方框 `<span>` 内部，
+  不是 input 的兄弟，`peer-checked:` 选不中它（要写 `peer-checked:[&>svg]:` 之类任意变体才行，
+  可读性差且依赖 Tailwind 变体解析）。受控组件下 state 与视觉本来同源，直接条件类名更直白。
+  副作用：SSR 直出 `checked` 对应的样式，与客户端首帧一致，无 hydration mismatch
+- **动画只走 CSS `transition`**（缩放 + 淡入 + 底色/描边），不用 GSAP——避免 rAF 被节流后
+  卡在中间态（见 `SKILL.md` 里「GSAP 入场动画被 rAF 节流卡透明」一坑）
+- 文案里的「30 天」不要改成含糊的「记住我」：用户需要知道这个勾选把登录态延长多久
 
 ### 正文排版（`lib/ui.ts` 的 `proseBody`）
 文章正文（`app/posts/[slug]`、独立页 `app/p/[slug]`）统一用 `proseBody` 常量，**不要再手写 prose 类串**。约定：
@@ -616,7 +767,7 @@ Tailwind 中直接用 `bg-card`、`text-muted-foreground`、`border-border`、`t
 但**全站还有三处裸 `prose` 容器**（`markdown-editor.tsx` / `rich-editor.tsx` / `article-preview.tsx` 的编辑器预览），
 它们共用 `@tailwindcss/typography` 的 `.prose` 基础样式。因此**只想作用于文章正文的增强样式一律挂 `.prose-reading`**，
 直接写 `.prose xxx` 会连后台编辑区一起改：
-- `max-width: 74ch` + `margin-inline: auto`：比 typography 默认 65ch 略宽，减少宽卡片里的孤行
+- `max-width: 84ch` + `margin-inline: auto`：比 typography 默认 65ch 宽不少，减少宽卡片里的孤行、让宽列真正被用上
 - `h2`/`h3` 左侧 accent 竖线（`::before` 绘制，h3 更细更淡）：与文章头部视觉语言一致，且不占布局、不影响目录锚点 id
 - 首段 `> p:first-of-type` 轻微放大 + 提亮：形成「导语」观感
 - 外链 `a[href^="http"]::after` 加 `↗` 箭头提示会跳站外
@@ -625,15 +776,36 @@ Tailwind 中直接用 `bg-card`、`text-muted-foreground`、`border-border`、`t
 > 靠**源码顺序**决定胜负——`globals.css` 里 `@import "tailwindcss"` 在最前，故这些规则写在文件后段即生效。
 
 ### 文章列表卡片（`app/home-client.tsx` 的 `ArticleCard`）
-- 卡片用 `flex-col`（窄屏）/ `sm:flex-row`（宽屏，左封面 176×112）；封面 `object-cover` 悬停 `scale-110`
+- **分页容器宽度**：有侧栏 `max-w-[88rem]`（1408px，减 280px 侧栏 + 32px gap 后文章列约 1096px）、
+  无侧栏 `max-w-6xl`（1152px）。`Suspense` 兜底宽度对齐 **88rem**——加载态渲染时还不知道有没有小工具，
+  取宽的一档才不会出现「先窄后宽」的跳动
+- 卡片用 `flex-col`（窄屏）/ `sm:flex-row`（宽屏，左封面 240×144 = `sm:w-60 sm:h-36`）；
+  封面 `object-cover` 悬停 `scale-110`。`sizes` 必须同步改成 `(max-width: 640px) 100vw, 240px`，
+  否则 Next/Image 会按旧的 176px 取图，宽屏下糊掉
 - 顶部 accent→purple 渐变细条：`origin-left scale-x-0` → `group-hover:scale-x-100`
   （**只做 transform 不做 width 动画**，避免每帧 layout 重排）
 - 右侧内容区 `flex flex-col`，元信息行 `sm:mt-auto sm:pt-4`：宽屏时元信息贴卡片底部，多张卡片高度对齐
-- 元信息：作者头像（首字母圆形）+ 用户名 · 日期 + 阅读量；标签贴右（`ml-auto`，仅 `sm` 以上显示，最多 3 个）
+- **摘要 `line-clamp-3` 而不是 2 行**：后端摘要上限 `defaultExcerptRunes = 120` 字（见
+  `backend/internal/service/excerpt.go`），**121 字含省略号**，两行放不下。放宽到 3 行后，
+  窄屏能多读到约三分之一的内容；桌面宽列下 120 字常一行就够，clamp 不会截断
+- 元信息：作者头像（首字母圆形）+ 用户名 · 日期 + 阅读量；标签贴右（`ml-auto`，最多 3 个）。
+  标签**不限 `sm` 以上**：移动端元信息行本就是 `flex-wrap`，标签会自然换行，隐藏反而丢掉信息
 
 ### 文章目录（`components/article-toc.tsx`）外观
 目录卡片：`rounded-xl border border-border bg-card/60 p-3` 半透明卡 + `sticky top-24`；
 条目 `truncate` + `title` 全文（长标题不撑破侧栏），高亮项 `border-accent text-accent`，悬停补 `border-border`。
+
+### 文章详情页（`app/posts/[slug]/post-detail.tsx`）
+- **布局宽度**（`layoutClass`，按「有无侧栏 × 有无目录」四象限切换）：有侧栏一律 `max-w-[88rem]`，
+  目录列 `220px` → `240px`；无侧栏有目录 `max-w-5xl`、两者皆无 `max-w-4xl` → `max-w-5xl`。
+  **改这里的栅格列宽必须同步改 `lg:grid-cols-[...]` 与渲染顺序**（先渲染的 DOM 落第一列，
+  注释已标注），否则目录与侧栏会跑到错误一侧
+- **正文宽度真正的开关是 `.prose-reading` 的 `max-width`**（`globals.css`，`74ch` → **`84ch`**）。
+  只改详情页外层 `max-w-*` 是**没用的**：正文被 `ch` 单位锁死，看起来永远「卡片宽、文字窄」。
+  84ch 在 prose-lg 下约合 42 汉字/行，仍在中文舒适区内
+- **封面**：`aspect-video w-full` + `object-cover`，`sizes` 必须与列宽一致
+  （`768px` → `1024px`），否则宽屏下 Next/Image 取小图发虚。无封面时整块不渲染（不留占位）
+- 加载态/错误态用 `max-w-3xl` 居中窄容器：它们不显示正文，不需要跟着变宽
 
 ### 深色模式
 全部用 `dark:` 前缀，不需要额外配置（跟随系统）。

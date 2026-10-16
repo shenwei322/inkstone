@@ -76,7 +76,7 @@ function TrafficCharts() {
 
   return (
     <section ref={sectionRef} className="mt-4 space-y-4">
-      <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="card-flat rounded-2xl border border-border bg-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -158,7 +158,7 @@ function TrafficCharts() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="card-flat rounded-2xl border border-border bg-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -297,7 +297,7 @@ function ResourceMonitor() {
     p >= 85 ? 'bg-red-500' : p >= 60 ? 'bg-amber-500' : 'bg-emerald-500'
 
   return (
-    <section ref={sectionRef} className="mt-4 rounded-2xl border border-border bg-card p-5">
+    <section ref={sectionRef} className="card-flat mt-4 rounded-2xl border border-border bg-card p-5">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -404,7 +404,7 @@ export default function AdminOverviewPage() {
             y={20}
             delay={i * 0.08}
             duration={0.45}
-            className="rounded-2xl border border-border bg-card p-5 shadow-sm"
+            className="card-flat rounded-2xl border border-border bg-card p-5"
             {...hoverLift}
           >
             <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${card.color}`}>

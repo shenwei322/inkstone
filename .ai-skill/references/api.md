@@ -309,6 +309,8 @@ Body 字段：`{title, content, template, status, sort_order, show_in_nav}`
   "site_wallpaper": "",
   "wallpaper_opacity": "100",
   "wallpaper_blur": "0",
+  "wallpaper_overlay": "0",
+  "wallpaper_saturate": "100",
   "article_sidebar": "true",
   "captcha": {
     "provider": "none",

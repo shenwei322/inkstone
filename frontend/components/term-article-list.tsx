@@ -75,7 +75,7 @@ export function TermArticleList({
             {articles.map((a) => (
               <StaggerItem key={a.id}>
                 <Link href={`/posts/${a.slug}`} className="block">
-                  <article className="rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:border-accent/30 hover:shadow-lg hover:shadow-accent/5">
+                  <article className="rounded-xl border border-border bg-card p-5 shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)]">
                     <h2 className="text-base font-semibold leading-snug tracking-tight transition-colors hover:text-accent">
                       {a.title}
                     </h2>

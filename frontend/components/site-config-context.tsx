@@ -61,6 +61,10 @@ export interface SiteConfig {
   wallpaper: string
   wallpaperOpacity: number
   wallpaperBlur: number
+  /** 壁纸遮罩强度 0-100：壁纸之上的暗化/亮化层，提升文字可读性 */
+  wallpaperOverlay: number
+  /** 壁纸饱和度 0-200：100 为原图，0 为灰度 */
+  wallpaperSaturate: number
   articleSidebar: boolean
   allowRegistration: boolean
   maintenanceMode: boolean
@@ -122,6 +126,9 @@ const DEFAULT_CONFIG: SiteConfig = {
   wallpaper: '',
   wallpaperOpacity: 100,
   wallpaperBlur: 0,
+  // 默认不遮罩、不去色：与升级前观感保持一致，由部署方按需在后台调
+  wallpaperOverlay: 0,
+  wallpaperSaturate: 100,
   articleSidebar: true,
   allowRegistration: true,
   maintenanceMode: false,
@@ -160,6 +167,8 @@ interface RawSiteConfig {
   site_wallpaper?: string
   wallpaper_opacity?: string
   wallpaper_blur?: string
+  wallpaper_overlay?: string
+  wallpaper_saturate?: string
   article_sidebar?: string
   maintenance_mode?: string
   guest_comment?: boolean
@@ -280,6 +289,14 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
           wallpaper: cfg.site_wallpaper ?? '',
           wallpaperOpacity: Number(cfg.wallpaper_opacity ?? 100) || 100,
           wallpaperBlur: Number(cfg.wallpaper_blur ?? 0) || 0,
+          // 遮罩允许为 0（合法值），不能用 `|| 0` 之后的兜底统一处理：
+          // Number('') 是 NaN 才回退默认，'0' 必须保留为 0。
+          wallpaperOverlay: Number.isFinite(Number(cfg.wallpaper_overlay))
+            ? Number(cfg.wallpaper_overlay)
+            : 0,
+          wallpaperSaturate: Number.isFinite(Number(cfg.wallpaper_saturate))
+            ? Number(cfg.wallpaper_saturate)
+            : 100,
           articleSidebar: cfg.article_sidebar !== 'false',
           maintenanceMode: cfg.maintenance_mode === 'true',
           friendLinksTitle: cfg.friend_links_title || '友情链接',

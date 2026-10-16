@@ -17,6 +17,8 @@
   --border: #e4e4e7;
   --card: #ffffff;
   --accent: #2563eb;
+  /* 壁纸遮罩色调：浅色主题用白雾把亮壁纸压柔，文字仍然是深色 */
+  --wallpaper-tone: #ffffff;
 }
 
 .dark {
@@ -28,6 +30,8 @@
   --border: #27272a;
   --card: #101012;
   --accent: #3b82f6;
+  /* 深色主题反过来：用黑幕压暗壁纸，白色文字才立得住 */
+  --wallpaper-tone: #000000;
 }
 
 @theme inline {
@@ -286,18 +290,99 @@ body {
   pointer-events: none;
 }
 
-/* 自定义壁纸模式：卡片与导航栏半透明，保证壁纸可见且内容可读 */
+/* 自定义壁纸模式：所有「表面」统一半透明 + 背景模糊，
+   保证壁纸可见的同时内容可读，也避免出现「一块透明一块实心」的割裂感。
+
+   覆盖范围刻意写得宽：卡片、导航、页脚、下拉菜单、分页、表格、
+   以及任何 bg-background / bg-muted 的大面积色块。这些类在后台
+   与访客站都被大量复用，逐个改组件既容易漏又难维护，统一在这里收口。
+   参数集中在下面两个自定义属性里，调观感只改这两行。 */
 body.has-wallpaper {
   background: transparent;
+  /* 表面底色混入比例：越低越透（壁纸越明显），越高越接近实心 */
+  --surface-alpha: 78%;
+  /* 表面背景模糊半径：值越大越"磨砂"，也越吃 GPU */
+  --surface-blur: 12px;
 }
 
 body.has-wallpaper .bg-card {
-  background-color: color-mix(in srgb, var(--card) 82%, transparent);
-  backdrop-filter: blur(10px);
+  background-color: color-mix(in srgb, var(--card) var(--surface-alpha), transparent);
+  backdrop-filter: blur(var(--surface-blur));
+  -webkit-backdrop-filter: blur(var(--surface-blur));
 }
 
-body.has-wallpaper header {
-  background-color: color-mix(in srgb, var(--background) 65%, transparent);
+/* 导航栏：比卡片更透一点，滚动时仍然能看清下面的壁纸 */
+body.has-wallpaper header,
+body.has-wallpaper nav {
+  background-color: color-mix(in srgb, var(--background) 62%, transparent);
+  backdrop-filter: blur(var(--surface-blur));
+  -webkit-backdrop-filter: blur(var(--surface-blur));
+}
+
+/* 页脚：略透，压住底部渐隐层 */
+body.has-wallpaper footer {
+  background-color: color-mix(in srgb, var(--card) 68%, transparent);
+  backdrop-filter: blur(var(--surface-blur));
+  -webkit-backdrop-filter: blur(var(--surface-blur));
+}
+
+/* 各类不透明白底容器（输入框、下拉菜单、分页、代码块等）也要跟着透，
+   否则壁纸模式下它们会变成一块块突兀的白/黑补丁。 */
+body.has-wallpaper .bg-background {
+  background-color: color-mix(in srgb, var(--background) 72%, transparent);
+}
+
+body.has-wallpaper .bg-muted {
+  background-color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+/* 下拉/弹出层（菜单、提示框）需要更高的不透明度：
+   它们是浮在内容之上的短期交互面，太透会让文字与背后内容打架。 */
+body.has-wallpaper [role="menu"],
+body.has-wallpaper [role="dialog"] {
+  background-color: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* 代码块与引用块：阅读区的高对比元素，保持接近实心以免代码糊在图里 */
+body.has-wallpaper pre,
+body.has-wallpaper .prose blockquote {
+  background-color: color-mix(in srgb, var(--muted) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* 无障碍：
+   - prefers-reduced-transparency：用户显式要求减少透明效果（Chrome 118+），
+     退回实心表面，壁纸只留在最底层；
+   - prefers-reduced-motion：更通用，老浏览器也会命中。减少动效的用户
+     通常也更需要稳定的阅读背景，因此同样关闭表面模糊（模糊最吃 GPU）。 */
+@media (prefers-reduced-transparency: reduce) {
+  body.has-wallpaper .bg-card,
+  body.has-wallpaper header,
+  body.has-wallpaper nav,
+  body.has-wallpaper footer,
+  body.has-wallpaper .bg-background,
+  body.has-wallpaper .bg-muted {
+    background-color: var(--card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.has-wallpaper .bg-card,
+  body.has-wallpaper header,
+  body.has-wallpaper nav,
+  body.has-wallpaper footer,
+  body.has-wallpaper [role="menu"],
+  body.has-wallpaper [role="dialog"],
+  body.has-wallpaper pre,
+  body.has-wallpaper .prose blockquote {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 /* Markdown prose */
@@ -311,9 +396,14 @@ body.has-wallpaper header {
 }
 
 /* 正文阅读宽度：prose-lg 的默认 65ch 在宽卡片里偏窄，略放宽减少孤行。
-   只作用于文章/独立页正文容器（.prose-reading），不影响后台编辑器预览的 max-w-none。 */
+   只作用于文章/独立页正文容器（.prose-reading），不影响后台编辑器预览的 max-w-none。
+
+   84ch 的取舍：中文正文一行 35-45 字最舒服，84ch 在 prose-lg（16px 基准、
+   等宽 ch 约 0.5em）下约合 42 个汉字/行，仍在舒适区内；同时让 1fr 的宽列
+   真正被用上，不再出现「卡片很宽、文字挤在中间一条」的空旷感。
+   想恢复紧凑阅读可把这里调回 74ch —— 这是唯一的正文宽度开关。 */
 .prose-reading {
-  max-width: 74ch;
+  max-width: 84ch;
   margin-inline: auto;
 }
 
@@ -632,4 +722,166 @@ body.has-wallpaper header {
 /* 查找替换面板输入框 */
 .md-find-input:focus {
   border-color: var(--accent);
+}
+
+/* ============================================================================
+   菜单项的圆角与阴影体系
+   ============================================================================
+   后台侧边栏、前台用户下拉、前台移动端抽屉三处菜单共用同一套观感，
+   参数集中在这里，改一处三处同步，不必逐个组件对 className。
+
+   设计取舍：
+   - 圆角用 0.75rem（rounded-xl 量级）：菜单项高度约 36-40px，
+     0.75rem 接近"半高的一半"，视觉上是胶囊的柔感但保留矩形轮廓，
+     比 rounded-lg（0.5rem）更饱满，又不像 rounded-full 那样在长标签上失衡。
+   - 阴影分三档：静息无阴影（不干扰阅读）→ 悬停微浮（1px + 轻扩散）
+     → 激活项（2px + accent 着色）。阴影始终跟随主题，
+     深色下用更高不透明度，否则黑色阴影落在近黑背景上完全看不见。
+   - 只过渡 transform / box-shadow / background-color，
+     不动 layout 属性，避免悬停时文字抖动。
+
+   变量就近定义在体系旁边（而非合并到文件顶部那块 :root），
+   读这一节时不用来回跳；变量名与前两处不重叠，不存在覆盖问题。
+   ============================================================================ */
+
+:root {
+  /* 菜单项阴影：浅色主题用中性黑，深色主题见 .dark 覆盖 */
+  --menu-shadow-hover: 0 1px 2px rgb(0 0 0 / 0.06), 0 2px 6px rgb(0 0 0 / 0.08);
+  --menu-shadow-active: 0 2px 4px rgb(0 0 0 / 0.1), 0 4px 12px rgb(0 0 0 / 0.12);
+  /* 激活项底部的 accent 光晕：让"当前页"在侧边栏里一眼可辨 */
+  --menu-glow-active: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.dark {
+  /* 深色背景吸光，阴影要加重才看得出来 */
+  --menu-shadow-hover: 0 1px 2px rgb(0 0 0 / 0.4), 0 2px 6px rgb(0 0 0 / 0.45);
+  --menu-shadow-active: 0 2px 4px rgb(0 0 0 / 0.5), 0 4px 12px rgb(0 0 0 / 0.55);
+  --menu-glow-active: 0 2px 10px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* 菜单项基础：三处菜单共用 */
+.menu-item {
+  border-radius: 0.75rem;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+/* 悬停：微浮起 + 轻阴影。位移只有 1px，是"被托起"的暗示而非跳动 */
+.menu-item:hover {
+  box-shadow: var(--menu-shadow-hover);
+  transform: translateY(-1px);
+}
+
+/* 激活项（当前所在页）：accent 底 + 着色光晕 + 内描边，
+   三重强调叠加，避免只靠背景色在深浅主题下对比度不一 */
+.menu-item-active {
+  box-shadow: var(--menu-shadow-active), var(--menu-glow-active);
+  /* 内描边让激活项在浅色主题下也有一圈清晰边界 */
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+}
+
+/* 激活项同时被悬停：保持阴影不叠加变形，只保留位移反馈 */
+.menu-item-active:hover {
+  box-shadow: var(--menu-shadow-active), var(--menu-glow-active);
+}
+
+/* 键盘可达性：菜单项获得焦点时用 ring 而非阴影，与鼠标悬停区分开 */
+.menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 减少动效偏好：去掉位移，只保留颜色与阴影变化 */
+@media (prefers-reduced-motion: reduce) {
+  .menu-item,
+  .menu-item:hover {
+    transform: none;
+    transition: background-color 0.18s ease, color 0.18s ease;
+  }
+}
+
+/* 壁纸模式下菜单项阴影会与背景模糊叠加显得脏，减淡一档 */
+body.has-wallpaper .menu-item:hover {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.1);
+}
+
+/* ============================================================================
+   卡片阴影体系
+   ============================================================================
+   项目里的卡片是「rounded-xl border border-border bg-card」这一套，
+   此前只有首页/列表类卡片带 shadow-sm，后台分区卡片完全没有阴影，
+   导致页面整体偏平、层次靠边框硬撑。
+
+   分三档，按卡片在页面里的角色选：
+     .card-flat    → 静息，最轻的一层，仅把自己从背景里"托起来一点"
+     .card-hover   → 悬停加深（用于可点击的卡片，如列表项）
+     .card-raised  → 明显抬升（用于浮层、选中态、需要强调的卡片）
+
+   阴影颜色跟随主题：浅色下是柔和的中性黑，深色下加重——
+   黑色阴影落在近黑背景上几乎不可见，必须提高不透明度才有效果。
+
+   注意：这里刻意用 class 而不是直接改 .bg-card。
+   .bg-card 被导航按钮、下拉项等小元素大量复用，
+   统一加阴影会让这些不该有阴影的元素一起变脏。
+
+   变量就近定义在体系旁边（而非合并到文件顶部那块 :root），
+   读这一节时不用来回跳；变量名与前两处不重叠，不存在覆盖问题。
+   ============================================================================ */
+
+:root {
+  --card-shadow-flat: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 3px rgb(0 0 0 / 0.06);
+  --card-shadow-hover: 0 4px 6px rgb(0 0 0 / 0.05), 0 10px 20px rgb(0 0 0 / 0.08);
+  --card-shadow-raised: 0 8px 16px rgb(0 0 0 / 0.08), 0 16px 32px rgb(0 0 0 / 0.1);
+}
+
+.dark {
+  --card-shadow-flat: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.4);
+  --card-shadow-hover: 0 4px 8px rgb(0 0 0 / 0.4), 0 10px 24px rgb(0 0 0 / 0.5);
+  --card-shadow-raised: 0 8px 20px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.6);
+}
+
+.card-flat {
+  box-shadow: var(--card-shadow-flat);
+}
+
+.card-raised {
+  box-shadow: var(--card-shadow-raised);
+}
+
+/* 可点击卡片的悬停反馈：抬升 + 边框微亮，两者同时发生才像"被拿起来" */
+.card-hover {
+  box-shadow: var(--card-shadow-flat);
+  transition:
+    box-shadow 0.25s ease,
+    border-color 0.25s ease,
+    transform 0.25s ease;
+}
+
+.card-hover:hover {
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+}
+
+/* 壁纸模式下卡片已有半透明 + backdrop-filter，
+   再叠重阴影会显脏，统一降到最轻一档 */
+body.has-wallpaper .card-flat,
+body.has-wallpaper .card-hover,
+body.has-wallpaper .card-raised {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+body.has-wallpaper .card-hover:hover {
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+}
+
+/* 减少动效偏好：只保留阴影与边框变化，去掉位移 */
+@media (prefers-reduced-motion: reduce) {
+  .card-hover,
+  .card-hover:hover {
+    transform: none;
+  }
 }

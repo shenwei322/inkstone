@@ -730,14 +730,14 @@ export function PostDetail({ slug }: { slug: string }) {
   const layoutClass = showSidebar
     ? showToc
       ? site.sidebarPosition === 'left'
-        ? 'max-w-7xl lg:grid lg:grid-cols-[280px_minmax(0,1fr)_220px] lg:gap-8'
-        : 'max-w-7xl lg:grid lg:grid-cols-[220px_minmax(0,1fr)_280px] lg:gap-8'
+        ? 'max-w-[88rem] lg:grid lg:grid-cols-[280px_minmax(0,1fr)_240px] lg:gap-8'
+        : 'max-w-[88rem] lg:grid lg:grid-cols-[240px_minmax(0,1fr)_280px] lg:gap-8'
       : site.sidebarPosition === 'left'
-        ? 'max-w-7xl lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-10'
-        : 'max-w-7xl lg:grid lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-10'
+        ? 'max-w-[88rem] lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-10'
+        : 'max-w-[88rem] lg:grid lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-10'
     : showToc
-      ? 'max-w-5xl lg:grid lg:grid-cols-[minmax(0,1fr)_220px] lg:gap-8'
-      : 'max-w-4xl'
+      ? 'max-w-6xl lg:grid lg:grid-cols-[minmax(0,1fr)_240px] lg:gap-8'
+      : 'max-w-5xl'
 
   return (
     <PageTransition>
@@ -763,7 +763,7 @@ export function PostDetail({ slug }: { slug: string }) {
         {/* 顶部标题区：分类徽章 + 蓝色竖线标题 + 图标信息栏（圆角卡片） */}
         <header
           ref={headerRef}
-          className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8"
+          className="relative overflow-hidden card-flat rounded-2xl border border-border bg-card p-6 sm:p-8"
         >
           {/* 右上角装饰光斑：纯 opacity 呼吸（不做 transform，避免 CPU 合成下每帧重绘） */}
           <span
@@ -815,9 +815,11 @@ export function PostDetail({ slug }: { slug: string }) {
         <Reveal
           delay={0.05}
           duration={0.55}
-          className="mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-10"
+          className="mt-6 card-flat rounded-2xl border border-border bg-card p-6 sm:p-10"
         >
-          {/* 封面：仅设置了文章图片时展示，无封面不渲染占位图 */}
+          {/* 封面：仅设置了文章图片时展示，无封面不渲染占位图。
+              宽度铺满正文容器（含侧栏时列宽约 1000px+），sizes 必须跟着列宽走，
+              写死 768px 会让 Next/Image 按小图取源、宽屏下明显发虚。 */}
           {article.cover && (
             <figure className="mb-9">
               <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border shadow-sm">
@@ -825,7 +827,7 @@ export function PostDetail({ slug }: { slug: string }) {
                   src={article.cover}
                   alt={article.title}
                   fill
-                  sizes="(max-width: 1024px) 100vw, 768px"
+                  sizes="(max-width: 1024px) 100vw, 1024px"
                   className="object-cover"
                 />
               </div>
@@ -870,7 +872,7 @@ export function PostDetail({ slug }: { slug: string }) {
         <Reveal
           delay={0.25}
           duration={0.45}
-          className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm"
+          className="mt-6 flex flex-wrap items-center gap-3 card-flat rounded-2xl border border-border bg-card p-4"
         >
           <button
             type="button"
@@ -916,7 +918,7 @@ export function PostDetail({ slug }: { slug: string }) {
         </Reveal>
 
         {/* Comments */}
-        <section className="mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8">
+        <section className="mt-6 card-flat rounded-2xl border border-border bg-card p-6 sm:p-8">
           <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight">
             <MessageSquare className="h-5 w-5" />
             评论
