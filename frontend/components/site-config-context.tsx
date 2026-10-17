@@ -52,6 +52,12 @@ export interface SiteConfig {
   navMenu: NavMenuItem[]
   widgets: SidebarWidget[]
   sidebarPosition: 'left' | 'right'
+  /** 导航栏下滑自动隐藏（后台可开关与调阈值）。 */
+  navbarAutoHide: boolean
+  /** 向下滚动超过该像素后隐藏导航。 */
+  navbarHideAfterPx: number
+  /** 向上滚动超过该像素后显示导航（与 hideAfter 形成回差，避免抖动）。 */
+  navbarShowAfterPx: number
   emailCode: EmailCodeConfig
   geetest: GeetestConfig
   lap: LapConfig
@@ -118,6 +124,9 @@ const DEFAULT_CONFIG: SiteConfig = {
   navMenu: [],
   widgets: [],
   sidebarPosition: 'right',
+  navbarAutoHide: false,
+  navbarHideAfterPx: 200,
+  navbarShowAfterPx: 40,
   emailCode: { on_register: false, on_login: false },
   geetest: DEFAULT_GEETEST,
   lap: DEFAULT_LAP,
@@ -159,6 +168,9 @@ interface RawSiteConfig {
   nav_menu?: unknown
   sidebar_widgets?: unknown
   sidebar_position?: string
+  navbar_autohide?: boolean
+  navbar_hide_after_px?: number
+  navbar_show_after_px?: number
   email_code?: Partial<EmailCodeConfig>
   geetest?: Partial<GeetestConfig>
   lap?: Partial<LapConfig>
@@ -255,6 +267,11 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
           guestCommentFree: cfg.guest_comment_free === true,
           guestCommentEmail: cfg.guest_comment_email === true,
           sidebarPosition: cfg.sidebar_position === 'left' ? 'left' : 'right',
+  // 后端已把这三个键转成布尔/数字下发；这里再兜一层 ?? 默认值，
+  // 以兼容未升级的后端（缺键时不会变成 undefined 导致比较失效）。
+  navbarAutoHide: cfg.navbar_autohide ?? false,
+  navbarHideAfterPx: cfg.navbar_hide_after_px ?? 200,
+  navbarShowAfterPx: cfg.navbar_show_after_px ?? 40,
           emailCode: {
             on_register: cfg.email_code?.on_register ?? false,
             on_login: cfg.email_code?.on_login ?? false,

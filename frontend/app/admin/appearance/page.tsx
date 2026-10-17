@@ -508,17 +508,34 @@ function WidgetsTab() {
 function SidebarPositionTab() {
   const notify = useNotify()
   const [position, setPosition] = useState<'right' | 'left'>('right')
+  const [autoHide, setAutoHide] = useState(false)
+  const [hideAfter, setHideAfter] = useState(200)
+  const [showAfter, setShowAfter] = useState(40)
 
   useEffect(() => {
     fetchSiteConfig().then((raw) => {
-      const rawPos = (raw as { sidebar_position?: string }).sidebar_position
-      setPosition(rawPos === 'left' ? 'left' : 'right')
+      const r = raw as {
+        sidebar_position?: string
+        navbar_autohide?: boolean
+        navbar_hide_after_px?: number
+        navbar_show_after_px?: number
+      }
+      setPosition(r.sidebar_position === 'left' ? 'left' : 'right')
+      setAutoHide(r.navbar_autohide === true)
+      if (typeof r.navbar_hide_after_px === 'number') setHideAfter(r.navbar_hide_after_px)
+      if (typeof r.navbar_show_after_px === 'number') setShowAfter(r.navbar_show_after_px)
     })
   }, [])
 
   const save = useMutation({
-    mutationFn: () => updateAdminSettings({ sidebar_position: position }),
-    onSuccess: () => notify.success('侧边栏位置已保存，前台刷新即可看到'),
+    mutationFn: () =>
+      updateAdminSettings({
+        sidebar_position: position,
+        navbar_autohide: autoHide,
+        navbar_hide_after_px: hideAfter,
+        navbar_show_after_px: showAfter,
+      }),
+    onSuccess: () => notify.success('布局设置已保存，前台刷新即可看到'),
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '保存失败'),
   })
 
@@ -548,30 +565,102 @@ function SidebarPositionTab() {
   ]
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        选择首页侧边栏小工具的显示位置。
-      </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setPosition(opt.value)}
-            className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
-              position === opt.value
-                ? 'border-accent bg-accent/5 ring-2 ring-accent/20'
-                : 'border-border hover:border-accent/40'
-            }`}
-          >
-            {opt.visual}
-            <span>
-              <span className="block text-sm font-medium">{opt.label}</span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">{opt.desc}</span>
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          选择首页侧边栏小工具的显示位置。
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {options.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setPosition(opt.value)}
+              className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
+                position === opt.value
+                  ? 'border-accent bg-accent/5 ring-2 ring-accent/20'
+                  : 'border-border hover:border-accent/40'
+              }`}
+            >
+              {opt.visual}
+              <span>
+                <span className="block text-sm font-medium">{opt.label}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{opt.desc}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* 导航栏下滑隐藏 */}
+      <section className="space-y-4 border-t border-border pt-6">
+        <div>
+          <p className="text-sm font-medium">导航栏下滑隐藏</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            开启后，向下滚动会收起顶部导航栏，回滚时自动展开，给正文让出阅读空间。
+            仅前台生效，后台控制台始终保持导航可见。
+          </p>
+        </div>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-4">
+          <input
+            type="checkbox"
+            checked={autoHide}
+            onChange={(e) => setAutoHide(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
+          />
+          <span>
+            <span className="block text-sm font-medium">启用下滑隐藏</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              关闭时导航栏始终固定在顶部
             </span>
-          </button>
-        ))}
-      </div>
+          </span>
+        </label>
+
+        {autoHide && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium">
+                向后滚动多少像素后隐藏
+              </span>
+              <input
+                type="number"
+                min={40}
+                max={2000}
+                value={hideAfter}
+                onChange={(e) => setHideAfter(Number(e.target.value) || 0)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+              />
+              <span className="mt-1 block text-xs text-muted-foreground">
+                默认 200。数值小更早收起，但太小时轻微滚动就会触发
+              </span>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium">
+                回滚多少像素后显示
+              </span>
+              <input
+                type="number"
+                min={10}
+                max={1000}
+                value={showAfter}
+                onChange={(e) => setShowAfter(Number(e.target.value) || 0)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+              />
+              <span className="mt-1 block text-xs text-muted-foreground">
+                默认 40。建议明显小于上面的隐藏阈值，两者之差即「防抖回差」
+              </span>
+            </label>
+          </div>
+        )}
+
+        {autoHide && showAfter >= hideAfter && (
+          <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+            回滚显示阈值不应大于等于隐藏阈值，否则导航会在临界点反复闪动。建议保持另一半左右的比例。
+          </p>
+        )}
+      </section>
+
       <div className="flex justify-end">
         <button
           type="button"
@@ -580,7 +669,7 @@ function SidebarPositionTab() {
           {...hoverTapScale}
           className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
         >
-          {save.isPending ? '保存中...' : '保存位置'}
+          {save.isPending ? '保存中...' : '保存布局设置'}
         </button>
       </div>
     </div>
@@ -592,7 +681,7 @@ export default function AdminAppearancePage() {
   const tabs = [
     { key: 'menu' as const, label: '顶部菜单', icon: LayoutList },
     { key: 'widgets' as const, label: '侧边栏小工具', icon: PanelLeft },
-    { key: 'sidebar' as const, label: '侧边栏位置', icon: PanelTop },
+    { key: 'sidebar' as const, label: '布局', icon: PanelTop },
   ]
 
   // tab 高亮背景：切换时重挂并做 scaleX 入场（替代原 layoutId 共享布局动画）

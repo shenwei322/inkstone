@@ -120,6 +120,12 @@ export interface SiteSettings {
   site_logo?: string
   site_favicon?: string
   sidebar_position?: 'right' | 'left'
+  /** 导航栏下滑自动隐藏（前台生效）。 */
+  navbar_autohide?: boolean
+  /** 向下滚动超过该像素后隐藏导航。 */
+  navbar_hide_after_px?: number
+  /** 向上滚动超过该像素后显示导航。 */
+  navbar_show_after_px?: number
   site_icp: string
   smtp_host: string
   smtp_port: string

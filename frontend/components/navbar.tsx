@@ -47,8 +47,80 @@ export function Navbar() {
     setMenuOpen(false)
   }
 
+  // 后台是两栏布局（侧边栏贴视口左侧），导航改为通栏以与侧边栏对齐；
+  // 前台维持 Fuwari 的居中窄卡片。详见 globals.css 的 .navbar-shell--full。
+  // 位置需在自动隐藏 effect 之前 —— 那个 effect 要读它决定是否跳过。
+  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
+
   // 整条导航栏入场
   useReveal(headerRef, { y: -60, duration: 0.5 })
+
+  /* ---------------------------------------------------------------------------
+     下滑隐藏 / 回滚显示
+     ---------------------------------------------------------------------------
+     规则（后台可配，见 settings_service.go 的三个 navbar_* 键）：
+       - 向下滚过 navbarHideAfterPx 像素   → 隐藏
+       - 向上滚过 navbarShowAfterPx 像素   → 显示
+       - 回到顶部附近（< navbarShowAfterPx）→ 强制显示
+     两个阈值不同，中间留出回差区间，轻微回滚不会让导航反复闪烁。
+
+     实现要点：
+       1. 用 rAF 节流，滚动回调只记方向，真正的 setState 合并到下一帧 —— 
+          直接在高频 scroll 里 setState 会每帧触发 React 渲染。
+       2. 只在 direction 真的变化时 setState，同方向滚动不触发重渲染。
+       3. 隐藏时同步把焦点移出导航，否则键盘 Tab 会跳进一个看不见的导航栏
+          （无障碍陷阱）。 */
+  /* 只记录「滚动逻辑认为该隐藏」这一事实，是否真的隐藏由渲染期派生：
+     showAutoHide = 开关打开 && 非后台路由。开关一关，effect 不再订阅滚动，
+     派生值立刻为 false —— 不需要在 effect 里 setState 去复位
+     （那会触发 React 的 set-state-in-effect 级联渲染告警）。 */
+  const [scrollWantsHide, setScrollWantsHide] = useState(false)
+  const showAutoHide = site.navbarAutoHide && !isAdminRoute
+  const navHidden = showAutoHide && scrollWantsHide
+  const lastScrollY = useRef(0)
+  const ticking = useRef(false)
+
+  useEffect(() => {
+    // 后台控制台需要常驻导航、或开关关闭时不参与自动隐藏。
+    // 这里不碰 state：关闭时 navHidden 已由 showAutoHide 派生成 false。
+    if (!showAutoHide) return
+    lastScrollY.current = window.scrollY
+    let accum = 0 // 同方向累计位移，用于判断是否越过阈值
+
+    const update = () => {
+      ticking.current = false
+      const y = window.scrollY
+      const delta = y - lastScrollY.current
+      lastScrollY.current = y
+
+      // 方向变了就重置累计量，避免来回抖动时累计量跨越阈值
+      if (delta > 0 !== accum > 0) accum = 0
+      accum += delta
+
+      if (y <= site.navbarShowAfterPx) {
+        setScrollWantsHide(false)
+        accum = 0
+        return
+      }
+      if (accum > site.navbarHideAfterPx) {
+        setScrollWantsHide(true)
+        // 收起时把菜单关掉，否则浮层会跟着导航一起移出视口留下空白
+        setMenuOpen(false)
+        setNavOpen(false)
+      } else if (accum < -site.navbarShowAfterPx) {
+        setScrollWantsHide(false)
+      }
+    }
+
+    const onScroll = () => {
+      if (ticking.current) return
+      ticking.current = true
+      requestAnimationFrame(update)
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [showAutoHide, site.navbarHideAfterPx, site.navbarShowAfterPx])
 
   // 移动端抽屉打开时聚焦搜索框
   useEffect(() => {
@@ -119,15 +191,16 @@ export function Navbar() {
   const menuLink =
     'menu-item flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground'
 
-  // 后台是两栏布局（侧边栏贴视口左侧），导航改为通栏以与侧边栏对齐；
-  // 前台维持 Fuwari 的居中窄卡片。详见 globals.css 的 .navbar-shell--full。
-  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
-
   return (
     /* Fuwari 导航外层：不再是通栏铺满的横幅，而是「与主体内容同宽的圆角卡片」。
        外层 .navbar-shell 只负责 sticky 定位与水平居中，卡片表面落在 header 上，
        这样圆角与阴影不会被整宽背景拉平（具体规则见 globals.css）。 */
-    <div className={`navbar-shell${isAdminRoute ? ' navbar-shell--full' : ''}`}>
+    <div
+      className={`navbar-shell${isAdminRoute ? ' navbar-shell--full' : ''}${
+        navHidden ? ' navbar-shell--hidden' : ''
+      }`}
+      aria-hidden={navHidden || undefined}
+    >
       <header ref={headerRef} className="navbar-card">
         <div className="flex h-[4.5rem] items-center justify-between gap-2 px-3 sm:px-4">
           {/* 品牌区：Fuwari 用 btn-plain 包裹，整块可点且带悬停底衬 */}

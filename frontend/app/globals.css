@@ -1158,17 +1158,31 @@ body.has-wallpaper .admin-sidebar {
 }
 
 /* 壁纸模式下底衬改用「半透明遮罩」而不是实心色块：
-   实心 --btn-regular-bg 叠在半透导航卡片上会形成一块死白/死灰的方形补丁。 */
+   实心 --btn-regular-bg 叠在半透导航卡片上会形成一块死白/死灰的方形补丁。
+
+   用 currentColor + alpha 而非 color-mix(in srgb, var(--foreground) N%, transparent)：
+   后者在 --foreground 为 oklch 时、低混合比例下会算出越界分量，
+   正是「导航选项出现白色方框」的成因（详见下一条注释）。 */
 body.has-wallpaper .btn-plain.scale-animation::before {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  background: currentColor;
+  opacity: 0.08;
 }
 
+/* 壁纸模式下的激活态底衬。
+   ⚠️ 这里**不能**用 color-mix(in srgb, var(--accent) 18%, transparent)：
+   --accent 现在是 oklch 值，在 srgb 空间按低比例混入透明色时，浏览器
+   算出的分量会越界（实测得到 rgb(-0.205 0.443 0.876)，红色分量为负），
+   渲染成一块异常发白的方块 —— 就是「导航选项有白色方框」的来源。
+   改用 currentColor + 独立 alpha：色相跟随文字（激活态文字即 --accent），
+   透明度由 alpha 通道控制，不经过任何色彩空间转换。 */
 body.has-wallpaper .btn-plain.current-theme-btn::before {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: currentColor;
+  opacity: 0.14;
 }
 
 body.has-wallpaper .btn-plain.scale-animation:active::before {
-  background: color-mix(in srgb, var(--foreground) 14%, transparent);
+  background: currentColor;
+  opacity: 0.16;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1431,6 +1445,28 @@ body.has-wallpaper .article-card.card-base {
   padding-inline: 1rem;
   /* 顶部不留白：导航卡片的直角上沿要贴着视口顶端 */
   padding-top: 0;
+  /* 下滑隐藏用 transform 位移（合成层，不触发重排），不用 height/margin —— 
+     后者每帧都会 reflow，滚动时肉眼可见卡顿。 */
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+/* 下滑隐藏态：整条导航（含圆角卡片与阴影）上移出视口。
+   位移量取 --navbar-height 而不是固定值 —— 导航改高度时位移自动跟得上，
+   不会出现「隐藏后还露着一条边」。 */
+.navbar-shell--hidden {
+  transform: translateY(calc(-1 * var(--navbar-height) - 8px));
+}
+
+/* 用户要求减少动效时：不要滑动，直接消失，避免前庭不适 */
+@media (prefers-reduced-motion: reduce) {
+  .navbar-shell {
+    transition: none;
+  }
+  .navbar-shell--hidden {
+    visibility: hidden;
+    transform: none;
+  }
 }
 
 /* 后台（/admin）是「侧边栏贴视口左侧 + 内容右移」的两栏布局。
@@ -1445,10 +1481,11 @@ body.has-wallpaper .article-card.card-base {
 .navbar-shell--full .navbar-card {
   border-left: none;
   border-right: none;
-  /* 只去掉顶部两角（贴视口顶不能有圆角，否则露出壁纸的三角缺口），
-     底部两角保留 —— 侧边栏与内容区都在它下方，圆角能软化交界线。
-     早先写成 border-radius: 0 把四角全抹平，整条导航像一块生硬的白板。 */
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  /* 后台导航**四角全平**：它是后台控制台的一部分，与贴视口左侧的侧边栏、
+     下方内容区构成一块完整的操作界面，圆角会让它看起来像浮在页面上的卡片，
+     与后台的「工作台」气质不符。
+     前台（.navbar-shell 无 --full）仍保留 Fuwari 的圆角卡片观感。 */
+  border-radius: 0;
 }
 
 .navbar-card {

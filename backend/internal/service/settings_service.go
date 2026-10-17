@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,13 @@ const (
 	SettingNavMenu           = "nav_menu"           // JSON array of menu items
 	SettingSidebarWidgets    = "sidebar_widgets"    // JSON array of widgets
 	SettingSidebarPosition   = "sidebar_position"   // "right" (default) | "left"
+	// 导航栏下滑隐藏（仅前台生效；后台控制台需要常驻导航）。
+	// 三个键配合：总开关 + 下滑多少像素后隐藏 + 上滑多少像素后显示。
+	// 分成两个距离而不是一个，是为了避免「阈值附近抖动」：
+	// 隐藏阈值小、显示阈值大，中间留出一段回差区间，轻微回滚不会让导航反复闪。
+	SettingNavbarAutoHide     = "navbar_autohide"       // "true"/"false"，默认 false
+	SettingNavbarHideAfterPx  = "navbar_hide_after_px"  // 向下滚动超过该像素后隐藏，默认 200
+	SettingNavbarShowAfterPx  = "navbar_show_after_px"  // 向上滚动超过该像素后显示，默认 40
 	SettingICP               = "site_icp"           // string
 	SettingSMTPHost          = "smtp_host"
 	SettingSMTPPort          = "smtp_port" // string digits
@@ -134,6 +142,9 @@ var settingDefaults = map[string]string{
 	SettingNavMenu:           "[]",
 	SettingSidebarWidgets:    "[]",
 	SettingSidebarPosition:   "right",
+	SettingNavbarAutoHide:    "false",
+	SettingNavbarHideAfterPx: "200",
+	SettingNavbarShowAfterPx: "40",
 	SettingICP:               "",
 	SettingSMTPHost:          "",
 	SettingSMTPPort:          "465",
@@ -463,6 +474,21 @@ func (s *SettingsService) Public() (map[string]any, error) {
 			out[k] = v == "true"
 			continue
 		}
+		// 导航自动隐藏：开关下发布尔值、两个距离下发数字，
+		// 理由同上 —— 前端要直接拿来做比较与阈值判断，
+		// 字符串 "200" > 150 会得到 true（字符串比较），数值才不会出错。
+		if k == SettingNavbarAutoHide {
+			out[k] = v == "true"
+			continue
+		}
+		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				out[k] = n
+			} else {
+				out[k] = settingDefaults[k]
+			}
+			continue
+		}
 		out[k] = v
 	}
 	return out, nil
@@ -494,6 +520,20 @@ func (s *SettingsService) AdminView() (map[string]any, error) {
 		// （字符串 "false" 在 JS 里为真，复选框会显示成勾选状态）。
 		if k == SettingGuestComment || k == SettingGuestCommentFree || k == SettingGuestCommentEmail {
 			out[k] = v == "true"
+			continue
+		}
+		// 导航自动隐藏同样要做类型转换：设置页用受控 checkbox + number input，
+		// 拿到字符串会让 checked / value 绑定的类型不一致。
+		if k == SettingNavbarAutoHide {
+			out[k] = v == "true"
+			continue
+		}
+		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				out[k] = n
+			} else {
+				out[k] = settingDefaults[k]
+			}
 			continue
 		}
 		out[k] = v
