@@ -5,8 +5,10 @@ import Link from 'next/link'
 import { FolderOpen } from 'lucide-react'
 import { useQueries } from '@tanstack/react-query'
 import { fetchArticles } from '@/lib/api'
+import type { Article } from '@/lib/types'
 import { PageLoading, Spinner } from '@/components/page-loader'
-import { PageTransition, Reveal, StaggerList, StaggerItem } from '@/components/motion'
+import { PageTransition, Reveal, StaggerList } from '@/components/motion'
+import { PostCard } from '@/components/post-card'
 
 const PAGE_SIZE = 20
 
@@ -71,32 +73,11 @@ export function TermArticleList({
         </Reveal>
       ) : (
         <>
-          <StaggerList className="mt-6 grid gap-3">
-            {articles.map((a) => (
-              <StaggerItem key={a.id}>
-                <Link href={`/posts/${a.slug}`} className="block">
-                  <article className="rounded-xl border border-border bg-card p-5 shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)]">
-                    <h2 className="text-base font-semibold leading-snug tracking-tight transition-colors hover:text-accent">
-                      {a.title}
-                    </h2>
-                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
-                      {a.content
-                        .replace(/<[^>]*>/g, ' ')
-                        .replace(/\s+/g, ' ')
-                        .trim()
-                        .slice(0, 120)}
-                    </p>
-                    <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground/80">
-                      <span>
-                        {(a.published_at ?? a.created_at
-                          ? new Date(a.published_at ?? a.created_at).toLocaleDateString('zh-CN')
-                          : '') as string}
-                      </span>
-                      <span>{a.views} 次阅读</span>
-                    </div>
-                  </article>
-                </Link>
-              </StaggerItem>
+          {/* 分类/标签页是窄容器（max-w-3xl），且读者是在「按主题浏览」——
+              卡片用紧凑档并展示封面，与首页保持同一套视觉语言 */}
+          <StaggerList className="mt-6 grid gap-4">
+            {articles.map((a: Article) => (
+              <PostCard key={a.id} article={a} compact />
             ))}
           </StaggerList>
           {hasMore && (

@@ -38,7 +38,6 @@ export function Navbar() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const headerRef = useRef<HTMLElement>(null)
   const chevRef = useRef<HTMLSpanElement>(null)
-  const underlineRef = useRef<HTMLSpanElement>(null)
   const menuWrapRef = useRef<HTMLDivElement>(null)
 
   // 路由切换后关闭移动端菜单/用户菜单（渲染期调整，避免 effect 内 setState）
@@ -50,13 +49,6 @@ export function Navbar() {
 
   // 整条导航栏入场
   useReveal(headerRef, { y: -60, duration: 0.5 })
-
-  // 导航激活下划线：随路由 key 重挂 + scaleX 入场
-  useEffect(() => {
-    if (underlineRef.current && !prefersReducedMotion()) {
-      gsap.fromTo(underlineRef.current, { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: 'expo.out' })
-    }
-  }, [pathname])
 
   // 移动端抽屉打开时聚焦搜索框
   useEffect(() => {
@@ -115,20 +107,31 @@ export function Navbar() {
     )
   }
 
-  const iconBtn =
-    'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95'
+  // Fuwari 式导航按钮：无边框、无底色，靠 .btn-plain 的 scale-animation 底衬
+  // 做悬停反馈；图标按钮是正方，文字按钮用 px-5 的宽松内边距。
+  const navBtn =
+    'btn-plain scale-animation rounded-lg h-11 text-sm font-bold px-5'
+  // 图标按钮：正方、常显底色（.nav-user-btn 给底色，见 globals.css）
+  const iconBtn = 'btn-plain scale-animation nav-user-btn rounded-lg h-11 w-11'
+  // 语义别名：右侧功能区的按钮都用它，替换原来的 bg-[var(--btn-regular-bg)] 写法
+  const iconBtnSolid = iconBtn
 
   const menuLink =
     'menu-item flex items-center gap-3 px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground'
 
+  // 后台是两栏布局（侧边栏贴视口左侧），导航改为通栏以与侧边栏对齐；
+  // 前台维持 Fuwari 的居中窄卡片。详见 globals.css 的 .navbar-shell--full。
+  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
+
   return (
-    <header
-      ref={headerRef}
-      className="sticky top-0 z-50 border-b border-border bg-background/70 backdrop-blur-xl"
-    >
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="group flex items-center gap-2 text-lg font-bold tracking-tight">
+    /* Fuwari 导航外层：不再是通栏铺满的横幅，而是「与主体内容同宽的圆角卡片」。
+       外层 .navbar-shell 只负责 sticky 定位与水平居中，卡片表面落在 header 上，
+       这样圆角与阴影不会被整宽背景拉平（具体规则见 globals.css）。 */
+    <div className={`navbar-shell${isAdminRoute ? ' navbar-shell--full' : ''}`}>
+      <header ref={headerRef} className="navbar-card">
+        <div className="flex h-[4.5rem] items-center justify-between gap-2 px-3 sm:px-4">
+          {/* 品牌区：Fuwari 用 btn-plain 包裹，整块可点且带悬停底衬 */}
+          <Link href="/" className={`${navBtn} group gap-2 pl-3 pr-4`}>
             {site.siteLogo ? (
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
@@ -145,8 +148,10 @@ export function Navbar() {
                 {site.siteName.charAt(0).toUpperCase()}
               </span>
             )}
-            <span className="transition-colors group-hover:text-accent">{site.siteName}</span>
+            <span className="text-base font-bold tracking-tight text-accent">{site.siteName}</span>
           </Link>
+
+          {/* 主导航：Fuwari 的按钮组，无下划线，靠底衬与 accent 文字表示激活 */}
           <nav className="hidden items-center gap-1 md:flex">
             {menuItems.map((item) => {
               const active = isActive(item.href)
@@ -156,27 +161,25 @@ export function Navbar() {
                   href={item.href}
                   target={item.href.startsWith('http') ? '_blank' : undefined}
                   rel={item.href.startsWith('http') ? 'noreferrer' : undefined}
-                  className={`relative rounded-md px-3 py-1.5 text-sm transition-colors ${
-                    active ? 'text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  aria-current={active ? 'page' : undefined}
+                  className={`${navBtn} gap-1.5 ${active ? 'current-theme-btn' : ''}`}
                 >
-                  <MenuIcon name={item.icon} className="mr-1 inline h-4 w-4 align-[-2px]" />
+                  <MenuIcon name={item.icon} className="h-4 w-4" />
                   {item.label}
-                  {active && (
-                    <span
-                      key={item.href + pathname}
-                      ref={underlineRef}
-                      className="absolute inset-x-3 -bottom-[13px] h-0.5 origin-left rounded-full bg-accent"
-                    />
+                  {item.href.startsWith('http') && (
+                    <span className="text-[0.7rem] opacity-40 transition-opacity group-hover:opacity-70">
+                      ↗
+                    </span>
                   )}
                 </Link>
               )
             })}
           </nav>
-        </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* 桌面搜索框（sm 起显示） */}
+          {/* 右侧功能区：搜索 / 主题 / 用户 / 移动端菜单 */}
+          <div className="flex items-center gap-1 sm:gap-2">
+          {/* 桌面搜索框（sm 起显示）：Fuwari 把它做成无边框的胶囊，
+              底色与导航按钮一致，聚焦时才亮出 accent 描边 */}
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -190,11 +193,11 @@ export function Navbar() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="搜索文章..."
-                className="w-44 rounded-lg border border-border bg-card py-1.5 pl-9 pr-3 text-sm outline-none transition-[border-color,box-shadow] focus:w-56 focus:border-accent focus:ring-2 focus:ring-accent/20"
+              className="h-11 w-44 rounded-lg bg-[var(--btn-regular-bg)] py-0 pl-9 pr-3 text-sm outline-none transition-[width,box-shadow,background-color] placeholder:text-muted-foreground focus:w-56 focus:bg-card focus:ring-2 focus:ring-accent/25"
             />
           </form>
 
-          <ThemeToggle className={iconBtn} />
+          <ThemeToggle className={iconBtnSolid} />
 
           {loading ? (
             <Spinner className="hidden h-9 w-9 md:inline-flex" />
@@ -208,16 +211,17 @@ export function Navbar() {
               <button
                 onClick={() => setMenuOpen((o) => !o)}
                 aria-label="用户菜单"
-                className="flex items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-2.5 transition-colors hover:border-accent/40 sm:pr-3"
+                aria-expanded={menuOpen}
+                /* 不再叠加 bg-[var(--btn-regular-bg)]：常显底色会和 .btn-plain 的
+                   scale 底衬（::before）叠成两层错位的蓝框（表现为「框不住头像」）。
+                   改用 .nav-user-btn 统一在 CSS 里给一层底色 + hover 加深。 */
+                className="nav-user-btn btn-plain scale-animation h-11 gap-2 rounded-lg py-0 pl-1 pr-2.5 sm:pr-3"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/10 text-xs font-bold text-accent">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-xs font-bold text-accent">
                   {user.username.charAt(0).toUpperCase()}
                 </span>
                 <span className="hidden text-sm font-medium sm:inline">{user.username}</span>
-                <span
-                  ref={chevRef}
-                  className="hidden text-muted-foreground sm:inline"
-                >
+                <span ref={chevRef} className="hidden text-muted-foreground sm:inline">
                   <ChevronDown className="h-3.5 w-3.5" />
                 </span>
               </button>
@@ -285,16 +289,13 @@ export function Navbar() {
             </div>
           ) : (
             <div className="hidden items-center gap-2 md:flex">
-              <Link
-                href="/login"
-                className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
+              <Link href="/login" className={`${navBtn} h-11 px-4 text-sm`}>
                 登录
               </Link>
               <Link
                 href="/register"
                 {...hoverTapScale}
-                className="inline-block rounded-lg bg-accent px-3.5 py-1.5 text-sm font-medium text-white shadow-sm shadow-accent/30"
+                className="inline-flex h-11 items-center rounded-lg bg-accent px-4 text-sm font-bold text-white shadow-sm shadow-accent/30"
               >
                 注册
               </Link>
@@ -306,18 +307,19 @@ export function Navbar() {
             onClick={() => setNavOpen((o) => !o)}
             aria-label="菜单"
             aria-expanded={navOpen}
-            className={`${iconBtn} md:hidden`}
+            className={`${iconBtnSolid} navbar-mobile-only`}
           >
             {navOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
+          </div>
         </div>
-      </div>
+      </header>
 
       {/* 手机端菜单：背景冻结 + 弹出式毛玻璃卡片 */}
       {/* 遮罩：背景变暗 + 模糊，点击关闭 */}
       <Presence
         show={navOpen}
-        className="fixed inset-x-0 bottom-0 top-16 z-40 bg-black/40 backdrop-blur-sm md:hidden"
+        className="pointer-events-auto fixed inset-x-0 bottom-0 top-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
         onClick={() => setNavOpen(false)}
         aria-hidden
       >
@@ -328,7 +330,7 @@ export function Navbar() {
         show={navOpen}
         y={-12}
         scale={0.98}
-        className="fixed left-4 right-4 top-[4.5rem] z-50 max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-2xl border border-border bg-card/95 p-3 shadow-2xl shadow-black/20 backdrop-blur-2xl md:hidden"
+        className="pointer-events-auto fixed left-3 right-3 top-[5.25rem] z-50 max-h-[calc(100dvh-6.5rem)] overflow-y-auto rounded-2xl border border-border bg-card/95 p-3 shadow-2xl shadow-black/20 backdrop-blur-2xl md:hidden"
       >
         <div className="space-y-2">
           {/* 搜索：手机端统一收纳到更多菜单内（提交后自动收起） */}
@@ -446,6 +448,6 @@ export function Navbar() {
           )}
         </div>
       </Presence>
-    </header>
+    </div>
   )
 }

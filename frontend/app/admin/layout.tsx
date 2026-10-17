@@ -136,7 +136,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     pathname.startsWith('/admin/articles/new') || pathname.startsWith('/admin/articles/edit/')
 
   return (
-    <div className="min-h-[calc(100dvh-4rem)]">
+    <div className="min-h-[calc(100dvh-var(--navbar-offset))]">
       {/* 移动端顶栏：标题 + 主题切换 + 汉堡按钮（<640px 显示） */}
       <div className="mb-4 flex items-center justify-between px-4 pt-4 sm:hidden">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">管理控制台</p>
@@ -154,20 +154,30 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </div>
 
       <div className="flex">
-        {/* 桌面端侧边栏：贴视口最左侧、全高固定（顶部避开导航栏 4rem） */}
+        {/* 桌面端侧边栏：贴视口最左侧、全高固定。
+            顶部偏移与高度都用 --navbar-offset（= 导航卡片高度），
+            因此导航高度一改，侧栏自动跟随，不会出现缝隙或压盖。
+
+            滚动策略：**外层不滚动，只有中间的 <nav> 滚动**。
+            早先是把 overflow-y-auto 加在 aside 上，配合内部 flex-1 的 nav，
+            结果 flex 分配失效、底部「深浅模式 / 返回前台」被挤出可视区
+            （表现为「与下边栏重叠」）。现在改成 min-h-0 + 内层滚动，
+            顶部标题与底部操作区始终钉在两端。 */}
         <aside
           ref={asideRef}
-          className="fixed left-0 top-16 z-40 hidden h-[calc(100dvh-4rem)] w-52 shrink-0 flex-col overflow-y-auto border-r border-border bg-card p-3 sm:flex"
+          className="admin-sidebar fixed left-0 top-[var(--navbar-offset)] z-40 hidden h-[calc(100dvh-var(--navbar-offset))] w-52 shrink-0 flex-col overflow-hidden border-r border-border bg-card p-3 sm:flex"
         >
-          <p className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          <p className="shrink-0 px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
             管理控制台
           </p>
-          <nav className="mt-2 flex-1 space-y-1 overflow-y-auto">{renderNav(false)}</nav>
-          <div className="mt-3 flex items-center justify-between border-t border-border px-3 pb-1 pt-3">
+          <nav className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain">
+            {renderNav(false)}
+          </nav>
+          <div className="mt-3 flex shrink-0 items-center justify-between border-t border-border px-3 pb-1 pt-3">
             <span className="text-sm text-muted-foreground">深浅模式</span>
             <ThemeToggle className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
           </div>
-          <div className="mt-3 border-t border-border px-3 pb-1 pt-3">
+          <div className="mt-3 shrink-0 border-t border-border px-3 pb-1 pt-3">
             <Link
               href="/"
               className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"

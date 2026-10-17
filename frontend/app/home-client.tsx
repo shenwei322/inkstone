@@ -1,126 +1,19 @@
 'use client'
 
 import Link from 'next/link'
-import Image from 'next/image'
-import { Suspense, useMemo, useState } from 'react'
+import { Suspense, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { ChevronDown, Eye, PenLine, Rss, Search, X } from 'lucide-react'
+import { ChevronDown, PenLine, Rss, Search, X } from 'lucide-react'
 import { fetchArticles, fetchCategories, fetchTags } from '@/lib/api'
 import type { Article } from '@/lib/types'
 import { PageLoading, RowLoading, Spinner } from '@/components/page-loader'
-import { PageTransition, StaggerList, StaggerItem, HoverLift, Reveal } from '@/components/motion'
+import { PageTransition, StaggerList, Reveal } from '@/components/motion'
 import { useSiteConfig } from '@/components/site-config-context'
 import { SiteSidebar } from '@/components/site-sidebar'
+import { PostCard } from '@/components/post-card'
 
 // 每页条数。与后台各列表页保持同一档位，后端上限是 50。
 const PAGE_SIZE = 20
-
-// fallbackExcerpt 在没有后端摘要时兜底从正文剥一段。
-//
-// 正常情况下走不到：保存文章时后端就生成好 excerpt 了。这条路径只服务
-// 极旧的存量数据（迁移前入库、或手动改库），此时不能显示空白卡片。
-//
-// 按字符截断而不是 slice()：slice 按 UTF-16 码元，
-// `'😀'.slice(0, 1)` 会劈出半个代理对变成乱码。
-function fallbackExcerpt(html: string): string {
-  const text = html
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!text) return ''
-  return Array.from(text).slice(0, 120).join('')
-}
-
-function ArticleCard({ article }: { article: Article }) {
-  const date = article.published_at
-    ? new Date(article.published_at).toLocaleDateString('zh-CN')
-    : new Date(article.created_at).toLocaleDateString('zh-CN')
-
-  // 封面：优先使用后台设置的封面，否则取正文中第一张图片。
-  // 摘要用后端返回的 excerpt——保存时就已经生成好并落库，
-  // 前端再剥一遍标签等于把同样的字符串处理重复 N 遍，
-  // 而且 slice(0,200) 按 UTF-16 码元切，会把 emoji 和中日韩文字劈成乱码。
-  // 用 useMemo 缓存，避免列表每次渲染都做多段正则。
-  const { cover, excerpt } = useMemo(() => {
-    const c =
-      article.cover || (article.content.match(/<img[^>]+src="([^"]+)"/)?.[1] ?? '')
-    return { cover: c, excerpt: article.excerpt?.trim() || fallbackExcerpt(article.content) }
-  }, [article])
-
-  return (
-    <StaggerItem>
-      <HoverLift>
-        <Link href={`/posts/${article.slug}`} className="block">
-          <article className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)] sm:flex-row sm:gap-6 sm:p-6">
-            {/* 顶部 accent 渐变条：悬停时从左展开（scaleX，不做 width 动画） */}
-            <div className="absolute inset-x-0 top-0 z-10 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-accent to-purple-500 transition-transform duration-300 group-hover:scale-x-100" />
-
-            {cover && (
-              <div className="relative aspect-video w-full shrink-0 overflow-hidden bg-muted sm:aspect-auto sm:h-36 sm:w-60 sm:rounded-lg">
-                <Image
-                  src={cover}
-                  alt={article.title}
-                  fill
-                  sizes="(max-width: 640px) 100vw, 240px"
-                  className="object-cover transition-transform duration-500 group-hover:scale-110"
-                  onError={(e) => {
-                    ;(e.currentTarget.parentElement as HTMLElement).style.display = 'none'
-                  }}
-                />
-              </div>
-            )}
-
-            <div className="flex min-w-0 flex-1 flex-col p-5 sm:p-0">
-              <div className="flex items-start justify-between gap-3">
-                <h2 className="text-lg font-semibold leading-snug tracking-tight text-balance transition-colors group-hover:text-accent sm:text-xl">
-                  {article.title}
-                </h2>
-                {article.category && (
-                  <span className="shrink-0 rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
-                    {article.category.name}
-                  </span>
-                )}
-              </div>
-              {/* 摘要：三行截断（后端摘要上限 120 字，两行放不下），行高放宽提升可读性 */}
-              <p className="mt-2.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
-                {excerpt}
-              </p>
-              {/* 底部元信息：作者/日期/阅读量，标签贴右侧（仅 sm 以上） */}
-              <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground sm:mt-auto sm:pt-4">
-                <span className="flex items-center gap-1.5">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/10 text-[10px] font-bold text-accent">
-                    {article.author.username.charAt(0).toUpperCase()}
-                  </span>
-                  <span className="font-medium text-foreground">{article.author.username}</span>
-                </span>
-                <span aria-hidden className="text-border">
-                  ·
-                </span>
-                <time dateTime={article.published_at ?? article.created_at}>{date}</time>
-                <span className="flex items-center gap-1">
-                  <Eye className="h-3 w-3" />
-                  {article.views}
-                </span>
-                {article.tags && article.tags.length > 0 && (
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {article.tags.slice(0, 3).map((tag) => (
-                      <span
-                        key={tag.id}
-                        className="rounded border border-border bg-muted/40 px-1.5 py-0.5 transition-colors group-hover:border-accent/30"
-                      >
-                        {tag.name}
-                      </span>
-                    ))}
-                  </span>
-                )}
-              </div>
-            </div>
-          </article>
-        </Link>
-      </HoverLift>
-    </StaggerItem>
-  )
-}
 
 export function HomeClient({
   category,
@@ -228,6 +121,7 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
                     hasMore={hasMore}
                     isFetchingMore={isFetchingMore}
                     onLoadMore={() => setLoadedPages((n) => n + 1)}
+                    hasSidebar
                   />
                 </div>
               </>
@@ -244,6 +138,7 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
                     hasMore={hasMore}
                     isFetchingMore={isFetchingMore}
                     onLoadMore={() => setLoadedPages((n) => n + 1)}
+                    hasSidebar
                   />
                 </div>
                 <SiteSidebar widgets={widgets} position="right" />
@@ -261,6 +156,7 @@ function HomePage({ category, tag, q }: { category: string | null; tag: string |
             hasMore={hasMore}
             isFetchingMore={isFetchingMore}
             onLoadMore={() => setLoadedPages((n) => n + 1)}
+            hasSidebar={false}
           />
         )}
       </div>
@@ -278,6 +174,7 @@ function ArticleListSection({
   hasMore,
   isFetchingMore,
   onLoadMore,
+  hasSidebar,
 }: {
   isLoading: boolean
   isError: boolean
@@ -288,6 +185,8 @@ function ArticleListSection({
   hasMore: boolean
   isFetchingMore: boolean
   onLoadMore: () => void
+  /** 列表是否与侧边栏并排——并排时正文列更窄，卡片标题降一档字号 */
+  hasSidebar: boolean
 }) {
   return isLoading ? (
     <PageLoading minHeight="10rem" />
@@ -305,7 +204,7 @@ function ArticleListSection({
     <>
       <StaggerList className="grid gap-4">
         {articles.map((article: Article) => (
-          <ArticleCard key={article.id} article={article} />
+          <PostCard key={article.id} article={article} compact={hasSidebar} />
         ))}
       </StaggerList>
       {/* 加载更多：此前首页写死 page 1 / 20 条且无翻页 UI，第 21 篇起访客

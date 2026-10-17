@@ -6,45 +6,14 @@ import { useQueries } from '@tanstack/react-query'
 import { ArrowLeft, FileText, Search as SearchIcon } from 'lucide-react'
 import { fetchArticles } from '@/lib/api'
 import { PageLoading, Spinner } from '@/components/page-loader'
-import { PageTransition, Reveal, StaggerList, StaggerItem } from '@/components/motion'
+import { PageTransition, Reveal, StaggerList } from '@/components/motion'
+import { PostCard } from '@/components/post-card'
 import Link from 'next/link'
 
 const PAGE_SIZE = 20
 
-// 列出文章的核心行（不含封面图，搜索页要紧凑、一屏能看更多条）。
-function ResultRow({
-  slug,
-  title,
-  excerpt,
-  date,
-  views,
-}: {
-  slug: string
-  title: string
-  excerpt: string
-  date: string
-  views: number
-}) {
-  return (
-    <StaggerItem>
-      <Link href={`/posts/${slug}`} className="block">
-        <article className="rounded-xl border border-border bg-card p-5 shadow-[var(--card-shadow-flat)] transition-all duration-300 hover:border-accent/30 hover:shadow-[var(--card-shadow-hover)]">
-          <h2 className="text-base font-semibold leading-snug tracking-tight transition-colors hover:text-accent">
-            {title}
-          </h2>
-          {excerpt && (
-            <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{excerpt}</p>
-          )}
-          <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground/80">
-            <span>{date}</span>
-            <span className="inline-flex items-center gap-1">{views} 次阅读</span>
-          </div>
-        </article>
-      </Link>
-    </StaggerItem>
-  )
-}
-
+// 列出文章的核心行已抽为公共 PostCard 组件；搜索页要紧凑、一屏能看更多条，
+// 因此传 showCover={false}（不渲染封面块），卡片退化为纯文字形态。
 export default function SearchPage() {
   // useSearchParams 需要 Suspense 边界：没有它，Next 在构建期会报
   // "useSearchParams() should be wrapped in a suspense boundary"，
@@ -162,22 +131,7 @@ function SearchPageInner() {
             </p>
             <StaggerList className="mt-4 grid gap-3">
               {articles.map((a) => (
-                <ResultRow
-                  key={a.id}
-                  slug={a.slug}
-                  title={a.title}
-                  excerpt={a.content
-                    .replace(/<[^>]*>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim()
-                    .slice(0, 120)}
-                  date={
-                    a.published_at
-                      ? new Date(a.published_at).toLocaleDateString('zh-CN')
-                      : new Date(a.created_at).toLocaleDateString('zh-CN')
-                  }
-                  views={a.views}
-                />
+                <PostCard key={a.id} article={a} showCover={false} compact />
               ))}
             </StaggerList>
             {hasMore && (

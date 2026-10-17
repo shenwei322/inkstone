@@ -104,7 +104,7 @@ export default function ArchivePage() {
           <div className="mt-8 space-y-8">
             {groups.map((g) => (
               <section key={g.year}>
-                <div className="sticky top-16 z-10 -mx-2 mb-3 flex items-baseline gap-2 bg-background/85 px-2 py-1 backdrop-blur">
+                <div className="sticky top-[var(--navbar-offset)] z-10 -mx-2 mb-3 flex items-baseline gap-2 bg-background/85 px-2 py-1 backdrop-blur">
                   <h2 className="text-xl font-bold tracking-tight">{g.year} 年</h2>
                   <span className="text-sm text-muted-foreground">{g.count} 篇</span>
                 </div>

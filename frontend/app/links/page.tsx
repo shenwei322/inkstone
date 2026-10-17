@@ -198,7 +198,7 @@ export default function LinksPage() {
         ) : links.length === 0 ? (
           <Reveal
             y={12}
-            className="mt-8 rounded-xl border border-dashed p-16 text-center"
+            className="mt-8 rounded-lg border border-dashed p-16 text-center"
           >
             <Link2 className="mx-auto h-10 w-10 text-muted-foreground/50" />
             <p className="mt-4 text-muted-foreground">还没有添加友情链接</p>
@@ -213,7 +213,7 @@ export default function LinksPage() {
                       href={link.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-all hover:border-accent/40 hover:shadow-lg hover:shadow-accent/5"
+                      className="card-base group flex items-center gap-4 border border-border p-4 transition-all hover:border-accent/40 hover:shadow-lg hover:shadow-accent/5"
                     >
                       <LinkAvatar icon={link.icon_url} name={link.name} dim={false} />
                       <div className="min-w-0 flex-1">
@@ -230,7 +230,7 @@ export default function LinksPage() {
                 ) : (
                   /* 失效友链：禁止跳转 + 脱敏展示 */
                   <div
-                    className="flex cursor-not-allowed items-center gap-4 rounded-xl border border-dashed border-border bg-muted/40 p-4 opacity-70"
+                    className="flex cursor-not-allowed items-center gap-4 rounded-lg border border-dashed border-border bg-muted/40 p-4 opacity-70"
                     title="该站点暂时无法访问，已暂停跳转"
                   >
                     <LinkAvatar icon={link.icon_url} name={link.name} dim />

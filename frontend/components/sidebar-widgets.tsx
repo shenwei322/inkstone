@@ -133,7 +133,7 @@ function PopNumber({ value }: { value: string }) {
 
 function WidgetCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card-flat rounded-xl border border-border bg-card p-5">
+    <div className="card-base border border-border p-5">
       <h3 className="mb-3 text-sm font-semibold tracking-wide">{title}</h3>
       {children}
     </div>
@@ -258,7 +258,7 @@ function ProfileWidget({ widget }: { widget: SidebarWidget }) {
   return (
     <div
       {...hoverLift}
-      className="card-flat relative overflow-hidden rounded-xl border border-border bg-card p-5 text-center"
+      className="card-base relative overflow-hidden border border-border p-5 text-center"
     >
       <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-accent/15 blur-2xl" />
       <div className="relative flex flex-col items-center">
@@ -410,7 +410,7 @@ function WeatherWidget({ widget }: { widget: SidebarWidget }) {
   const info = weather ? WEATHER_CODES[weather.code] ?? WEATHER_CODES[0] : null
 
   return (
-    <div className="card-flat relative overflow-hidden rounded-xl border border-border bg-card p-5">
+    <div className="card-base relative overflow-hidden border border-border p-5">
       <div className="pointer-events-none absolute -left-8 -top-8 h-24 w-24 rounded-full bg-sky-400/15 blur-2xl" />
       <h3 className="relative mb-3 text-sm font-semibold tracking-wide">{widget.title}</h3>
       {failed ? (
@@ -498,7 +498,7 @@ function CountdownWidget({ widget }: { widget: SidebarWidget }) {
   ]
 
   return (
-    <div className="card-flat relative overflow-hidden rounded-xl border border-border bg-card p-5">
+    <div className="card-base relative overflow-hidden border border-border p-5">
       {/* 装饰环旋转 / 光斑呼吸 / 鞭炮摆动：命令式 GSAP 循环动画替代 framer repeat: Infinity */}
       <LoopAnim
         kind="rotate"
@@ -551,7 +551,7 @@ function ClockWidget({ widget }: { widget: SidebarWidget }) {
   const week = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
 
   return (
-    <div className="card-flat relative overflow-hidden rounded-xl border border-border bg-card p-5">
+    <div className="card-base relative overflow-hidden border border-border p-5">
       <div className="pointer-events-none absolute -right-8 -bottom-8 h-24 w-24 rounded-full bg-indigo-400/15 blur-2xl" />
       <h3 className="relative mb-2 text-sm font-semibold tracking-wide">{widget.title}</h3>
       <p className="relative text-4xl font-bold tabular-nums tracking-tight">
@@ -589,7 +589,7 @@ function StatsWidget({ title }: { title: string }) {
   ]
 
   return (
-    <div className="card-flat rounded-xl border border-border bg-card p-5">
+    <div className="card-base border border-border p-5">
       <h3 className="mb-3 text-sm font-semibold tracking-wide">{title}</h3>
       {/* 统计卡：列表 stagger 入场 + 悬停上浮 */}
       <StaggerList className="grid grid-cols-3 gap-2">
@@ -631,7 +631,7 @@ function HitokotoWidget({ widget }: { widget: SidebarWidget }) {
   }, [refreshedAt])
 
   return (
-    <div className="card-flat rounded-xl border border-border bg-card p-5">
+    <div className="card-base border border-border p-5">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold tracking-wide">
           <Quote className="h-3.5 w-3.5 text-accent" />

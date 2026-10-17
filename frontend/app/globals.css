@@ -8,8 +8,35 @@
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ============================================================================
+   配色体系
+   ----------------------------------------------------------------------------
+   策略（参考 Fuwari 的 oklch + hue、astro-paper 的暗色换主色，见
+   docs/blog-theme-research-2026-10.md）：
+
+   1. **hex 兜底先行**。老 Safari（< 15.4）不支持 oklch，若直接用 oklch
+      会让**整个站点失去颜色**（不是降级成灰色，而是声明失效、回落到初始值）。
+      所以先声明一套完整可用的 hex，再用 @supports 覆盖。
+
+   2. **oklch 用 --hue 驱动**。全站色相收敛为一个数字，改 --hue 即整站换色。
+      亮度（L）被显式锁定，因此任何色相下视觉重量都一致 —— 这是「看起来
+      高级」的技术根源，而不是靠挑好看的 hex。
+
+   3. **暗色模式换色相**。深底上蓝色发闷（astro-paper 的实测结论：浅色用蓝
+      #006cac、暗色换暖橙 #ff6b01）。这里用 --hue-accent 在暗色下偏移，
+      而不是简单把同一个蓝提亮。
+
+   可调性：--hue / --hue-accent 可被后台外观设置或用户偏好覆写。
+   ============================================================================ */
+
 :root {
   color-scheme: light;
+
+  /* —— 色相：全站唯一换色入口 —— */
+  --hue: 250;          /* 默认蓝，Fuwari 的 themeColor.hue 也是 250 */
+  --hue-accent: 250;   /* 浅色模式下主色与主色相一致 */
+
+  /* —— hex 兜底（不支持 oklch 的浏览器用这套，观感接近但不参与 hue 联动）—— */
   --background: #fafafa;
   --foreground: #18181b;
   --muted: #f4f4f5;
@@ -23,6 +50,11 @@
 
 .dark {
   color-scheme: dark;
+
+  /* 暗色下主色相向暖偏移：深底上冷蓝对眼睛更"沉"，偏移后按钮和链接更跳。
+     保持 --hue 不变，只动 --hue-accent，因此页面底色仍与浅色同族。 */
+  --hue-accent: 265;
+
   --background: #09090b;
   --foreground: #fafafa;
   --muted: #18181b;
@@ -34,6 +66,32 @@
   --wallpaper-tone: #000000;
 }
 
+/* oklch 覆盖层：L 值锁定视觉重量，C 值控制彩度，hue 由变量统一驱动。
+   L 取值参考 Fuwari 的实测梯度（页面 0.95 / 卡片 1.00 / 深色底 0.16 / 深色卡 0.23）。 */
+@supports (color: oklch(0% 0 0)) {
+  :root {
+    --background: oklch(0.985 0.002 var(--hue));
+    --foreground: oklch(0.21 0.006 var(--hue));
+    --muted: oklch(0.965 0.004 var(--hue));
+    --muted-foreground: oklch(0.55 0.014 var(--hue));
+    --border: oklch(0.92 0.005 var(--hue));
+    --card: oklch(1 0 0);
+    --accent: oklch(0.55 0.2 var(--hue-accent));
+  }
+
+  .dark {
+    --background: oklch(0.16 0.008 var(--hue));
+    --foreground: oklch(0.97 0.002 var(--hue));
+    --muted: oklch(0.23 0.01 var(--hue));
+    --muted-foreground: oklch(0.72 0.012 var(--hue));
+    --border: oklch(0.28 0.012 var(--hue));
+    --card: oklch(0.21 0.01 var(--hue));
+    /* 暗色下把主色提亮（L 0.55 → 0.72）并降彩度，落到深底上才不糊 */
+    --accent: oklch(0.72 0.15 var(--hue-accent));
+  }
+}
+
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -44,6 +102,23 @@
   --color-accent: var(--accent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* -------------------------------------------------------------------------
+     圆角梯度
+     -------------------------------------------------------------------------
+     用 Tailwind v4 的 --radius-* 命名空间覆盖默认值，因此项目里现存的
+     `rounded-sm/md/lg/xl/2xl` 工具类会**自动继承**这套梯度，无需逐文件替换。
+
+     参考依据（见 docs/blog-theme-research-2026-10.md）：
+       PaperMod 全局单一 8px —— 干但缺乏层次
+       Chirpy   6px / 10px 两档 —— 有节奏但只有两档
+       本方案取四档，对应「徽章 / 控件 / 卡片 / 大容器」四种语义层级，
+       相邻档位差 ≥ 2px，肉眼可分辨又不跳跃。 */
+  --radius-sm: 0.5rem;    /* 8px  徽章、标签、小图标底衬 */
+  --radius-md: 0.75rem;   /* 12px 按钮、输入框、菜单项 */
+  --radius-lg: 1rem;      /* 16px 卡片（= --radius-large，与 Fuwari 对齐） */
+  --radius-xl: 1.25rem;   /* 20px 大容器、浮层面板 */
+  --radius-2xl: 1.5rem;   /* 24px 模态框、抽屉 */
 }
 
 html {
@@ -883,5 +958,523 @@ body.has-wallpaper .card-hover:hover {
   .card-hover,
   .card-hover:hover {
     transform: none;
+  }
+}
+
+/* ============================================================================
+   Fuwari 风格设计体系（导航栏 + 文章卡片）
+   ============================================================================
+   参照 saicaca/fuwari 的视觉语言重构两处核心界面：
+
+   1) 导航栏：从「全宽平铺 + 底部一条 border」改为「页面宽度内的圆角卡片」，
+      与主体内容同宽（--page-width），顶部直角、底部大圆角（rounded-t-none），
+      视觉上与下方内容卡片连成一体，滚动时像一块浮起的板。
+
+   2) 文章卡片：从「左侧封面 + 右侧文字」改为 Fuwari 的
+      「左侧正文 + 右侧 28% 宽悬浮封面块」，封面上下内缩（top/bottom inset），
+      标题左缘一根 accent 短竖线，悬停时标题变色 + 箭头滑入 + 封面压暗。
+
+   下面这组变量集中管理这套语言，改观感只动这里。
+   ============================================================================ */
+
+:root {
+  /* 卡片/导航统一圆角：Fuwari 的 --radius-large。
+     值由 @theme 的 --radius-lg 提供，不在这里重复写死——
+     否则两处会各改各的（曾出现过改了一处、另一处不同步）。 */
+  --radius-large: var(--radius-lg);
+  /* 导航卡片自身高度：Fuwari 的 4.5rem。 */
+  --navbar-height: 4.5rem;
+  /* 导航占位高度 = 导航卡片高度。
+     早先这里写成 calc(--navbar-height + 1.5rem)，是错误地假设卡片上下各有
+     0.75rem 外边距。实际 .navbar-shell 的 padding-top 是 0、卡片直接贴视口顶，
+     于是多算了 24px，后台侧边栏顶到 96px 而导航只到 73px —— 两者之间漏出
+     一条 23px 的壁纸缝隙（即「侧边栏上面有空隙」）。
+     侧栏 sticky 偏移、后台侧边栏定位、编辑器工具条都引用本变量，
+     改这里等于同时修正全部。 */
+  --navbar-offset: var(--navbar-height);
+  /* 文章卡片右侧封面块宽度占比：Fuwari 的 coverWidth。 */
+  --cover-width: 28%;
+  /* 「按钮底」中性色：Fuwari 的 --btn-regular-bg（浅灰蓝底）。 */
+  --btn-regular-bg: color-mix(in srgb, var(--accent) 8%, var(--muted));
+  --btn-regular-bg-hover: color-mix(in srgb, var(--accent) 15%, var(--muted));
+  --btn-regular-bg-active: color-mix(in srgb, var(--accent) 22%, var(--muted));
+}
+
+.dark {
+  /* 深色底上中性按钮要更亮一档，否则和卡片背景糊在一起 */
+  --btn-regular-bg: color-mix(in srgb, var(--accent) 16%, var(--muted));
+  --btn-regular-bg-hover: color-mix(in srgb, var(--accent) 24%, var(--muted));
+  --btn-regular-bg-active: color-mix(in srgb, var(--accent) 32%, var(--muted));
+}
+
+/* ---------------------------------------------------------------------------
+   .card-base —— Fuwari 的卡片基类
+   ---------------------------------------------------------------------------
+   rounded-[--radius-large] + overflow-hidden + 卡片底色 + 全属性过渡。
+   文章卡片、导航栏都用它，保证圆角与底色完全一致。 */
+.card-base {
+  border-radius: var(--radius-large);
+  overflow: hidden;
+  background-color: var(--card);
+  transition:
+    box-shadow 0.25s ease,
+    border-color 0.25s ease,
+    background-color 0.25s ease,
+    transform 0.25s ease;
+}
+
+/* 卡片内所有文本元素跟随过渡（Fuwari 的全局 transition 声明）。
+   只过渡颜色类属性，不动 layout，避免悬停时文字抖动。 */
+.card-base :is(h1, h2, h3, h4, h5, h6, p, a, span, li, ul, ol, blockquote, code, pre, table, th, td, strong) {
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+/* ---------------------------------------------------------------------------
+   .btn-plain + .scale-animation —— Fuwari 的导航按钮
+   ---------------------------------------------------------------------------
+   悬停时不是简单换底色，而是底衬从 scale(0.85) 放大到 scale(1) 再显现，
+   形成「从按钮中心漾开」的观感。底衬用 ::before + rounded-[inherit]，
+   所以按钮是什么圆角，底衬就是什么圆角。
+
+   关键：底衬默认必须 **完全不可见**（opacity: 0），只在 hover / 激活态才亮起。
+   早期实现写成「默认 opacity:1 + 仅缩放」，结果每个导航按钮都挂着一块
+   常显底色，在壁纸模式下表现为「友情链接背后有一块难看白框」。 */
+.btn-plain {
+  position: relative;
+  z-index: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, var(--foreground) 75%, transparent);
+  transition:
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.btn-plain:hover {
+  color: var(--accent);
+}
+
+/* 底衬：绝对定位铺满按钮，默认透明且缩到 0.85，悬停时归位并显现 */
+.btn-plain.scale-animation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--btn-regular-bg-hover);
+  transform: scale(0.85);
+  opacity: 0;
+  transition:
+    transform 0.2s ease-out,
+    opacity 0.2s ease-out,
+    background-color 0.2s ease-out;
+}
+
+.btn-plain.scale-animation:hover::before,
+.btn-plain.scale-animation:focus-visible::before {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.btn-plain.scale-animation:active::before {
+  background: var(--btn-regular-bg-active);
+  transform: scale(1);
+  opacity: 1;
+}
+
+/* 点按回弹：Fuwari 的 active:scale-95 / active:scale-90 */
+.btn-plain.scale-animation:active {
+  transform: scale(0.95);
+}
+
+/* 当前所处页面/被选中的导航按钮：底衬常显 + accent 文字 */
+.btn-plain.current-theme-btn {
+  color: var(--accent);
+}
+
+.btn-plain.current-theme-btn::before {
+  transform: scale(1);
+  opacity: 1;
+  background: var(--btn-regular-bg);
+}
+
+/* .btn-plain 自带 display: inline-flex，其优先级高于 Tailwind 的 md:hidden
+   （同层单类选择器下，后加载的样式表胜出，而 .btn-plain 在 globals.css 末尾），
+   结果「菜单」按钮在桌面端也露出来。这里用 !important 提供一条
+   不可被 .btn-plain 覆盖的显隐规则，专供移动端汉堡按钮。 */
+@media (min-width: 768px) {
+  .navbar-mobile-only {
+    display: none !important;
+  }
+}
+
+/* .nav-user-btn —— 导航右侧「功能性」按钮（用户入口 / 主题 / 移动端菜单）
+   ---------------------------------------------------------------------------
+   这几个按钮需要一块**常显**的底色来和纯文字的导航项区分层级，
+   但不能再叠加 .btn-plain 的 scale 底衬：两层底色（常显的 bg + hover 的 ::before）
+   一个铺满、一个缩到 0.85，hover 时就会露出「框不住」的错位蓝边。
+   所以这里关掉 ::before，改为在按钮本体上直接做 hover 加深。 */
+.nav-user-btn {
+  background: var(--btn-regular-bg);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.nav-user-btn::before {
+  display: none;
+}
+
+.nav-user-btn:hover {
+  background: var(--btn-regular-bg-hover);
+}
+
+.nav-user-btn:active {
+  background: var(--btn-regular-bg-active);
+}
+
+/* 壁纸模式下这些按钮的底色同样要能透出壁纸，实心色块会显脏 */
+body.has-wallpaper .nav-user-btn {
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+}
+
+body.has-wallpaper .nav-user-btn:hover {
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+/* 后台侧边栏：壁纸模式下必须**不透明**。
+   bg-card 在 body.has-wallpaper 下是 78% 半透明（为了让壁纸透出来），
+   但侧边栏是长期停留的导航区，壁纸透过文字底下的花纹会干扰阅读、
+   且与右侧内容卡的层级混淆。所以这里把底色坐实成近实色。 */
+body.has-wallpaper .admin-sidebar {
+  background: color-mix(in srgb, var(--card) 94%, var(--background));
+  backdrop-filter: blur(12px);
+}
+
+/* 壁纸模式下底衬改用「半透明遮罩」而不是实心色块：
+   实心 --btn-regular-bg 叠在半透导航卡片上会形成一块死白/死灰的方形补丁。 */
+body.has-wallpaper .btn-plain.scale-animation::before {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+body.has-wallpaper .btn-plain.current-theme-btn::before {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+body.has-wallpaper .btn-plain.scale-animation:active::before {
+  background: color-mix(in srgb, var(--foreground) 14%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   .meta-icon —— Fuwari 的元信息图标（圆角方块底衬）
+   ---------------------------------------------------------------------------
+   日期/分类/标签前的图标统一放在 1.75rem 的圆角方块里，
+   比裸图标更有「信息层级」，也是 Fuwari 卡片的辨识特征之一。 */
+.meta-icon {
+  display: flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--btn-regular-bg);
+  color: var(--accent);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* 元信息文字深浅档位（对应 Fuwari 的 text-90 / text-75 / text-50 / text-30） */
+.text-90 {
+  color: color-mix(in srgb, var(--foreground) 90%, transparent);
+}
+.text-75 {
+  color: color-mix(in srgb, var(--foreground) 75%, transparent);
+}
+.text-50 {
+  color: color-mix(in srgb, var(--foreground) 50%, transparent);
+}
+.text-30 {
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+
+/* .with-divider：元信息项之间用「/」分隔（Fuwari 的做法），
+   首个元素前不画。
+   注意：窄屏下元信息会换行，此时「/」会孤零零落在行首（读起来像断句错误），
+   因此只在 sm 以上（768px 起、元信息基本能排进一行）显示分隔符。 */
+.with-divider::before {
+  content: "/";
+  margin-left: 0.375rem;
+  margin-right: 0.375rem;
+  color: color-mix(in srgb, var(--foreground) 20%, transparent);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: color 0.2s ease;
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .with-divider::before {
+    display: inline;
+  }
+}
+
+.with-divider:first-child::before {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   .article-card —— 文章展示卡片（Fuwari PostCard 的 React 版）
+   ---------------------------------------------------------------------------
+   结构固定为：外层浮动卡片 + 正文区（左）+ 封面块（右，绝对定位内缩）。
+   这里只定义不该用 Tailwind 表达的部分（绝对定位的封面内缩量、
+   标题左侧竖线、封面悬停遮罩），其余布局仍在 JSX 里用工具类拼。 */
+.article-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column-reverse;
+}
+
+@media (min-width: 768px) {
+  .article-card {
+    flex-direction: column;
+  }
+}
+
+/* 标题左侧的 accent 短竖线（Fuwari 的 before:w-1 before:h-5）。
+   定位逻辑：正文区桌面端有 md:pl-9(2.25rem) 左内边距，竖线放在这段
+   padding 空档里 —— 相对标题文字左缘再往左退 1.15rem，
+   于是竖线右缘到文字之间留出约 0.9rem，是 Fuwari 那种「竖线立在标题外侧」的观感，
+   不会糊到文字上。竖直方向用 em 跟随标题字号自适应。
+   仅桌面显示：窄屏下标题换行，竖线会和文字错位。 */
+.article-card-title::before {
+  content: "";
+  position: absolute;
+  left: -1.15rem;
+  top: 0.16em;
+  width: 0.25rem;
+  height: 1.05em;
+  border-radius: 9999px;
+  background: var(--accent);
+  display: none;
+  transition: transform 0.2s ease;
+}
+
+@media (min-width: 768px) {
+  .article-card-title::before {
+    display: block;
+  }
+}
+
+/* 悬停时竖线微微拉长，给标题一个「被点亮」的暗示 */
+.article-card:hover .article-card-title::before {
+  transform: scaleY(1.25);
+}
+
+/* 标题右侧的箭头：默认缩到 0.5 且透明并左偏，悬停时归位放大 */
+.article-card-arrow {
+  opacity: 0;
+  transform: translateX(-0.25rem);
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+.article-card:hover .article-card-arrow {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* 封面块：桌面端绝对定位在右侧，上下各内缩 0.75rem（Fuwari 的 top-3 bottom-3 right-3） */
+.article-card-cover {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  /* 移动端封面是通栏的一块：给它固定宽高比，避免图片加载前高度塌陷 */
+  aspect-ratio: 16 / 9;
+}
+
+@media (min-width: 768px) {
+  .article-card-cover {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    width: var(--cover-width);
+    aspect-ratio: auto;
+  }
+}
+
+/* 封面悬停遮罩：压暗一层，让白色的箭头看得清 */
+.article-card-cover-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  background: rgb(0 0 0 / 0);
+  transition: background-color 0.3s ease;
+}
+
+.article-card:hover .article-card-cover-overlay {
+  background: rgb(0 0 0 / 0.3);
+}
+
+/* 封面上的箭头：透明 + 缩到 0.5，悬停归位 */
+.article-card-cover-arrow {
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+.article-card:hover .article-card-cover-arrow {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 无封面时的「进入」按钮：右侧一条竖长圆角按钮（Fuwari 的 enter-btn） */
+.article-card-enter {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .article-card-enter {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    display: flex;
+    width: 3.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.75rem;
+    background: var(--btn-regular-bg);
+    transition:
+      background-color 0.2s ease,
+      transform 0.2s ease;
+  }
+
+  .article-card-enter:hover {
+    background: var(--btn-regular-bg-hover);
+  }
+
+  .article-card-enter:active {
+    background: var(--btn-regular-bg-active);
+    transform: scale(0.95);
+  }
+}
+
+/* 移动端卡片之间的虚线分隔（Fuwari 的 dashed border-t） */
+.article-card-divider {
+  margin-inline: 1.5rem;
+  border-top: 1px dashed color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.article-card-divider:last-child {
+  border-top: 0;
+}
+
+/* 减少动效偏好：去掉所有位移与缩放，只留颜色变化 */
+@media (prefers-reduced-motion: reduce) {
+  .btn-plain.scale-animation::before,
+  .article-card-arrow,
+  .article-card-cover-arrow,
+  .article-card-title::before,
+  .article-card-cover-overlay,
+  .article-card-enter {
+    transition: none;
+    transform: none;
+  }
+
+  .article-card:hover .article-card-arrow,
+  .article-card:hover .article-card-cover-arrow {
+    transform: none;
+  }
+
+  .article-card:hover .article-card-title::before {
+    transform: none;
+  }
+}
+
+/* 壁纸模式下卡片已有半透明 + backdrop-filter，阴影降到最轻一档避免显脏 */
+body.has-wallpaper .article-card.card-base {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+/* ---------------------------------------------------------------------------
+   .navbar-shell / .navbar-card —— Fuwari 导航栏的容器与卡片表面
+   ---------------------------------------------------------------------------
+   Fuwari 的导航不是通栏铺满的横幅，而是「与主体内容同宽的一块圆角卡片」：
+   外层只负责 sticky 与水平居中，卡片本身有独立底色 + 圆角 + 阴影。
+
+   圆角形态刻意做成「上直角、下圆角」（rounded-t-none）：
+   导航贴在视口顶端时，上沿直角让它与浏览器边缘贴合、不出现一条缝；
+   下沿的圆角则与下方内容卡片呼应，形成「一整块板从顶部垂下来」的观感。
+   这是 Fuwari 的原样做法。 */
+.navbar-shell {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  margin-inline: auto;
+  width: 100%;
+  max-width: 88rem;
+  padding-inline: 1rem;
+  /* 顶部不留白：导航卡片的直角上沿要贴着视口顶端 */
+  padding-top: 0;
+}
+
+/* 后台（/admin）是「侧边栏贴视口左侧 + 内容右移」的两栏布局。
+   此时导航若仍是居中的窄卡片，左右边缘会与侧边栏差出一个 padding，
+   视觉上割裂（侧边栏像从导航卡片下方「漏」出来）。
+   因此后台下让导航通栏铺满：卡片左右不再留白，与侧边栏左缘对齐。 */
+.navbar-shell--full {
+  max-width: none;
+  padding-inline: 0;
+}
+
+.navbar-shell--full .navbar-card {
+  border-left: none;
+  border-right: none;
+  /* 只去掉顶部两角（贴视口顶不能有圆角，否则露出壁纸的三角缺口），
+     底部两角保留 —— 侧边栏与内容区都在它下方，圆角能软化交界线。
+     早先写成 border-radius: 0 把四角全抹平，整条导航像一块生硬的白板。 */
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.navbar-card {
+  background-color: color-mix(in srgb, var(--card) 82%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-large) var(--radius-large);
+  box-shadow: var(--card-shadow-hover);
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+/* 壁纸模式下导航比卡片更透一点，滚动时仍能看见下面的壁纸 */
+body.has-wallpaper .navbar-card {
+  background-color: color-mix(in srgb, var(--background) 62%, transparent);
+}
+
+/* 减少透明偏好：退回实心表面 */
+@media (prefers-reduced-transparency: reduce) {
+  .navbar-card {
+    background-color: var(--card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }

@@ -531,7 +531,7 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
   return (
     <form onSubmit={submit} className="min-h-[60vh]">
       {/* 顶部工具条 */}
-      <div className="sticky top-16 z-40 -mx-4 border-b border-border bg-card/95 backdrop-blur">
+      <div className="sticky top-[var(--navbar-offset)] z-40 -mx-4 border-b border-border bg-card/95 backdrop-blur">
         <div className="flex h-14 items-center justify-between px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
