@@ -22,13 +22,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <SiteConfigProvider>
+      {/* SiteConfigProvider 必须在外层：ThemeProvider 要用站点默认配色
+          （accent_hue）作为「访客本地无选择」时的兜底，读不到配置就只能是硬编码值。 */}
+      <SiteConfigProvider>
+        <ThemeProvider>
           <AuthProvider>
             <NotifyProvider>{children}</NotifyProvider>
           </AuthProvider>
-        </SiteConfigProvider>
-      </ThemeProvider>
+        </ThemeProvider>
+      </SiteConfigProvider>
     </QueryClientProvider>
   )
 }

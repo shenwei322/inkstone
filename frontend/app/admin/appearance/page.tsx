@@ -511,6 +511,7 @@ function SidebarPositionTab() {
   const [autoHide, setAutoHide] = useState(false)
   const [hideAfter, setHideAfter] = useState(200)
   const [showAfter, setShowAfter] = useState(40)
+  const [accentHue, setAccentHue] = useState(250)
 
   useEffect(() => {
     fetchSiteConfig().then((raw) => {
@@ -519,11 +520,13 @@ function SidebarPositionTab() {
         navbar_autohide?: boolean
         navbar_hide_after_px?: number
         navbar_show_after_px?: number
+        accent_hue?: number
       }
       setPosition(r.sidebar_position === 'left' ? 'left' : 'right')
       setAutoHide(r.navbar_autohide === true)
       if (typeof r.navbar_hide_after_px === 'number') setHideAfter(r.navbar_hide_after_px)
       if (typeof r.navbar_show_after_px === 'number') setShowAfter(r.navbar_show_after_px)
+      if (typeof r.accent_hue === 'number') setAccentHue(r.accent_hue)
     })
   }, [])
 
@@ -534,6 +537,7 @@ function SidebarPositionTab() {
         navbar_autohide: autoHide,
         navbar_hide_after_px: hideAfter,
         navbar_show_after_px: showAfter,
+        accent_hue: accentHue,
       }),
     onSuccess: () => notify.success('布局设置已保存，前台刷新即可看到'),
     onError: (e) => notify.error(e instanceof ApiError ? e.message : '保存失败'),
@@ -589,6 +593,85 @@ function SidebarPositionTab() {
               </span>
             </button>
           ))}
+        </div>
+      </section>
+
+      {/* 站点默认配色 */}
+      <section className="space-y-4 border-t border-border pt-6">
+        <div>
+          <p className="text-sm font-medium">站点默认配色</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            访客首次访问时看到的主色。前台导航栏另有调色板按钮，访客可以自行切换；
+            一旦访客选了自己的色，此处设置对他不再生效。
+          </p>
+        </div>
+
+        {/* 预设快速选择：点一下就等于把滑块移到对应角度 */}
+        <div className="flex flex-wrap gap-2">
+          {[
+            { label: '靛蓝', hue: 250 },
+            { label: '青碧', hue: 195 },
+            { label: '松绿', hue: 150 },
+            { label: '琥珀', hue: 65 },
+            { label: '赤橙', hue: 35 },
+            { label: '玫红', hue: 10 },
+            { label: '紫菫', hue: 305 },
+            { label: '玄灰', hue: 260 },
+          ].map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => setAccentHue(p.hue)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all ${
+                accentHue === p.hue
+                  ? 'border-accent ring-2 ring-accent/25'
+                  : 'border-border hover:border-accent/40'
+              }`}
+            >
+              <span
+                className="block h-3.5 w-3.5 rounded-full"
+                style={{ background: `oklch(0.55 0.2 ${p.hue})` }}
+              />
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 自定义色相 */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-medium">自定义色相</span>
+            <span className="text-xs tabular-nums text-muted-foreground">{accentHue}°</span>
+          </div>
+          <div className="relative">
+            <div
+              className="pointer-events-none absolute inset-x-0 top-1/2 h-2.5 -translate-y-1/2 rounded-full"
+              style={{
+                background:
+                  'linear-gradient(to right, oklch(0.6 0.18 0), oklch(0.6 0.18 60), oklch(0.6 0.18 120), oklch(0.6 0.18 180), oklch(0.6 0.18 240), oklch(0.6 0.18 300), oklch(0.6 0.18 360))',
+              }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={360}
+              step={1}
+              value={accentHue}
+              onChange={(e) => setAccentHue(Number(e.target.value))}
+              aria-label="站点默认色相"
+              className="relative h-7 w-full cursor-pointer appearance-none bg-transparent
+                [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full
+                [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white
+                [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:shadow-md
+                [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full
+                [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white
+                [&::-moz-range-thumb]:bg-foreground"
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            色相只决定「什么颜色」，亮度与彩度是固定的，所以任何色相下对比度都一致。
+          </p>
         </div>
       </section>
 

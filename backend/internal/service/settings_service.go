@@ -28,6 +28,10 @@ const (
 	SettingNavbarAutoHide     = "navbar_autohide"       // "true"/"false"，默认 false
 	SettingNavbarHideAfterPx  = "navbar_hide_after_px"  // 向下滚动超过该像素后隐藏，默认 200
 	SettingNavbarShowAfterPx  = "navbar_show_after_px"  // 向上滚动超过该像素后显示，默认 40
+	// 站点默认配色主题：访客首次访问（本地没有自己的选择）时使用的色相。
+	// 存的是色相角度数字，而非预设 id —— 这样后台可以直接给一个滑块，
+	// 也便于日后调整预设而不用迁移历史数据。
+	SettingAccentHue = "accent_hue" // 0-360，默认 250（靛蓝）
 	SettingICP               = "site_icp"           // string
 	SettingSMTPHost          = "smtp_host"
 	SettingSMTPPort          = "smtp_port" // string digits
@@ -145,6 +149,7 @@ var settingDefaults = map[string]string{
 	SettingNavbarAutoHide:    "false",
 	SettingNavbarHideAfterPx: "200",
 	SettingNavbarShowAfterPx: "40",
+	SettingAccentHue:         "250",
 	SettingICP:               "",
 	SettingSMTPHost:          "",
 	SettingSMTPPort:          "465",
@@ -481,7 +486,7 @@ func (s *SettingsService) Public() (map[string]any, error) {
 			out[k] = v == "true"
 			continue
 		}
-		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx {
+		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx || k == SettingAccentHue {
 			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 				out[k] = n
 			} else {
@@ -528,7 +533,7 @@ func (s *SettingsService) AdminView() (map[string]any, error) {
 			out[k] = v == "true"
 			continue
 		}
-		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx {
+		if k == SettingNavbarHideAfterPx || k == SettingNavbarShowAfterPx || k == SettingAccentHue {
 			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 				out[k] = n
 			} else {

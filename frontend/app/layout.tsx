@@ -9,6 +9,7 @@ import { SiteWallpaper } from "@/components/site-wallpaper";
 import { SiteHead } from "@/components/site-head";
 import { RouteLoader } from "@/components/route-loader";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
+import { buildAccentInitScript } from "@/lib/accent";
 
 const DEFAULT_META = {
   siteName: 'InkStone',
@@ -53,11 +54,24 @@ export async function generateMetadata(): Promise<Metadata> {
  */
 const THEME_INIT_SCRIPT = `(function(){try{var k=${JSON.stringify(THEME_STORAGE_KEY)};var v=localStorage.getItem(k);var d=v?v==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;var r=document.documentElement;r.style.colorScheme=d?'dark':'light';if(d)r.classList.add('dark');}catch(e){}})();`
 
+/**
+ * 配色主题首屏防闪烁：与上面的亮暗脚本同为「绘制第一帧前必须执行」。
+ * 少了它，已保存青绿/玫红的用户每次刷新都会先闪一帧默认靛蓝。
+ * 生成逻辑与预设表在 lib/accent.ts，保证与客户端读写的是同一份数据。
+ */
+const ACCENT_INIT_SCRIPT = buildAccentInitScript()
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="zh-CN" className="h-full antialiased" suppressHydrationWarning>
       <body className="min-h-full flex flex-col">
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* 亮暗 + 配色首屏脚本合并成一个 <script>：
+            React 19 对「同一父级下的多个内联 script」会警告
+            "Encountered a script tag while rendering React component"，
+            并可能不执行其中之一。合成一段既避开该告警，也少一次解析。 */}
+        <script
+          dangerouslySetInnerHTML={{ __html: `${THEME_INIT_SCRIPT}${ACCENT_INIT_SCRIPT}` }}
+        />
         {/* 路由切换加载动画：GSAP 进度条，替代骨架图闪烁 */}
         <RouteLoader />
         {/* 极验域名预热：提前完成 DNS/TLS 握手，缩短 gt4.js 与验证接口的建连等待 */}

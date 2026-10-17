@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  Palette,
   PenLine,
   Search,
   Sun,
@@ -24,6 +25,7 @@ import { useSiteConfig } from '@/components/site-config-context'
 import { MenuIcon } from '@/components/menu-icon'
 import { useTheme } from '@/components/theme'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { AccentPicker } from '@/components/accent-picker'
 
 export function Navbar() {
   const { user, loading, logout } = useAuth()
@@ -270,6 +272,7 @@ export function Navbar() {
             />
           </form>
 
+          <AccentPicker className={iconBtnSolid} />
           <ThemeToggle className={iconBtnSolid} />
 
           {loading ? (
@@ -467,6 +470,17 @@ export function Navbar() {
               外观模式
             </span>
             <ThemeToggle className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
+          </div>
+
+          {/* 移动端没有常驻导航栏，配色入口单独列一行 */}
+          <div className="flex items-center justify-between px-3 py-2">
+            <span className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-card text-foreground">
+                <Palette className="h-4 w-4" />
+              </span>
+              配色主题
+            </span>
+            <AccentPicker className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-accent active:scale-95" />
           </div>
 
           {user ? (

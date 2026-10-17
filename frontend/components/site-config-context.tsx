@@ -58,6 +58,8 @@ export interface SiteConfig {
   navbarHideAfterPx: number
   /** 向上滚动超过该像素后显示导航（与 hideAfter 形成回差，避免抖动）。 */
   navbarShowAfterPx: number
+  /** 站点默认配色色相（0-360）。访客本地无自己的选择时，用它作为首屏配色。 */
+  accentHue: number
   emailCode: EmailCodeConfig
   geetest: GeetestConfig
   lap: LapConfig
@@ -127,6 +129,7 @@ const DEFAULT_CONFIG: SiteConfig = {
   navbarAutoHide: false,
   navbarHideAfterPx: 200,
   navbarShowAfterPx: 40,
+  accentHue: 250,
   emailCode: { on_register: false, on_login: false },
   geetest: DEFAULT_GEETEST,
   lap: DEFAULT_LAP,
@@ -171,6 +174,7 @@ interface RawSiteConfig {
   navbar_autohide?: boolean
   navbar_hide_after_px?: number
   navbar_show_after_px?: number
+  accent_hue?: number
   email_code?: Partial<EmailCodeConfig>
   geetest?: Partial<GeetestConfig>
   lap?: Partial<LapConfig>
@@ -272,6 +276,7 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
   navbarAutoHide: cfg.navbar_autohide ?? false,
   navbarHideAfterPx: cfg.navbar_hide_after_px ?? 200,
   navbarShowAfterPx: cfg.navbar_show_after_px ?? 40,
+  accentHue: cfg.accent_hue ?? 250,
           emailCode: {
             on_register: cfg.email_code?.on_register ?? false,
             on_login: cfg.email_code?.on_login ?? false,

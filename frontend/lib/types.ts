@@ -126,6 +126,8 @@ export interface SiteSettings {
   navbar_hide_after_px?: number
   /** 向上滚动超过该像素后显示导航。 */
   navbar_show_after_px?: number
+  /** 站点默认配色色相（0-360）。访客本地无选择时用它。 */
+  accent_hue?: number
   site_icp: string
   smtp_host: string
   smtp_port: string
