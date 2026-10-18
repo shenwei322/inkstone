@@ -13,6 +13,7 @@ import {
 } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { SecretInput } from '@/components/secret-input'
+import { Select } from '@/components/form-controls'
 import { useSiteConfigActions } from '@/components/site-config-context'
 import { hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
 import { PageLoading } from '@/components/page-loader'
@@ -434,14 +435,17 @@ export default function AdminSettingsPage() {
             />
             <div className="space-y-1.5">
               <label className="text-sm font-medium">文章页侧边栏</label>
-              <select
+              <Select
                 value={(form as unknown as Record<string, string>).article_sidebar ?? 'true'}
-                onChange={(e) => update('article_sidebar' as never, e.target.value as never)}
-                className={inputClass}
-              >
-                <option value="true">显示（右侧小工具）</option>
-                <option value="false">隐藏（通栏阅读）</option>
-              </select>
+                onChange={(v) => update('article_sidebar' as never, v as never)}
+                size="md"
+                className="w-full rounded-lg"
+                ariaLabel="文章页侧边栏显示方式"
+                options={[
+                  { value: 'true', label: '显示（右侧小工具）' },
+                  { value: 'false', label: '隐藏（通栏阅读）' },
+                ]}
+              />
             </div>
           </div>
 

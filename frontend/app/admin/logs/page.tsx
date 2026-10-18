@@ -24,6 +24,7 @@ import { downloadLogs, fetchLogOverview, fetchLogs } from '@/lib/api'
 import type { OperationLog } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { PageTransition } from '@/components/motion'
+import { Select } from '@/components/form-controls'
 import { RowLoading, Spinner } from '@/components/page-loader'
 
 const PAGE_SIZE = 30
@@ -55,6 +56,10 @@ const STATUS_OPTIONS: { key: string; label: string }[] = [
   { key: 'success', label: '仅成功' },
   { key: 'failed', label: '仅失败' },
 ]
+
+// Select 组件用 { value, label }，这里做一次模块级转换，避免每次渲染新建数组
+const RANGE_SELECT_OPTIONS = RANGES.map((o) => ({ value: o.key, label: o.label }))
+const STATUS_SELECT_OPTIONS = STATUS_OPTIONS.map((o) => ({ value: o.key, label: o.label }))
 
 function categoryLabel(key: string): string {
   return CATEGORIES.find((c) => c.key === key)?.label ?? key
@@ -239,34 +244,26 @@ export default function AdminLogsPage() {
               className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
             />
           </div>
-          <select
+          <Select
             value={status}
-            onChange={(e) => {
-              setStatus(e.target.value)
+            onChange={(v) => {
+              setStatus(v)
               setPage(1)
             }}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-          >
-            {STATUS_OPTIONS.map((o) => (
-              <option key={o.key} value={o.key}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select
+            options={STATUS_SELECT_OPTIONS}
+            ariaLabel="操作结果筛选"
+            className="min-w-[7.5rem]"
+          />
+          <Select
             value={range}
-            onChange={(e) => {
-              setRange(e.target.value)
+            onChange={(v) => {
+              setRange(v)
               setPage(1)
             }}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-          >
-            {RANGES.map((r) => (
-              <option key={r.key} value={r.key}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+            options={RANGE_SELECT_OPTIONS}
+            ariaLabel="时间范围筛选"
+            className="min-w-[7.5rem]"
+          />
         </div>
       </div>
 

@@ -386,9 +386,21 @@ body.has-wallpaper .bg-card {
   -webkit-backdrop-filter: blur(var(--surface-blur));
 }
 
-/* 导航栏：比卡片更透一点，滚动时仍然能看清下面的壁纸 */
-body.has-wallpaper header,
-body.has-wallpaper nav {
+/* 导航栏 / 页头容器。
+
+   ⚠️ 这里只应命中**页面级**的 header/nav 容器（如后台顶部条、老式通栏导航）。
+   前台导航已经收口到 .navbar-card 上（见文件末尾 .navbar-card 一节），
+   而 .navbar-card 本身就是一个 <header>，它内部的菜单容器又是一个 <nav>。
+   如果这条规则无差别地给 header 和 nav 都刷上 62% 的 --background，
+   内层 <nav> 就会在 .navbar-card 的表面上再叠一块只有「菜单项那么宽」的
+   浅色矩形 —— 表现就是「友情链接背后有一块明显的白块」，
+   而且因为它的边界正好贴着菜单项，看起来像按钮自带了白色底。
+   --background 在浅色下是 oklch(.985) 近乎纯白，叠出来必然比周围亮。
+
+   所以用 :not() 把 .navbar-card 及其后代排除掉：.navbar-card 自己的底色
+   由文件末尾那一节单独负责，内层 nav 保持透明。 */
+body.has-wallpaper header:not(.navbar-card),
+body.has-wallpaper nav:not(.navbar-card nav) {
   background-color: color-mix(in srgb, var(--background) 62%, transparent);
   backdrop-filter: blur(var(--surface-blur));
   -webkit-backdrop-filter: blur(var(--surface-blur));
@@ -435,8 +447,8 @@ body.has-wallpaper .prose blockquote {
      通常也更需要稳定的阅读背景，因此同样关闭表面模糊（模糊最吃 GPU）。 */
 @media (prefers-reduced-transparency: reduce) {
   body.has-wallpaper .bg-card,
-  body.has-wallpaper header,
-  body.has-wallpaper nav,
+  body.has-wallpaper header:not(.navbar-card),
+  body.has-wallpaper nav:not(.navbar-card nav),
   body.has-wallpaper footer,
   body.has-wallpaper .bg-background,
   body.has-wallpaper .bg-muted {
@@ -448,8 +460,8 @@ body.has-wallpaper .prose blockquote {
 
 @media (prefers-reduced-motion: reduce) {
   body.has-wallpaper .bg-card,
-  body.has-wallpaper header,
-  body.has-wallpaper nav,
+  body.has-wallpaper header:not(.navbar-card),
+  body.has-wallpaper nav:not(.navbar-card nav),
   body.has-wallpaper footer,
   body.has-wallpaper [role="menu"],
   body.has-wallpaper [role="dialog"],
@@ -1059,32 +1071,51 @@ body.has-wallpaper .card-hover:hover {
   color: var(--accent);
 }
 
-/* 底衬：绝对定位铺满按钮，默认透明且缩到 0.85，悬停时归位并显现 */
+/* 底衬：绝对定位铺满按钮，默认透明且缩到 0.85，悬停时归位并显现。
+
+   ⚠️ 底衬一律用「currentColor + 独立 alpha」，**不要**用 --btn-regular-bg /
+   --btn-regular-bg-hover 这类实心色。导航卡片表面是 82% 半透明 + 背景模糊
+   （见 .navbar-card），任何不透明色块叠上去都会把卡片后面的壁纸挡住，
+   于是当前页那一项变成一块颜色与背景不一致的方块 —— 就是「友情链接背后有块
+   色差补丁」的成因。
+
+   currentColor 让底衬始终是「文字色的淡蒙版」：未激活时跟随 75% 前景色，
+   激活时跟随 accent，天然和按钮自身协调；alpha 独立控制，不经过任何色彩
+   空间转换（oklch 在 srgb 下低比例混 transparent 会算出越界分量）。 */
 .btn-plain.scale-animation::before {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: -1;
+  /* 不再用 z-index: -1。负层级会让底衬被拍到 .navbar-card 的背景之后，
+     而卡片是 color-mix(card 82%, transparent) + backdrop-filter 的合成层，
+     底衬于是对着卡片背后的页面白底做混合，叠出一块偏白的色差补丁。
+     改为 z-index: 0 让底衬留在按钮自身的层叠上下文里，
+     再把按钮的文字内容提到 z-index: 1 之上，视觉顺序不变。 */
+  z-index: 0;
   border-radius: inherit;
-  background: var(--btn-regular-bg-hover);
+  background: currentColor;
   transform: scale(0.85);
   opacity: 0;
   transition:
     transform 0.2s ease-out,
-    opacity 0.2s ease-out,
-    background-color 0.2s ease-out;
+    opacity 0.2s ease-out;
+}
+
+/* 底衬上台后，按钮内的文字/图标要压在它上面 */
+.btn-plain > * {
+  position: relative;
+  z-index: 1;
 }
 
 .btn-plain.scale-animation:hover::before,
 .btn-plain.scale-animation:focus-visible::before {
   transform: scale(1);
-  opacity: 1;
+  opacity: 0.08;
 }
 
 .btn-plain.scale-animation:active::before {
-  background: var(--btn-regular-bg-active);
   transform: scale(1);
-  opacity: 1;
+  opacity: 0.14;
 }
 
 /* 点按回弹：Fuwari 的 active:scale-95 / active:scale-90 */
@@ -1092,15 +1123,29 @@ body.has-wallpaper .card-hover:hover {
   transform: scale(0.95);
 }
 
-/* 当前所处页面/被选中的导航按钮：底衬常显 + accent 文字 */
+/* 当前所处页面/被选中的导航按钮：只改文字颜色，**不铺底衬**。
+
+   为什么把底衬彻底去掉：
+   导航卡片是半透明表面，背后的壁纸/页面内容会透上来，卡片底色本身就不是
+   均匀的一块（壁纸的光斑、滚动过的正文都会影响它）。此时任何以 inset:0
+   铺满按钮的 ::before，都会在"透出的杂色"之上再叠一层矩形，边缘必然可见
+   —— 就是那种"有一点点白 / 一点点色差，很难受"的观感。alpha 从 0.1 压到
+   0.06 只是把色差从 13 降到 10 左右，照样看得见；压到 0.02 等于没有。
+   所以当前页直接不铺底衬，用 accent 文字做区分，既干净又不会在任何底色上
+   露出矩形边界。
+
+   注意：真正的底色稳定性由 .navbar-card 保证（壁纸模式下 88% 不透明），
+   不要靠给按钮加底衬来"盖住"卡片透出的杂色，那是本末倒置。
+
+   悬停态仍保留底衬（.btn-plain.scale-animation:hover::before），
+   那是用户主动交互、并且带 scale 动画，底衬的存在是可被理解的。 */
 .btn-plain.current-theme-btn {
   color: var(--accent);
 }
 
 .btn-plain.current-theme-btn::before {
+  opacity: 0;
   transform: scale(1);
-  opacity: 1;
-  background: var(--btn-regular-bg);
 }
 
 /* .btn-plain 自带 display: inline-flex，其优先级高于 Tailwind 的 md:hidden
@@ -1157,33 +1202,17 @@ body.has-wallpaper .admin-sidebar {
   backdrop-filter: blur(12px);
 }
 
-/* 壁纸模式下底衬改用「半透明遮罩」而不是实心色块：
-   实心 --btn-regular-bg 叠在半透导航卡片上会形成一块死白/死灰的方形补丁。
+/* 壁纸模式下的导航底衬已由 .btn-plain.scale-animation::before 统一处理
+   （currentColor + alpha：悬停 0.08、激活 0.1），不再需要单独覆盖。
 
-   用 currentColor + alpha 而非 color-mix(in srgb, var(--foreground) N%, transparent)：
-   后者在 --foreground 为 oklch 时、低混合比例下会算出越界分量，
-   正是「导航选项出现白色方框」的成因（详见下一条注释）。 */
-body.has-wallpaper .btn-plain.scale-animation::before {
-  background: currentColor;
-  opacity: 0.08;
-}
-
-/* 壁纸模式下的激活态底衬。
-   ⚠️ 这里**不能**用 color-mix(in srgb, var(--accent) 18%, transparent)：
-   --accent 现在是 oklch 值，在 srgb 空间按低比例混入透明色时，浏览器
-   算出的分量会越界（实测得到 rgb(-0.205 0.443 0.876)，红色分量为负），
-   渲染成一块异常发白的方块 —— 就是「导航选项有白色方框」的来源。
-   改用 currentColor + 独立 alpha：色相跟随文字（激活态文字即 --accent），
-   透明度由 alpha 通道控制，不经过任何色彩空间转换。 */
-body.has-wallpaper .btn-plain.current-theme-btn::before {
-  background: currentColor;
-  opacity: 0.14;
-}
-
-body.has-wallpaper .btn-plain.scale-animation:active::before {
-  background: currentColor;
-  opacity: 0.16;
-}
+   两条历史坑，都别加回来：
+   1) body.has-wallpaper .btn-plain.scale-animation::before { opacity: 0.08 }
+      特异性高于基础规则，把「默认不可见」的 opacity:0 覆盖掉，
+      结果壁纸模式下每个导航按钮都常挂一块淡色方框。
+   2) color-mix(in srgb, var(--accent) 18%, transparent)
+      --accent 是 oklch 值，在 srgb 空间低比例混入透明色会算出越界分量
+      （实测 rgb(-0.205 0.443 0.876)，红色分量为负），渲染成异常发白的方块。
+      currentColor + 独立 alpha 走 alpha 通道，不经过色彩空间转换。 */
 
 /* ---------------------------------------------------------------------------
    .meta-icon —— Fuwari 的元信息图标（圆角方块底衬）
@@ -1502,9 +1531,20 @@ body.has-wallpaper .article-card.card-base {
     box-shadow 0.25s ease;
 }
 
-/* 壁纸模式下导航比卡片更透一点，滚动时仍能看见下面的壁纸 */
+/* 壁纸模式下的导航卡片。
+
+   历史坑：这里曾经是 color-mix(in srgb, var(--background) 62%, transparent)
+   —— 只有 62% 不透明，而 backdrop-filter 在部分环境（软件渲染、显卡驱动禁用、
+   或浏览器把合成层降级时）会算出 none 而不生效。此时卡片完全靠这 62% 去和壁纸
+   混合，壁纸上任何一处亮度变化都会直接透进来，表现为导航栏里一块块深浅不一的
+   「白斑」，压在按钮下面就像按钮自带了白色底。当前页那一项的 ::before 底衬
+   再怎么调 alpha 都盖不住它，因为色差来自壁纸本身。
+
+   现在改为 88% 不透明：壁纸仍能透出一点点纹理，但不足以在导航栏面上形成
+   可辨识的色块，按钮/文字/激活态都落在一个稳定的底色上。
+   backdrop-filter 保留，能用则进一步柔化；不能用也不影响观感。 */
 body.has-wallpaper .navbar-card {
-  background-color: color-mix(in srgb, var(--background) 62%, transparent);
+  background-color: color-mix(in srgb, var(--card) 88%, transparent);
 }
 
 /* 减少透明偏好：退回实心表面 */

@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-context'
 import { ApiError, type CaptchaCredential } from '@/lib/api'
 import { useSiteConfig } from '@/components/site-config-context'
 import { EmailCodeInput } from '@/components/email-code-input'
+import { Checkbox } from '@/components/form-controls'
 import { useCaptcha } from '@/components/captcha'
 import { Reveal, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
 import { inputClass } from '@/lib/ui'
@@ -144,53 +145,20 @@ export default function LoginPage() {
             {/* 「记住我」：勾选后 30 天免登录。文案刻意写明是「30 天」而不是
                 含糊的「记住我」——用户需要知道这个勾选到底把登录态延长多久，
                 这也是它与「不勾选」的唯一区别（后者关掉浏览器即失效）。
-
-                原生 checkbox 各平台渲染差异大（Windows 上偏方、macOS 上偏圆，
-                且无法跟随主题），所以这里把它降级成 sr-only 只保留语义与键盘
-                焦点，视觉交给下面这个 span：选中态填 accent 底色 + 白勾，
-                悬停时边框先亮起来做预告。对勾的缩放淡入与底色切换都走
-                CSS transition（合成器线程），不用 GSAP——避免 rAF 被节流。 */}
-            <label className="group flex cursor-pointer items-start gap-2.5 text-sm">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="peer sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-all duration-200 ease-out peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-card ${
-                  rememberMe
-                    ? 'border-accent bg-accent shadow-[0_2px_8px_-2px_var(--accent)]'
-                    : 'border-border bg-background group-hover:border-accent/60 group-hover:bg-muted/50'
-                }`}
-              >
-                <svg
-                  viewBox="0 0 12 12"
-                  fill="none"
-                  aria-hidden="true"
-                  className={`h-3 w-3 text-white transition-all duration-200 ease-out ${
-                    rememberMe ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
-                  }`}
-                >
-                  <path
-                    d="M2.6 6.2 4.9 8.5 9.4 3.9"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </span>
-              <span>
-                <span className="font-medium transition-colors group-hover:text-accent">
+                控件本体用 components/form-controls 的 Checkbox：原生 checkbox
+                各平台渲染差异大且无法跟随主题，该项目内所有勾选框统一走它。 */}
+            <Checkbox
+              checked={rememberMe}
+              onChange={setRememberMe}
+              label={
+                <>
                   记住我
-                </span>
-                <span className="ml-1.5 text-xs text-muted-foreground">
-                  （30 天内无需重新登录；共用电脑请取消勾选）
-                </span>
-              </span>
-            </label>
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                    （30 天内无需重新登录；共用电脑请取消勾选）
+                  </span>
+                </>
+              }
+            />
 
             {error && (
               <p

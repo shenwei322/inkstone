@@ -1,6 +1,7 @@
 'use client'
 
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { Select } from '@/components/form-controls'
 
 export interface PaginationProps {
   /** 当前页码，从 1 开始 */
@@ -75,18 +76,14 @@ export function Pagination({
       {pageSizeOptions.length > 1 && (
         <label className="flex items-center gap-1.5 text-muted-foreground">
           每页
-          <select
-            value={pageSize}
-            onChange={(e) => onChange(1, Number(e.target.value))}
-            aria-label="每页条数"
-            className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-          >
-            {pageSizeOptions.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={String(pageSize)}
+            onChange={(v) => onChange(1, Number(v))}
+            size="xs"
+            ariaLabel="每页条数"
+            menuWidth={96}
+            options={pageSizeOptions.map((n) => ({ value: String(n), label: String(n) }))}
+          />
           条
         </label>
       )}

@@ -35,6 +35,7 @@ import { markdownToHtml, htmlToMarkdown } from '@/lib/markdown'
 import { useNotify } from '@/components/toast'
 import { useAuth } from '@/lib/auth-context'
 import { ArticlePreview } from '@/components/article-preview'
+import { Checkbox, Select } from '@/components/form-controls'
 import { inputClass } from '@/lib/ui'
 
 function htmlToText(html: string): string {
@@ -175,6 +176,18 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
 
   const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: fetchCategories })
   const tagsQuery = useQuery({ queryKey: ['tags'], queryFn: fetchTags })
+
+  // Select 需要 value 一律为 string，分类 id 在提交时才转回 number
+  const categoryOptions = useMemo(
+    () => [
+      { value: '', label: '未分类' },
+      ...(categoriesQuery.data?.categories ?? []).map((cat) => ({
+        value: String(cat.id),
+        label: cat.name,
+      })),
+    ],
+    [categoriesQuery.data],
+  )
 
   const addTag = () => {
     const name = tagInput.trim()
@@ -640,18 +653,13 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
 
           <div className="mt-5 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={categoryId ?? ''}
-                onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : null)}
-                className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs outline-none transition-colors focus:border-accent"
-              >
-                <option value="">未分类</option>
-                {(categoriesQuery.data?.categories ?? []).map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={categoryId != null ? String(categoryId) : ''}
+                onChange={(v) => setCategoryId(v ? Number(v) : null)}
+                size="xs"
+                ariaLabel="文章分类"
+                options={categoryOptions}
+              />
 
               {/* 已选标签 */}
               {tags.map((t) => (
@@ -830,18 +838,16 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
               {/* 定时发布：勾选后才出现时间输入。datetime-local 给的是本地时间，
                   提交时用 new Date(value).toISOString() 转 RFC3339 */}
               <div className="space-y-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={scheduleEnabled}
-                    onChange={(e) => setScheduleEnabled(e.target.checked)}
-                    className="h-4 w-4 accent-[color:var(--accent)]"
-                  />
-                  <span className="flex items-center gap-1.5">
-                    <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
-                    定时发布
-                  </span>
-                </label>
+                <Checkbox
+                  checked={scheduleEnabled}
+                  onChange={setScheduleEnabled}
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+                      定时发布
+                    </span>
+                  }
+                />
                 {scheduleEnabled && (
                   <>
                     <input
@@ -859,18 +865,16 @@ function EditorShell({ mode, article, redirectBase }: EditorShellProps) {
 
               {/* 置顶：仅管理员可见 */}
               {isAdmin && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={isPinned}
-                    onChange={(e) => setIsPinned(e.target.checked)}
-                    className="h-4 w-4 accent-[color:var(--accent)]"
-                  />
-                  <span className="flex items-center gap-1.5">
-                    <Pin className="h-3.5 w-3.5 text-muted-foreground" />
-                    置顶这篇文章
-                  </span>
-                </label>
+                <Checkbox
+                  checked={isPinned}
+                  onChange={setIsPinned}
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <Pin className="h-3.5 w-3.5 text-muted-foreground" />
+                      置顶这篇文章
+                    </span>
+                  }
+                />
               )}
             </div>
           </details>

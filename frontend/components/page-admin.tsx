@@ -15,6 +15,7 @@ import {
 } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { RichEditor } from '@/components/rich-editor'
+import { Checkbox, Select } from '@/components/form-controls'
 import { PageTransition, Reveal, hoverTapScale } from '@/components/motion'
 import { PageLoading, RowLoading } from '@/components/page-loader'
 import type { PageItem } from '@/lib/api'
@@ -82,34 +83,24 @@ function PageEditor({
       </div>
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
-        <select
+        <Select
           value={template}
-          onChange={(e) => setTemplate(e.target.value)}
-          className="rounded-md border border-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-accent"
-        >
-          {templates.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-        <select
+          onChange={setTemplate}
+          size="xs"
+          ariaLabel="页面模板"
+          options={templates}
+        />
+        <Select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="rounded-md border border-border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-accent"
-        >
-          <option value="published">已发布</option>
-          <option value="draft">草稿</option>
-        </select>
-        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={showInNav}
-            onChange={(e) => setShowInNav(e.target.checked)}
-            className="h-4 w-4 accent-[color:var(--accent)]"
-          />
-          加入导航菜单建议位
-        </label>
+          onChange={setStatus}
+          size="xs"
+          ariaLabel="页面状态"
+          options={[
+            { value: 'published', label: '已发布' },
+            { value: 'draft', label: '草稿' },
+          ]}
+        />
+        <Checkbox checked={showInNav} onChange={setShowInNav} label="加入导航菜单建议位" />
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           排序
           <input

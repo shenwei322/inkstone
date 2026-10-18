@@ -16,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { IconPicker } from '@/components/menu-icon'
+import { Checkbox, Select } from '@/components/form-controls'
 import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { updateAdminSettings, fetchAdminPages, ApiError } from '@/lib/api'
 import { useNotify } from '@/components/toast'
@@ -473,17 +474,16 @@ function WidgetsTab() {
       ))}
 
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Select
           value={addType}
-          onChange={(e) => setAddType(e.target.value as WidgetType)}
-          className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent"
-        >
-          {WIDGET_TYPES.map((t) => (
-            <option key={t.type} value={t.type}>
-              {t.label} — {t.desc}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setAddType(v as WidgetType)}
+          ariaLabel="新增小工具类型"
+          menuWidth={300}
+          options={WIDGET_TYPES.map((t) => ({
+            value: t.type,
+            label: `${t.label} — ${t.desc}`,
+          }))}
+        />
         <button
           type="button"
           onClick={addWidget}
@@ -685,20 +685,13 @@ function SidebarPositionTab() {
           </p>
         </div>
 
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-4">
-          <input
-            type="checkbox"
-            checked={autoHide}
-            onChange={(e) => setAutoHide(e.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
-          />
-          <span>
-            <span className="block text-sm font-medium">启用下滑隐藏</span>
-            <span className="mt-0.5 block text-xs text-muted-foreground">
-              关闭时导航栏始终固定在顶部
-            </span>
-          </span>
-        </label>
+        <Checkbox
+          checked={autoHide}
+          onChange={setAutoHide}
+          label="启用下滑隐藏"
+          description="关闭时导航栏始终固定在顶部"
+          className="rounded-lg border border-border p-4"
+        />
 
         {autoHide && (
           <div className="grid gap-4 sm:grid-cols-2">

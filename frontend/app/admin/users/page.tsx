@@ -20,9 +20,15 @@ import { useAuth } from '@/lib/auth-context'
 import { useNotify } from '@/components/toast'
 import { SecretInput } from '@/components/secret-input'
 import { Modal } from '@/components/modal'
+import { Select, type SelectOption } from '@/components/form-controls'
 import { inputClass } from '@/lib/ui'
 import { Pagination } from '@/components/pagination'
 import type { AdminUser } from '@/lib/types'
+
+const ROLE_OPTIONS: SelectOption<'admin' | 'user'>[] = [
+  { value: 'user', label: '用户' },
+  { value: 'admin', label: '管理员' },
+]
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value)
@@ -522,15 +528,14 @@ function UserRow({
             管理员
           </span>
         ) : (
-          <select
+          <Select
             value={u.role}
-            onChange={(e) => onRoleChange(u.id, e.target.value as 'admin' | 'user')}
+            onChange={(role) => onRoleChange(u.id, role)}
             disabled={pending}
-            className="rounded-md border border-border bg-transparent px-2 py-1 text-xs outline-none transition-colors hover:border-accent/40 disabled:opacity-50"
-          >
-            <option value="user">用户</option>
-            <option value="admin">管理员</option>
-          </select>
+            size="xs"
+            ariaLabel={`${u.username} 的角色`}
+            options={ROLE_OPTIONS}
+          />
         )}
       </td>
       <td className="px-5 py-3.5">
