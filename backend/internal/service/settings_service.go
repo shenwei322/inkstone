@@ -25,22 +25,22 @@ const (
 	// 三个键配合：总开关 + 下滑多少像素后隐藏 + 上滑多少像素后显示。
 	// 分成两个距离而不是一个，是为了避免「阈值附近抖动」：
 	// 隐藏阈值小、显示阈值大，中间留出一段回差区间，轻微回滚不会让导航反复闪。
-	SettingNavbarAutoHide     = "navbar_autohide"       // "true"/"false"，默认 false
-	SettingNavbarHideAfterPx  = "navbar_hide_after_px"  // 向下滚动超过该像素后隐藏，默认 200
-	SettingNavbarShowAfterPx  = "navbar_show_after_px"  // 向上滚动超过该像素后显示，默认 40
+	SettingNavbarAutoHide    = "navbar_autohide"      // "true"/"false"，默认 false
+	SettingNavbarHideAfterPx = "navbar_hide_after_px" // 向下滚动超过该像素后隐藏，默认 200
+	SettingNavbarShowAfterPx = "navbar_show_after_px" // 向上滚动超过该像素后显示，默认 40
 	// 站点默认配色主题：访客首次访问（本地没有自己的选择）时使用的色相。
 	// 存的是色相角度数字，而非预设 id —— 这样后台可以直接给一个滑块，
 	// 也便于日后调整预设而不用迁移历史数据。
-	SettingAccentHue = "accent_hue" // 0-360，默认 250（靛蓝）
-	SettingICP               = "site_icp"           // string
-	SettingSMTPHost          = "smtp_host"
-	SettingSMTPPort          = "smtp_port" // string digits
-	SettingSMTPUser          = "smtp_user"
-	SettingSMTPPass          = "smtp_pass"
-	SettingSMTPFrom          = "smtp_from"         // From header, e.g. "Blog <no-reply@x.com>"
-	SettingUploadMaxMB       = "upload_max_mb"     // 文件管理：最大上传大小（MB）
-	SettingUploadSpeedKB     = "upload_speed_kb"   // 文件管理：上传限速（KB/s，0=不限）
-	SettingDownloadSpeedKB   = "download_speed_kb" // 文件管理：下载限速（KB/s，0=不限）
+	SettingAccentHue       = "accent_hue" // 0-360，默认 250（靛蓝）
+	SettingICP             = "site_icp"   // string
+	SettingSMTPHost        = "smtp_host"
+	SettingSMTPPort        = "smtp_port" // string digits
+	SettingSMTPUser        = "smtp_user"
+	SettingSMTPPass        = "smtp_pass"
+	SettingSMTPFrom        = "smtp_from"         // From header, e.g. "Blog <no-reply@x.com>"
+	SettingUploadMaxMB     = "upload_max_mb"     // 文件管理：最大上传大小（MB）
+	SettingUploadSpeedKB   = "upload_speed_kb"   // 文件管理：上传限速（KB/s，0=不限）
+	SettingDownloadSpeedKB = "download_speed_kb" // 文件管理：下载限速（KB/s，0=不限）
 
 	// 安全防护
 	SettingSecurityEnabled      = "security_enabled"       // 主开关
@@ -49,6 +49,21 @@ const (
 	SettingSecurityCommentMax   = "security_comment_max"   // 评论次数上限/10 分钟
 	SettingSecurityAPIMax       = "security_api_max"       // 单 IP API 请求上限/分钟
 	SettingSecurityBlockMinutes = "security_block_minutes" // 触发后封禁时长（分钟）
+
+	// IP 访问记录与自动封禁（后台「IP 管理」页）
+	//
+	// 这一组与上面的「限流」是两套机制，别混淆：
+	//   限流（security_*）是**请求级**拦截：超预算的请求当场 429，不落记录；
+	//   IP 封禁（ip_guard_*）是**来源级**拦截：先把访问写进明细表、
+	//   按窗口统计，超过阈值就把整个 IP 拉黑，此后连静态资源都进不来。
+	// 前者防瞬时刷接口，后者防持续的扫描 / CC。
+	SettingIPGuardEnabled   = "ip_guard_enabled"   // 总开关（默认 true：只记录，不自动封）
+	SettingIPGuardAutoBan   = "ip_guard_auto_ban"  // 是否启用自动封禁（默认 false：先观察再开）
+	SettingIPGuardWindow    = "ip_guard_window"    // 统计窗口（分钟，默认 5）
+	SettingIPGuardMax       = "ip_guard_max"       // 窗口内允许的请求数上限（默认 600）
+	SettingIPGuardBanMin    = "ip_guard_ban_min"   // 自动封禁时长（分钟，默认 60；0 = 永久）
+	SettingIPGuardDays      = "ip_guard_days"      // 访问明细保留天数（默认 7）
+	SettingIPGuardWhitelist = "ip_guard_whitelist" // 白名单 IP/CIDR，逗号或换行分隔，永不封禁
 
 	// 邮箱验证码
 	SettingEmailCodeOnRegister = "email_code_on_register" // 注册需邮箱验证码
@@ -167,6 +182,18 @@ var settingDefaults = map[string]string{
 	SettingSecurityAPIMax:       "600",
 	SettingSecurityBlockMinutes: "15",
 
+	// IP 访问记录：默认开启记录、默认**关闭**自动封禁。
+	// 默认不封是有意的——谁都不希望升级完第二天发现搜索引擎爬虫
+	// 或自家 RSS 阅读器被自己站点封了。运维先在列表里看清楚常态流量，
+	// 再打开自动封禁并把阈值调到常态之上。
+	SettingIPGuardEnabled:   "true",
+	SettingIPGuardAutoBan:   "false",
+	SettingIPGuardWindow:    "5",
+	SettingIPGuardMax:       "600",
+	SettingIPGuardBanMin:    "60",
+	SettingIPGuardDays:      "7",
+	SettingIPGuardWhitelist: "",
+
 	// 评论治理默认值：默认不审核（个人博客敞开发言更自然），敏感词为空，
 	// 通知关闭（避免 SMTP 未配置时尝试发信刷错误日志）。
 	SettingCommentAudit:    "false",
@@ -255,6 +282,18 @@ var maskKeys = map[string]bool{
 	SettingLapSecretKey:      true,
 }
 
+// publicHiddenPrefixes 是一整组都不下发给访客的设置前缀。
+//
+// 为什么不逐个列 key：IP 封禁这一组的成员还会增加（阈值、窗口、保留期…），
+// 每加一个都要记得回来改白名单，漏一次就是把防护参数永久暴露给匿名访客。
+// 按前缀过滤，新增成员自动继承「不公开」。
+//
+// 与 maskKeys 的区别：maskKeys 是「密钥」，后台也只给 _set 布尔值；
+// 这里的值后台必须能看到并编辑。而访客站一个都用不上——
+// 尤其 ip_guard_whitelist：把内网网段与运维固定出口 IP 暴露出去，
+// 等于免费告诉对方「从哪些地址打过来不会被封」。
+var publicHiddenPrefixes = []string{"ip_guard_"}
+
 // lapHiddenKeys 是后台不再展示的 Lap 技术配置（自托管场景仍可通过 DB /
 // 环境变量覆盖）。Update 对它们做「空值保持原值」保护：任何渠道（含后台
 // 误操作/API 直调）提交空串都不会把已配置的自托管值清空——配置丢失时
@@ -272,10 +311,37 @@ type SettingsService struct {
 	mu        sync.RWMutex
 	cache     map[string]string
 	cacheTime time.Time
+
+	// onUpdate 是「设置保存后」的旁路通知，用于让别的服务的本地缓存
+	// 立刻失效。IPGuardService 自己缓存了阈值（每请求都要用，不能每次都
+	// 反序列化整张设置表），如果不通知，运维改完阈值要等最多 10 秒才生效，
+	// 调阈值时这个延迟会让人以为「设置没保存」。
+	onUpdateMu sync.RWMutex
+	onUpdate   []func()
 }
 
 func NewSettingsService(db *gorm.DB) *SettingsService {
 	return &SettingsService{db: db}
+}
+
+// OnUpdate 注册设置变更回调（在 Update 成功、缓存清空之后同步调用）。
+func (s *SettingsService) OnUpdate(fn func()) {
+	if s == nil || fn == nil {
+		return
+	}
+	s.onUpdateMu.Lock()
+	s.onUpdate = append(s.onUpdate, fn)
+	s.onUpdateMu.Unlock()
+}
+
+func (s *SettingsService) notifyUpdate() {
+	s.onUpdateMu.RLock()
+	fns := make([]func(), len(s.onUpdate))
+	copy(fns, s.onUpdate)
+	s.onUpdateMu.RUnlock()
+	for _, fn := range fns {
+		fn()
+	}
 }
 
 // All returns every known setting, applying defaults for unset keys.
@@ -412,6 +478,8 @@ func (s *SettingsService) Update(payload map[string]any) error {
 	s.mu.Lock()
 	s.cacheTime = time.Time{}
 	s.mu.Unlock()
+	// 通知订阅者（IPGuardService 的阈值快照、白名单等）立即重读
+	s.notifyUpdate()
 	return nil
 }
 
@@ -462,6 +530,10 @@ func (s *SettingsService) Public() (map[string]any, error) {
 	out := make(map[string]any, len(all))
 	for k, v := range all {
 		if maskKeys[k] {
+			continue
+		}
+		// IP 封禁这组参数与白名单不下发给访客（见 publicHiddenPrefixes）
+		if hasPublicHiddenPrefix(k) {
 			continue
 		}
 		if jsonSettingKeys[k] {
@@ -552,6 +624,16 @@ func copyMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+// hasPublicHiddenPrefix 报告该 key 是否属于「不对外公开」的运维参数组。
+func hasPublicHiddenPrefix(key string) bool {
+	for _, p := range publicHiddenPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func marshalValue(raw any) (string, error) {

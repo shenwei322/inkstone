@@ -65,6 +65,10 @@ func NewDB() *gorm.DB {
 		// 邮箱验证码同理：收信再回来填的过程足以跨实例，
 		// 内存 map 下用户会看到「验证码已过期」而邮件其实刚到。
 		&model.EmailCode{},
+		// IP 访问明细与封禁。两张表都由后台「IP 管理」页驱动：
+		// 明细走分钟桶合并写入（见 repository/ip_repo.go），封禁走惰性过期。
+		&model.IPAccessLog{},
+		&model.IPBan{},
 	); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}

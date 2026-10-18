@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Fingerprint, Gauge, KeyRound, Mail, ShieldCheck } from 'lucide-react'
+import { Check, Fingerprint, Gauge, Globe2, KeyRound, Mail, ShieldCheck } from 'lucide-react'
 import { fetchAdminSettings, updateAdminSettings, ApiError } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { SecretInput } from '@/components/secret-input'
-import { PageTransition, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
+import { hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
 import { PageLoading } from '@/components/page-loader'
+import { AdminPageHeader } from '@/components/admin-page'
 
 const inputClass =
   'w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground/60 focus:border-accent focus:ring-2 focus:ring-accent/20'
@@ -43,6 +44,14 @@ interface SecurityForm {
   pow_memory_mb: number
   pow_rounds: number
   pow_min_events: number
+  // IP 访问记录 / 自动封禁（对应后端 SettingIPGuard*，见 settings_service.go）
+  ip_guard_enabled: boolean
+  ip_guard_auto_ban: boolean
+  ip_guard_window: number
+  ip_guard_max: number
+  ip_guard_ban_min: number
+  ip_guard_days: number
+  ip_guard_whitelist: string
 }
 
 function Toggle({
@@ -161,6 +170,13 @@ export default function AdminSecurityPage() {
         pow_memory_mb: toNum(s.pow_memory_mb, 8),
         pow_rounds: toNum(s.pow_rounds, 4),
         pow_min_events: toNum(s.pow_min_events, 3),
+        ip_guard_enabled: toBool(s.ip_guard_enabled, true),
+        ip_guard_auto_ban: toBool(s.ip_guard_auto_ban, false),
+        ip_guard_window: toNum(s.ip_guard_window, 5),
+        ip_guard_max: toNum(s.ip_guard_max, 600),
+        ip_guard_ban_min: toNum(s.ip_guard_ban_min, 60),
+        ip_guard_days: toNum(s.ip_guard_days, 7),
+        ip_guard_whitelist: typeof s.ip_guard_whitelist === 'string' ? s.ip_guard_whitelist : '',
       })
     }, 0)
     return () => clearTimeout(t)
@@ -197,7 +213,7 @@ export default function AdminSecurityPage() {
   if (settingsQuery.isLoading || !form) {
     return (
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">安全防护</h1>
+        <AdminPageHeader title="安全防护" />
         <div className="mt-6">
           <PageLoading minHeight="8rem" />
         </div>
@@ -209,23 +225,21 @@ export default function AdminSecurityPage() {
     setForm((f) => (f ? { ...f, [key]: value } : f))
 
   return (
-    <PageTransition>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">安全防护</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            访问限流与邮箱验证码，抵御垃圾注册、暴力破解与刷接口
-          </p>
-        </div>
-        <button
-          onClick={() => save.mutate()}
-          disabled={save.isPending}
-          {...hoverTapScale}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
-        >
-          {save.isPending ? '保存中...' : '保存设置'}
-        </button>
-      </div>
+    <div>
+      <AdminPageHeader
+        title="安全防护"
+        description={<>访问限流与邮箱验证码，抵御垃圾注册、暴力破解与刷接口</>}
+        actions={
+          <button
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            {...hoverTapScale}
+            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
+          >
+            {save.isPending ? '保存中...' : '保存设置'}
+          </button>
+        }
+      />
 
       <div className="mt-6 grid gap-4">
         <Section icon={<ShieldCheck className="h-4 w-4 text-emerald-500" />} title="安全防护总开关">
@@ -294,7 +308,98 @@ export default function AdminSecurityPage() {
             </div>
           </div>
           <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-            说明：限流为滑动窗口计数，0 表示不限制该项。
+            说明：限流为滑动窗口计数，0 表示不限制该项。限流只拒绝单个请求（返回 429），
+            不会把 IP 拉黑；要做到「整个来源直接拒绝」，请用下面的 IP 访问封禁。
+          </p>
+        </Section>
+
+        {/* IP 访问记录与封禁 */}
+        <Section icon={<Globe2 className="h-4 w-4 text-rose-500" />} title="IP 访问封禁">
+          <p className="text-xs text-muted-foreground">
+            记录每个 IP 的访问路径与频率，超阈值时把整个来源拉黑（连静态资源一并拒绝）。
+            明细与封禁列表在「IP 管理」页查看。
+          </p>
+
+          <div className="mt-3 divide-y divide-border border-t border-border">
+            <Toggle
+              checked={form.ip_guard_enabled}
+              onChange={(v) => update('ip_guard_enabled', v)}
+              label="记录访客 IP 与访问路径"
+              desc="关闭后不再写入访问明细，已封禁的 IP 仍会被拦截"
+            />
+            <Toggle
+              checked={form.ip_guard_auto_ban}
+              onChange={(v) => update('ip_guard_auto_ban', v)}
+              label="启用自动封禁"
+              desc="单 IP 在统计窗口内请求数超过阈值时自动封禁。建议先观察几天常态流量再开启"
+            />
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">统计窗口（分钟）</label>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={form.ip_guard_window}
+                onChange={(e) => update('ip_guard_window', Number(e.target.value))}
+                className={inputClass}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">窗口内请求上限（次）</label>
+              <input
+                type="number"
+                min={1}
+                value={form.ip_guard_max}
+                onChange={(e) => update('ip_guard_max', Number(e.target.value))}
+                className={inputClass}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">自动封禁时长（分钟）</label>
+              <input
+                type="number"
+                min={0}
+                value={form.ip_guard_ban_min}
+                onChange={(e) => update('ip_guard_ban_min', Number(e.target.value))}
+                className={inputClass}
+              />
+              <p className="text-xs text-muted-foreground">填 0 表示永久封禁</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">访问明细保留（天）</label>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={form.ip_guard_days}
+                onChange={(e) => update('ip_guard_days', Number(e.target.value))}
+                className={inputClass}
+              />
+              <p className="text-xs text-muted-foreground">过期明细每天自动清理一次</p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-1.5">
+            <label className="text-sm font-medium">IP 白名单</label>
+            <textarea
+              rows={3}
+              value={form.ip_guard_whitelist}
+              onChange={(e) => update('ip_guard_whitelist', e.target.value)}
+              placeholder={'192.168.0.0/16\n203.0.113.7'}
+              className={`${inputClass} font-mono text-xs`}
+            />
+            <p className="text-xs text-muted-foreground">
+              每行一个 IP 或 CIDR，逗号分隔也可以。白名单内的地址永不自动封禁，也无法被手动封禁——
+              建议先把自己的固定出口 IP 和搜索引擎爬虫网段加进来。
+            </p>
+          </div>
+
+          <p className="mt-3 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+            说明：访问明细存放明文 IP 与访问路径（与「流量统计」里只存 IP 哈希是两回事），
+            因此默认只保留 7 天。同机反代探活与开发期本机访问默认不记录，避免刷屏。
           </p>
         </Section>
 
@@ -626,6 +731,6 @@ export default function AdminSecurityPage() {
           </ul>
         </Section>
       </div>
-    </PageTransition>
+    </div>
   )
 }

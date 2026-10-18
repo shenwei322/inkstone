@@ -53,7 +53,14 @@ type Config struct {
 	TrustedProxies []string
 
 	// 在线更新系统（后台「系统更新」页）
-	UpdateEnabled     bool   // 总开关（UPDATE_ENABLED）
+	UpdateEnabled bool // 总开关（UPDATE_ENABLED）
+	// UpdateManualOnly 关闭后台的一键更新与回滚，页面只提示「有新版本」
+	// （UPDATE_MANUAL_ONLY，默认 true）。开启时 apply / rollback 接口直接
+	// 返回 403，更新由运维在服务器上手动执行；检查更新（check）不受影响，
+	// 否则连「有没有新版本」都无从提示。
+	// 只有显式设置 UPDATE_MANUAL_ONLY=false 才会恢复一键更新能力。
+	UpdateManualOnly bool
+
 	UpdateRepoURL     string // 上游仓库（UPDATE_REPO_URL）
 	UpdateBranch      string // 跟踪分支（UPDATE_BRANCH）
 	UpdateSource      string // 更新源类型：commits（默认：提交+源码包）/ releases（GitHub Releases+镜像包）
@@ -270,20 +277,20 @@ func Load() *Config {
 	cookieInsecure := !strings.EqualFold(appEnv, "production")
 
 	return &Config{
-		AppEnv:       appEnv,
-		Port:         getEnv("PORT", "8080"),
-		DBHost:       getEnv("DB_HOST", "localhost"),
-		DBPort:       getEnv("DB_PORT", "5432"),
-		DBUser:       getEnv("DB_USER", "blog"),
-		DBPassword:   getEnv("DB_PASSWORD", "blog_dev_password"),
-		DBName:       getEnv("DB_NAME", "blog_platform"),
-		JWTSecret:    getEnv("JWT_SECRET", "dev-only-secret-change-in-production"),
-		AccessTTL:    15 * time.Minute,
-		RefreshTTL:   7 * 24 * time.Hour,
+		AppEnv:     appEnv,
+		Port:       getEnv("PORT", "8080"),
+		DBHost:     getEnv("DB_HOST", "localhost"),
+		DBPort:     getEnv("DB_PORT", "5432"),
+		DBUser:     getEnv("DB_USER", "blog"),
+		DBPassword: getEnv("DB_PASSWORD", "blog_dev_password"),
+		DBName:     getEnv("DB_NAME", "blog_platform"),
+		JWTSecret:  getEnv("JWT_SECRET", "dev-only-secret-change-in-production"),
+		AccessTTL:  15 * time.Minute,
+		RefreshTTL: 7 * 24 * time.Hour,
 		// 「记住我」的服务端硬上限：即便客户端要求更长的会话，也封顶 90 天。
 		// 用独立常量而不是复用 RefreshTTL，是为了让「7 天 token 有效期」与
 		// 「30 天免登录」两个语义解耦——改一个不会悄悄改掉另一个。
-		RememberTTL: 90 * 24 * time.Hour,
+		RememberTTL:  90 * 24 * time.Hour,
 		FrontendURL:  getEnv("FRONTEND_URL", "http://localhost:3000"),
 		AdminURL:     getEnv("ADMIN_URL", "http://localhost:3001"),
 		PublicAPIURL: getEnv("PUBLIC_API_URL", ""),
@@ -300,6 +307,7 @@ func Load() *Config {
 		TrustedProxies: parseTrustedProxies(os.Getenv("TRUSTED_PROXIES")),
 
 		UpdateEnabled:      getEnv("UPDATE_ENABLED", "true") == "true",
+		UpdateManualOnly:   getEnv("UPDATE_MANUAL_ONLY", "true") != "false",
 		UpdateRepoURL:      getEnv("UPDATE_REPO_URL", "https://github.com/shenwei234/inkstone"),
 		UpdateBranch:       getEnv("UPDATE_BRANCH", "main"),
 		UpdateSource:       normalizeUpdateSource(getEnv("UPDATE_SOURCE", "")),

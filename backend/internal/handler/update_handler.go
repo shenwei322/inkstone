@@ -15,10 +15,13 @@ import (
 type UpdateHandler struct {
 	updates *service.UpdateService
 	logs    *service.LogService
+	// manualOnly 为 true 时后台只提示新版本：apply / rollback 一律拒绝，
+	// 更新动作交给运维在服务器上手动执行（UPDATE_MANUAL_ONLY，默认 true）。
+	manualOnly bool
 }
 
-func NewUpdateHandler(updates *service.UpdateService, logs *service.LogService) *UpdateHandler {
-	return &UpdateHandler{updates: updates, logs: logs}
+func NewUpdateHandler(updates *service.UpdateService, logs *service.LogService, manualOnly bool) *UpdateHandler {
+	return &UpdateHandler{updates: updates, logs: logs, manualOnly: manualOnly}
 }
 
 // Status handles GET /admin/system/update — 版本信息、进度、历史、备份。
@@ -30,6 +33,8 @@ func (h *UpdateHandler) Status(c *gin.Context) {
 		"update":  h.updates.Status(),
 		"backups": h.updates.Backups(),
 		"agent":   h.updates.AgentResult(),
+		// 前端据此隐藏「立即更新 / 回滚」入口：只提示有新版本，不提供执行能力
+		"manual_only": h.manualOnly,
 	})
 }
 
@@ -64,6 +69,15 @@ func (h *UpdateHandler) Check(c *gin.Context) {
 // 目标标识：commits 模式传 commit 哈希；releases 模式传版本 tag（v1.28.0），
 // 也接受语义等价的 target 字段（与前端字段名解耦，避免前端改不动后端）。
 func (h *UpdateHandler) Apply(c *gin.Context) {
+	if h.manualOnly {
+		// 默认走这条分支：后台不再执行任何自动更新（不可逆的源码替换 / 镜像安装）
+		recordOp(h.logs, c, model.LogCategorySystem, "系统更新", "已停用一键更新，请求被拒绝", false)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "后台已停用一键更新，请按「系统更新」页的手动更新步骤在服务器上执行",
+		})
+		return
+	}
+
 	var req struct {
 		Commit  string `json:"commit"`  // 目标提交（留空 = 上游最新）
 		Target  string `json:"target"`  // 目标版本（releases 模式；优先于 commit）
@@ -117,6 +131,14 @@ func (h *UpdateHandler) Apply(c *gin.Context) {
 
 // Rollback handles POST /admin/system/update/rollback — 回滚到指定备份。
 func (h *UpdateHandler) Rollback(c *gin.Context) {
+	if h.manualOnly {
+		recordOp(h.logs, c, model.LogCategorySystem, "回滚系统更新", "已停用一键回滚，请求被拒绝", false)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "后台已停用一键回滚，请在服务器上手动恢复备份",
+		})
+		return
+	}
+
 	var req struct {
 		BackupID string `json:"backup_id" binding:"required"`
 		Confirm  bool   `json:"confirm"`

@@ -94,6 +94,12 @@ func main() {
 	logRepo := repository.NewOperationLogRepository(db)
 	logSvc := service.NewLogService(logRepo)
 
+	// IP 访问记录 + 封禁。与 statSvc 各管一摊：
+	//   statSvc 只留 IP 哈希做 UV 去重（隐私优先）；
+	//   ipGuardSvc 存明文 IP + 路径，供后台排查与封禁。
+	ipRepo := repository.NewIPRepository(db)
+	ipGuardSvc := service.NewIPGuardService(ipRepo, settingsSvc)
+
 	// 数据备份：快照落在 <UPLOAD_DIR>/../backups，与数据卷同处一个目录，
 	// 容器重建后仍保留在生产编排的绑定挂载里。
 	backupSvc := service.NewBackupService(db, filepath.Join(filepath.Dir(filepath.Clean(cfg.UploadDir)), "backups"))
@@ -143,6 +149,7 @@ func main() {
 	fileHandler := handler.NewFileHandler(fileSvc, cfg.PublicAPIURL, logSvc)
 	statHandler := handler.NewStatHandler(statSvc)
 	logHandler := handler.NewLogHandler(logSvc)
+	ipHandler := handler.NewIPHandler(ipGuardSvc, logSvc)
 	backupHandler := handler.NewBackupHandler(backupSvc, logSvc)
 	emailCodeHandler := handler.NewEmailCodeHandler(emailCodeSvc)
 	adminTagHandler := handler.NewAdminTagHandler(taxonomySvc, logSvc)
@@ -158,7 +165,11 @@ func main() {
 
 	// 在线更新：检查上游提交、下载镜像包、替换源码、触发重建
 	updateSvc := service.NewUpdateService(cfg, logSvc)
-	updateHandler := handler.NewUpdateHandler(updateSvc, logSvc)
+	updateHandler := handler.NewUpdateHandler(updateSvc, logSvc, cfg.UpdateManualOnly)
+	// 手动更新模式要显式告警：否则运维在后台找不到「立即更新」按钮会以为功能坏了
+	if cfg.UpdateManualOnly {
+		log.Printf("[update] 手动更新模式：后台只提示新版本，apply/rollback 接口已停用（UPDATE_MANUAL_ONLY=false 可恢复一键更新）")
+	}
 	updateSource := "commits（提交 + 源码包）"
 	if cfg.UpdateSource == config.UpdateSourceReleases {
 		updateSource = "releases（GitHub Releases + 镜像包）"
@@ -204,7 +215,14 @@ func main() {
 	// 只影响 Cache-Control 的中间件（如 ETag 生成）。
 	router.Use(middleware.SecurityHeaders())
 	router.Use(middleware.CachePolicy())
+	// IP 封禁拦截放在流量统计之前：被封的 IP 的请求不该再累加进 PV/带宽，
+	// 否则攻击流量会把后台的流量曲线撑出一个虚假的尖峰。
+	// 也必须早于 CSRF / CORS 与全部业务中间件 —— 被封的请求连校验都不该走到。
+	router.Use(middleware.IPBanGuard(ipGuardSvc))
 	router.Use(middleware.TrafficStats(statSvc))
+	// 访问记录在 c.Next() 之后执行，注册位置只影响「包住哪些中间件」，
+	// 不影响记录时点。放在这里与统计并列，能覆盖到后面全部子路由（含 404）。
+	router.Use(middleware.IPAccessRecorder(ipGuardSvc))
 	// 允许的源：访客站 + 独立管理后台（后台跨源部署时携带 Authorization 请求）
 	allowedOrigins := []string{cfg.FrontendURL}
 	if cfg.AdminURL != "" && !strings.EqualFold(cfg.AdminURL, cfg.FrontendURL) {
@@ -463,6 +481,19 @@ func main() {
 			admin.GET("/logs/overview", logHandler.Overview)
 			admin.GET("/logs/stats", logHandler.Stats)
 			admin.GET("/logs/export", logHandler.Export)
+
+			// IP 管理：访问明细、排行、单 IP 路径分布、封禁增删查
+			admin.GET("/ip/access", ipHandler.ListAccess)
+			admin.GET("/ip/overview", ipHandler.Overview)
+			admin.GET("/ip/top", ipHandler.Top)
+			admin.GET("/ip/bans", ipHandler.ListBans)
+			admin.POST("/ip/bans", ipHandler.CreateBan)
+			// 用 detail/:ip 而不是 /ip/:ip：后者会和同级的静态段
+			// （/ip/access、/ip/top、/ip/bans…）争用同一个 radix 节点，
+			// 一旦路由表构建顺序变化就会 panic。多一层静态前缀最稳。
+			// 封禁的唯一键就是 IP，所以直接按 IP 操作，解封时不必先查 ID。
+			admin.GET("/ip/detail/:ip", ipHandler.Detail)
+			admin.DELETE("/ip/bans/:ip", ipHandler.DeleteBan)
 			// 备份与恢复：下载的是 gzip JSON 快照；恢复流程见 BackupHandler 注释。
 			admin.GET("/system/backups", backupHandler.List)
 			admin.POST("/system/backups", backupHandler.Create)

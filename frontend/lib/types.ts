@@ -69,6 +69,19 @@ export interface CategoryCount extends TaxonomyItem {
   article_count: number
 }
 
+/**
+ * 分类树节点（`GET /categories/tree`）。
+ *
+ * `article_count` 是分类**自身**的直接文章数，不含子分类——子分类合计
+ * 需要前端按需累加。`depth` 由后端算好（0 起），前端据此缩进而不用递归求深度。
+ */
+export interface CategoryNode extends TaxonomyItem {
+  parent_id: number | null
+  depth: number
+  article_count: number
+  children?: CategoryNode[]
+}
+
 export interface TagCount extends TaxonomyItem {
   article_count: number
 }

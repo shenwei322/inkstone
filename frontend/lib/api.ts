@@ -6,6 +6,7 @@ import type {
   AdminStats,
   AdminUserListResponse,
   CategoryCount,
+  CategoryNode,
   TagCount,
   CommentItem,
   ReactionStats,
@@ -565,6 +566,40 @@ export function fetchTags() {
   return api<{ tags: TagCount[] }>('/tags')
 }
 
+/** 公开分类树：带层级与每类文章数，前台导航与归档页用。 */
+export function fetchCategoryTree() {
+  return api<{ categories: CategoryNode[] }>('/categories/tree')
+}
+
+// ---------- Admin Categories API ----------
+//
+// 后端的分类增删改接口一直存在（`/admin/categories`），但此前**前端没有任何入口**：
+// 分类只能在写文章时的下拉框里选，既建不了也改不了名。
+// 「分类与标签」页把这个缺口补上。
+
+export function createCategory(input: { name: string; slug?: string; parent_id?: number }) {
+  return api<{ category: CategoryCount }>('/admin/categories', {
+    method: 'POST',
+    body: input,
+    auth: true,
+  })
+}
+
+export function updateCategory(
+  id: number,
+  input: { name: string; parent_id?: number },
+) {
+  return api<{ category: CategoryCount }>(`/admin/categories/${id}`, {
+    method: 'PUT',
+    body: input,
+    auth: true,
+  })
+}
+
+export function deleteCategory(id: number) {
+  return api<void>(`/admin/categories/${id}`, { method: 'DELETE', auth: true })
+}
+
 // ---------- Admin Tags API ----------
 
 export function createTag(name: string) {
@@ -745,6 +780,168 @@ export async function downloadLogs(params: LogQueryParams = {}): Promise<Blob> {
     throw new ApiError(res.status, '导出日志失败')
   }
   return res.blob()
+}
+
+// ---------- IP 访问记录 / 封禁 API ----------
+
+/** 一条访问明细（按「IP + 路径 + 分钟」合并后的一行，hits 是该分钟内的次数） */
+export interface IPAccessEntry {
+  id: number
+  ip: string
+  method: string
+  path: string
+  status: number
+  hits: number
+  bucket_at: string
+  user_agent: string
+  referer: string
+  user_id: number
+  username: string
+}
+
+export interface IPAccessResponse {
+  access: IPAccessEntry[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 按 IP 聚合的一行（后台「高频 IP」表格） */
+export interface IPTopEntry {
+  ip: string
+  requests: number
+  paths: number
+  first_seen: string
+  last_seen: string
+  user_agent: string
+  banned: boolean
+}
+
+export interface IPOverview {
+  window_minutes: number
+  retention_days: number
+  active_bans: number
+  dropped_records: number
+  busiest_ip: string
+  busiest_hits: number
+  window_requests: number
+  /** 窗口内出现过的不同 IP 数 */
+  window_ips: number
+}
+
+export interface IPBanEntry {
+  id: number
+  ip: string
+  reason: string
+  /** auto = 自动封禁，manual = 管理员手动封禁 */
+  source: string
+  hits: number
+  expires_at: string | null
+  /** 剩余秒数：永久封禁为 -1，已过期为 0 */
+  remaining_seconds: number
+  active: boolean
+  created_by: string
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export interface IPBanListResponse {
+  bans: IPBanEntry[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface IPPathStat {
+  path: string
+  requests: number
+  last_seen: string
+  status: number
+}
+
+export interface IPDetailResponse {
+  ip: string
+  paths: IPPathStat[]
+  banned: boolean
+  ban: {
+    reason: string
+    source: string
+    hits: number
+    expires_at: string | null
+    remaining_seconds: number
+    created_by: string
+    created_at: string
+  } | null
+  window: number
+  retention: number
+}
+
+export interface IPAccessQueryParams {
+  ip?: string
+  path?: string
+  from?: string
+  to?: string
+  page?: number
+  page_size?: number
+}
+
+function buildIPQuery(params: Record<string, string | number | boolean | undefined>) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '' || value === false) continue
+    search.set(key, String(value))
+  }
+  return search.toString()
+}
+
+export function fetchIPAccess(params: IPAccessQueryParams = {}) {
+  const qs = buildIPQuery({ ...params })
+  return api<IPAccessResponse>(`/admin/ip/access${qs ? `?${qs}` : ''}`, { auth: true })
+}
+
+export function fetchIPOverview(windowMinutes?: number) {
+  const qs = buildIPQuery({ window: windowMinutes })
+  return api<{ overview: IPOverview }>(`/admin/ip/overview${qs ? `?${qs}` : ''}`, { auth: true })
+}
+
+export function fetchIPTop(params: { window?: number; limit?: number } = {}) {
+  const qs = buildIPQuery({ ...params })
+  return api<{ top: IPTopEntry[] }>(`/admin/ip/top${qs ? `?${qs}` : ''}`, { auth: true })
+}
+
+export function fetchIPDetail(ip: string, windowMinutes?: number) {
+  const qs = buildIPQuery({ window: windowMinutes })
+  // IPv6 里含冒号，必须编码后再拼进路径，否则部分代理会把它当成端口分隔符。
+  return api<IPDetailResponse>(`/admin/ip/detail/${encodeURIComponent(ip)}${qs ? `?${qs}` : ''}`, {
+    auth: true,
+  })
+}
+
+export function fetchIPBans(
+  params: { ip?: string; source?: string; active?: boolean; page?: number; page_size?: number } = {},
+) {
+  const qs = buildIPQuery({ ...params })
+  return api<IPBanListResponse>(`/admin/ip/bans${qs ? `?${qs}` : ''}`, { auth: true })
+}
+
+/**
+ * 手动封禁。
+ * minutes 语义：不传 → 用后台配置的默认时长；0 → 永久；>0 → 指定分钟数。
+ */
+export function createIPBan(payload: { ip: string; minutes?: number; reason?: string; note?: string }) {
+  return api<{ message: string }>('/admin/ip/bans', {
+    method: 'POST',
+    body: payload,
+    auth: true,
+  })
+}
+
+export function deleteIPBan(ip: string) {
+  return api<{ message: string }>(`/admin/ip/bans/${encodeURIComponent(ip)}`, {
+    method: 'DELETE',
+    auth: true,
+  })
 }
 
 export function fetchAdminComments(params: { page?: number; page_size?: number } = {}) {
@@ -1215,6 +1412,12 @@ export interface UpdateOverview {
   update: UpdateStatus
   backups: UpdateBackup[]
   agent: UpdateAgentResult | null
+  /**
+   * 后端是否处于「手动更新」模式（UPDATE_MANUAL_ONLY，默认 true）。
+   * 为 true 时后台只提示新版本，页面上不应出现任何执行更新的入口；
+   * 此时 apply / rollback 接口一律返回 403。
+   */
+  manual_only?: boolean
 }
 
 /** 读取更新状态（不联网，可安全高频轮询） */
@@ -1230,7 +1433,13 @@ export function checkSystemUpdate() {
   })
 }
 
-/** 一键更新（commits 模式传 commit；releases 模式传版本 tag，如 v1.28.0） */
+/**
+ * 一键更新（commits 模式传 commit；releases 模式传版本 tag，如 v1.28.0）。
+ *
+ * 已停用：后端默认 `UPDATE_MANUAL_ONLY=true`，该接口直接返回 403
+ * （「后台已停用一键更新」）。「系统更新」页不再调用它，更新走手动流程。
+ * 仅当运维显式设置 `UPDATE_MANUAL_ONLY=false` 时后端才会真正执行。
+ */
 export function applySystemUpdate(target: string) {
   return api<{ message: string; update: UpdateStatus }>('/admin/system/update/apply', {
     method: 'POST',
