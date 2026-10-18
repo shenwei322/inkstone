@@ -6,6 +6,15 @@
  * 改写——否则「对齐」就成了「自己抄自己」。
  *
  * 运行：node pow-parity/run.mjs
+ *
+ * 前置：向量文件由 Go 侧导出。仓库里已提交一份，通常无需重新导出；
+ * 只有 POW 算法或参数改动时才需要，且必须显式打开开关（默认不写，
+ * 否则每次 go test 都会改动 testdata）：
+ *
+ *   POW_EXPORT=1 go test -run TestPowExportVectors ./backend/internal/service/
+ *
+ * 本脚本跑完后会写出 testdata/pow_js_result.json，再由 Go 侧的
+ * TestPowAcceptJSolverResult 读回校验，三步才算闭环。
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -46,6 +55,14 @@ if (typeof pow.solvePow !== 'function' || typeof pow.buildPowTable !== 'function
 
 // ---- 2. 读取后端真值向量 ----
 const vectorFile = path.join(serviceDir, 'testdata', 'pow_vectors.json')
+if (!fs.existsSync(vectorFile)) {
+  console.error(
+    `找不到后端真值向量：${vectorFile}\n` +
+    '请先在仓库根目录执行（导出是显式动作，默认 go test 不会写回）：\n' +
+    '  POW_EXPORT=1 go test -run TestPowExportVectors ./backend/internal/service/'
+  )
+  process.exit(1)
+}
 const vectors = JSON.parse(fs.readFileSync(vectorFile, 'utf8'))
 
 /** 前端纯 JS 路径：powDigestFor + buildPowTable（lib/pow.ts 的实现） */
