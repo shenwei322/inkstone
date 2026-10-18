@@ -110,16 +110,19 @@ if (-not $SkipBuild) {
 }
 
 $env:GIN_MODE = 'debug'
-$env:UPDATE_ENABLED = if ($UpdateDemo) { 'true' } else { 'false' }
+# 检查更新（联网比对上游版本）需要 UPDATE_ENABLED=true；执行侧由
+# UPDATE_MANUAL_ONLY 关死——后台只提示新版本，不会替换任何文件。
+$env:UPDATE_ENABLED = 'true'
+$env:UPDATE_MANUAL_ONLY = 'true'
 if ($UpdateDemo) {
     $env:UPDATE_SOURCE_DIR = $demoSrc
     $env:UPDATE_DIR = Join-Path $demoSrc 'data\update'
     $env:UPDATE_WAITING_AGENT = 'true'   # 只替换源码，重启交给宿主代理（本地演示不让它自动重启）
-    Info "更新演示：源=$demoSrc（点「立即更新」只动副本）"
+    Info "更新演示：源=$demoSrc（仅用于版本检查，后台不执行更新）"
 } else {
     Remove-Item Env:UPDATE_SOURCE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:UPDATE_DIR -ErrorAction SilentlyContinue
-    Info '更新功能已关闭（加 -UpdateDemo 可开启演示）'
+    Info '版本检查已开启，后台只提示新版本（更新需手动执行）'
 }
 
 Info '启动后端 :8080 …'

@@ -93,7 +93,7 @@ func TestRefreshInheritsRemainingTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 新令牌的时长应当接近 10 天而不是默认的 1 小时。
-	if pair.SessionExpiresIn < int64((9*24*time.Hour).Seconds()) {
+	if pair.SessionExpiresIn < int64((9 * 24 * time.Hour).Seconds()) {
 		t.Errorf("刷新后会话时长被压缩为 %d 秒（应继承约 10 天）——"+
 			"这正是「勾了记住我仍要频繁重登」的成因", pair.SessionExpiresIn)
 	}
