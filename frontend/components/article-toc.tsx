@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { ListTree } from 'lucide-react'
 
 export interface TocItem {
@@ -31,9 +31,15 @@ export function parseToc(html: string): TocItem[] {
 /**
  * 文章目录（自动生成）。滚动时高亮当前章节、点击平滑跳转。
  * 由父组件根据 tocItems.length 决定布局（无侧边栏时贴空的一侧，无标题则整列隐藏）。
+ *
+ * 视觉部分（卡片实底、轨道竖线、激活段、层级缩进、两行截断）全部收在
+ * app/globals.css 的「文章目录」一节里，这里只负责结构与状态。
+ * 这样做的原因：Tailwind 的 bg-card/60、text-xs、tracking-widest 组合
+ * 在壁纸模式下既透又散，逐处覆写会把类名写成一条长串，改观感还要翻组件。
  */
 export function ArticleToc({ items, contentRef }: { items: TocItem[]; contentRef: RefObject<HTMLElement | null> }) {
   const [activeId, setActiveId] = useState(items[0]?.id ?? '')
+  const navRef = useRef<HTMLElement | null>(null)
 
   // 给真实标题补锚点 id（纯 DOM 写操作，不涉及 state）
   useEffect(() => {
@@ -71,6 +77,22 @@ export function ArticleToc({ items, contentRef }: { items: TocItem[]; contentRef
     }
   }, [items])
 
+  // 目录自身可滚动：章节多时让激活项留在可视区内。
+  // 不用 scrollIntoView——它会连带滚动祖先（整页），只想动目录里那个小盒子。
+  useEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    const el = nav.querySelector<HTMLElement>(`[data-toc-id="${activeId}"]`)
+    if (!el) return
+    const top = el.offsetTop
+    const bottom = top + el.offsetHeight
+    if (top < nav.scrollTop) {
+      nav.scrollTop = Math.max(0, top - 8)
+    } else if (bottom > nav.scrollTop + nav.clientHeight) {
+      nav.scrollTop = bottom - nav.clientHeight + 8
+    }
+  }, [activeId])
+
   if (items.length === 0) return null
   // 只渲染有文字的标题；空标题仍留在 items 里以维持与 DOM 的下标对齐
   const visible = items.filter((item) => item.text)
@@ -78,26 +100,36 @@ export function ArticleToc({ items, contentRef }: { items: TocItem[]; contentRef
 
   return (
     <aside className="hidden lg:block">
-      <div className="card-flat sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto rounded-xl border border-border bg-card/60 p-3">
-        <p className="mb-2 flex items-center gap-1.5 px-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-          <ListTree className="h-3.5 w-3.5" /> 目录
+      <div className="article-toc-card card-flat sticky top-24 flex max-h-[calc(100vh-8rem)] flex-col overflow-hidden">
+        <p className="article-toc-title">
+          <ListTree className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>目录</span>
+          <span className="article-toc-count">{visible.length}</span>
         </p>
-        <nav className="space-y-0.5 border-l border-border">
-          {visible.map((item) => (
-            <a
-              key={item.id}
-              href={`#${item.id}`}
-              style={{ paddingLeft: `${(item.level - 1) * 10 + 10}px` }}
-              title={item.text}
-              className={`-ml-px block truncate border-l-2 py-1.5 pr-2 text-xs leading-relaxed transition-colors ${
-                activeId === item.id
-                  ? 'border-accent font-medium text-accent'
-                  : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
-              }`}
-            >
-              {item.text}
-            </a>
-          ))}
+        <nav
+          ref={navRef}
+          aria-label="文章目录"
+          className="article-toc-nav min-h-0 flex-1 overflow-y-auto pb-1.5 pr-1.5"
+        >
+          {visible.map((item) => {
+            const active = activeId === item.id
+            return (
+              <a
+                key={item.id}
+                href={`#${item.id}`}
+                title={item.text}
+                aria-current={active ? 'true' : undefined}
+                data-toc-id={item.id}
+                data-toc-level={item.level}
+                // 层级缩进交给 CSS 的 --toc-depth：h1→0、h2→1、h3→2，
+                // 改缩进步长只动 globals.css 一处，不必回来改内联样式
+                style={{ '--toc-depth': item.level - 1 } as CSSProperties}
+                className="article-toc-item"
+              >
+                {item.text}
+              </a>
+            )
+          })}
         </nav>
       </div>
     </aside>

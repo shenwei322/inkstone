@@ -10,8 +10,21 @@ import { ACCENT_PRESETS, HUE_MAX, HUE_MIN, normalizeHue } from '@/lib/accent'
  *
  * 与 ThemeToggle（亮/暗切换）并列使用：那个是二态开关，这个是八选一 + 自定义色相，
  * 塞进同一个按钮会让交互变得含糊，所以独立成一个「调色板」按钮。
+ *
+ * 后台侧边栏底部的用法需要 `placement="up"`：那一行贴着视口底部，
+ * 向下弹出的面板会溢出屏幕（并且被侧栏的 overflow-hidden 裁掉）。
  */
-export function AccentPicker({ className }: { className?: string }) {
+export function AccentPicker({
+  className,
+  placement = 'down',
+  align = 'end',
+}: {
+  className?: string
+  /** 面板展开方向：down 向下（默认），up 向上（贴底部的场景） */
+  placement?: 'down' | 'up'
+  /** 面板与触发器的水平对齐：end 右对齐（默认），start 左对齐 */
+  align?: 'start' | 'end'
+}) {
   const { accent, setAccent, resetAccent } = useTheme()
   const [open, setOpen] = useState(false)
   // 滑块的即时值：拖动时只更新本地 state 让滑块跟手，松手（onChange 结束）
@@ -54,7 +67,9 @@ export function AccentPicker({ className }: { className?: string }) {
 
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-2 w-72 origin-top-right rounded-xl border border-border bg-card p-4 shadow-[var(--card-shadow-raised)] animate-scale-in"
+          className={`absolute z-50 w-72 rounded-xl border border-border bg-card p-4 shadow-[var(--card-shadow-raised)] animate-scale-in ${
+            placement === 'up' ? 'bottom-full mb-2 origin-bottom' : 'top-full mt-2 origin-top'
+          } ${align === 'end' ? 'right-0 origin-right' : 'left-0 origin-left'}`}
           role="dialog"
           aria-label="配色主题"
         >

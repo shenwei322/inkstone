@@ -39,7 +39,8 @@ import type {
 } from '@/lib/api'
 import type { LinkApplication } from '@/lib/types'
 import { useNotify } from '@/components/toast'
-import { PageTransition, Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
+import { AdminEmpty, AdminPageHeader } from '@/components/admin-page'
+import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { Modal } from '@/components/modal'
 import { RowLoading } from '@/components/page-loader'
 import { inputClass, badgeSuccess, badgeWarning, badgeDanger } from '@/lib/ui'
@@ -388,17 +389,14 @@ function LinkApplicationsPanel() {
           <RowLoading rows={3} />
         </div>
       ) : apps.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-dashed p-16 text-center">
-          <Inbox className="mx-auto h-10 w-10 text-muted-foreground/50" />
-          <p className="mt-4 text-muted-foreground">没有{filter ? '该状态的' : ''}申请记录</p>
-        </div>
+        <AdminEmpty icon={Inbox} title={<>没有{filter ? '该状态的' : ''}申请记录</>} />
       ) : (
         <div className="mt-4 space-y-3">
           {apps.map((app: LinkApplication) => (
             <Reveal
               key={app.id}
               y={10}
-              className="card-flat rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+              className="card-flat rounded-xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <p className="font-medium">{app.site_name}</p>
@@ -557,44 +555,46 @@ export default function AdminLinksPage() {
   const links = data?.links ?? []
 
   return (
-    <PageTransition>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">友情链接</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+    <div>
+      <AdminPageHeader
+        title="友情链接"
+        description={
+          <>
             {data ? `共 ${links.length} 个友链` : '加载中...'} · 每日自动检测，失效站点将禁止跳转并脱敏
-          </p>
-        </div>
-        {tab === 'links' && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href="/links"
-              target="_blank"
-              className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ExternalLink className="h-4 w-4" />
-              查看页面
-            </Link>
-            <button
-              onClick={() => checkAll.mutate()}
-              disabled={checkAll.isPending || links.length === 0}
-              {...hoverTapScale}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${checkAll.isPending ? 'animate-spin' : ''}`} />
-              {checkAll.isPending ? '检测中...' : '检测全部'}
-            </button>
-            <button
-              onClick={() => setDialog({ open: true, editing: null })}
-              {...hoverTapScale}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25"
-            >
-              <Plus className="h-4 w-4" />
-              添加友链
-            </button>
-          </div>
-        )}
-      </div>
+          </>
+        }
+        actions={
+          tab === 'links' ? (
+            <>
+              <Link
+                href="/links"
+                target="_blank"
+                className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ExternalLink className="h-4 w-4" />
+                查看页面
+              </Link>
+              <button
+                onClick={() => checkAll.mutate()}
+                disabled={checkAll.isPending || links.length === 0}
+                {...hoverTapScale}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${checkAll.isPending ? 'animate-spin' : ''}`} />
+                {checkAll.isPending ? '检测中...' : '检测全部'}
+              </button>
+              <button
+                onClick={() => setDialog({ open: true, editing: null })}
+                {...hoverTapScale}
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25"
+              >
+                <Plus className="h-4 w-4" />
+                添加友链
+              </button>
+            </>
+          ) : undefined
+        }
+      />
 
       {/* tab：友链管理 / 申请审核（待审核数徽标） */}
       <nav className="mt-5 flex w-fit flex-wrap gap-1 rounded-xl border border-border bg-muted/60 p-1">
@@ -640,10 +640,7 @@ export default function AdminLinksPage() {
           <RowLoading rows={3} />
         </div>
       ) : links.length === 0 ? (
-        <div className="mt-6 rounded-xl border border-dashed p-16 text-center">
-          <Plus className="mx-auto h-10 w-10 text-muted-foreground/50" />
-          <p className="mt-4 text-muted-foreground">还没有友链，点击「添加友链」创建</p>
-        </div>
+        <AdminEmpty icon={Plus} title="还没有友链，点击「添加友链」创建" />
       ) : (
         <div className="mt-6 space-y-3">
           {links.map((link: AdminFriendLink, i: number) => (
@@ -652,7 +649,7 @@ export default function AdminLinksPage() {
               y={10}
               delay={i * 0.04}
               duration={0.3}
-              className="card-flat flex flex-wrap items-center gap-4 rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+              className="card-flat flex flex-wrap items-center gap-4 rounded-xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
             >
               <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
                 {link.icon_url ? (
@@ -740,6 +737,6 @@ export default function AdminLinksPage() {
       )}
       </>
       )}
-    </PageTransition>
+    </div>
   )
 }

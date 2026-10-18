@@ -29,7 +29,8 @@ import {
 import type { FileAssetItem } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { PageLoading, RowLoading } from '@/components/page-loader'
-import { PageTransition, Reveal, hoverTapScale, prefersReducedMotion } from '@/components/motion'
+import { AdminEmpty, AdminPageHeader } from '@/components/admin-page'
+import { Reveal, hoverTapScale, prefersReducedMotion } from '@/components/motion'
 import { formatSize, inputClass } from '@/lib/ui'
 import { Pagination } from '@/components/pagination'
 
@@ -87,7 +88,7 @@ function TransferSettings() {
   }
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5">
+    <div className="rounded-xl border border-border bg-card p-5">
       <h2 className="flex items-center gap-2 text-sm font-semibold">
         <Gauge className="h-4 w-4 text-accent" />
         传输设置
@@ -234,11 +235,11 @@ export default function AdminFilesPage() {
   const files = data?.files ?? []
 
   return (
-    <PageTransition>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">文件管理</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground">
+    <div>
+      <AdminPageHeader
+        title="文件管理"
+        description={
+          <p className="flex flex-wrap items-center gap-x-3">
             <span>{data ? `${data.total} 个文件` : '加载中...'}</span>
             {data && (
               <span className="flex items-center gap-1">
@@ -247,45 +248,47 @@ export default function AdminFilesPage() {
               </span>
             )}
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-auto">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        }
+        actions={
+          <>
+            <div className="relative w-full sm:w-auto">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setQuery(search)
+                    // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
+                    setPage(1)
+                  }
+                }}
+                placeholder="搜索文件名，回车"
+                className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-52"
+              />
+            </div>
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={progress !== null}
+              {...hoverTapScale}
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
+            >
+              <UploadCloud className="h-4 w-4" />
+              {progress !== null ? `上传中 ${progress}%` : '上传文件'}
+            </button>
             <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setQuery(search)
-                  // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
-                  setPage(1)
-                }
+              ref={fileRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                upload(e.target.files)
+                e.target.value = ''
               }}
-              placeholder="搜索文件名，回车"
-              className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-52"
             />
-          </div>
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={progress !== null}
-            {...hoverTapScale}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
-          >
-            <UploadCloud className="h-4 w-4" />
-            {progress !== null ? `上传中 ${progress}%` : '上传文件'}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              upload(e.target.files)
-              e.target.value = ''
-            }}
-          />
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* 拖拽上传区 */}
       <div
@@ -323,9 +326,7 @@ export default function AdminFilesPage() {
           <RowLoading rows={4} />
         </div>
       ) : files.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-dashed p-12 text-center text-muted-foreground">
-          {query ? '没有匹配的文件' : '还没有上传任何文件'}
-        </div>
+        <AdminEmpty title={query ? '没有匹配的文件' : '还没有上传任何文件'} />
       ) : (
         <div className="mt-4 space-y-2">
           {files.map((file, i) => (
@@ -334,7 +335,7 @@ export default function AdminFilesPage() {
               y={8}
               delay={i * 0.03}
               duration={0.25}
-              className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3.5 transition-colors hover:border-accent/30"
+              className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3.5 transition-colors hover:border-accent/30"
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                 <FileTypeIcon mime={file.mime_type} name={file.original_name} />
@@ -407,6 +408,6 @@ export default function AdminFilesPage() {
       <div className="mt-6">
         <TransferSettings />
       </div>
-    </PageTransition>
+    </div>
   )
 }

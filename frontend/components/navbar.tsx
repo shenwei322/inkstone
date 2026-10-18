@@ -205,63 +205,89 @@ export function Navbar() {
     >
       <header ref={headerRef} className="navbar-card">
         <div className="flex h-[4.5rem] items-center justify-between gap-2 px-3 sm:px-4">
-          {/* 品牌区：Fuwari 用 btn-plain 包裹，整块可点且带悬停底衬 */}
-          <Link href="/" className={`${navBtn} group gap-2 pl-3 pr-4`}>
-            {site.siteLogo ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={site.siteLogo}
-                alt={site.siteName}
-                className="h-8 w-8 rounded-lg object-cover transition-transform group-hover:scale-110"
-              />
-            ) : (
-              <span
-                onMouseEnter={(e) => gsap.to(e.currentTarget, { rotate: 12, scale: 1.15, duration: 0.25 })}
-                onMouseLeave={(e) => gsap.to(e.currentTarget, { rotate: 0, scale: 1, duration: 0.25 })}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white"
-              >
-                {site.siteName.charAt(0).toUpperCase()}
-              </span>
-            )}
-            <span className="text-base font-bold tracking-tight text-accent">{site.siteName}</span>
-          </Link>
-
-          {/* 主导航：Fuwari 的按钮组，无下划线，靠底衬与 accent 文字表示激活 */}
-          <nav className="hidden items-center gap-1 md:flex">
-            {menuItems.map((item) => {
-              const active = isActive(item.href)
-              return (
-                <Link
-                  key={item.label + item.href}
-                  href={item.href}
-                  target={item.href.startsWith('http') ? '_blank' : undefined}
-                  rel={item.href.startsWith('http') ? 'noreferrer' : undefined}
-                  aria-current={active ? 'page' : undefined}
-                  className={`${navBtn} gap-1.5 ${active ? 'current-theme-btn' : ''}`}
+          {/* 品牌区：Fuwari 用 btn-plain 包裹，整块可点且带悬停底衬。
+              后台路由下「品牌」不再是入口——点它回首页会让正在写文章的人误触离开，
+              改为纯标识（同级渲染一个 <span> 而不是 <Link>）。 */}
+          {isAdminRoute ? (
+            <div className="flex items-center gap-2 pl-3 pr-4">
+              {site.siteLogo ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src={site.siteLogo} alt={site.siteName} className="h-8 w-8 rounded-lg object-cover" />
+              ) : (
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white">
+                  {site.siteName.charAt(0).toUpperCase()}
+                </span>
+              )}
+              <span className="text-base font-bold tracking-tight text-accent">{site.siteName}</span>
+              <span className="ml-1 hidden text-sm text-muted-foreground sm:inline">/ 管理控制台</span>
+            </div>
+          ) : (
+            <Link href="/" className={`${navBtn} group gap-2 pl-3 pr-4`}>
+              {site.siteLogo ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={site.siteLogo}
+                  alt={site.siteName}
+                  className="h-8 w-8 rounded-lg object-cover transition-transform group-hover:scale-110"
+                />
+              ) : (
+                <span
+                  onMouseEnter={(e) =>
+                    gsap.to(e.currentTarget, { rotate: 12, scale: 1.15, duration: 0.25 })
+                  }
+                  onMouseLeave={(e) =>
+                    gsap.to(e.currentTarget, { rotate: 0, scale: 1, duration: 0.25 })
+                  }
+                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white"
                 >
-                  <MenuIcon name={item.icon} className="h-4 w-4" />
-                  {item.label}
-                  {item.href.startsWith('http') && (
-                    <span className="text-[0.7rem] opacity-40 transition-opacity group-hover:opacity-70">
-                      ↗
-                    </span>
-                  )}
-                </Link>
-              )
-            })}
-          </nav>
+                  {site.siteName.charAt(0).toUpperCase()}
+                </span>
+              )}
+              <span className="text-base font-bold tracking-tight text-accent">{site.siteName}</span>
+            </Link>
+          )}
 
+          {/* 主导航：Fuwari 的按钮组，无下划线，靠底衬与 accent 文字表示激活。
+              后台整体不渲染：那些入口与左侧栏功能重复，点进去会离开工作台。 */}
+          {!isAdminRoute && (
+            <nav className="hidden items-center gap-1 md:flex">
+              {menuItems.map((item) => {
+                const active = isActive(item.href)
+                return (
+                  <Link
+                    key={item.label + item.href}
+                    href={item.href}
+                    target={item.href.startsWith('http') ? '_blank' : undefined}
+                    rel={item.href.startsWith('http') ? 'noreferrer' : undefined}
+                    aria-current={active ? 'page' : undefined}
+                    className={`${navBtn} gap-1.5 ${active ? 'current-theme-btn' : ''}`}
+                  >
+                    <MenuIcon name={item.icon} className="h-4 w-4" />
+                    {item.label}
+                    {item.href.startsWith('http') && (
+                      <span className="text-[0.7rem] opacity-40 transition-opacity group-hover:opacity-70">
+                        ↗
+                      </span>
+                    )}
+                  </Link>
+                )
+              })}
+            </nav>
+          )}
           {/* 右侧功能区：搜索 / 主题 / 用户 / 移动端菜单 */}
           <div className="flex items-center gap-1 sm:gap-2">
           {/* 桌面搜索框（sm 起显示）：Fuwari 把它做成无边框的胶囊，
-              底色与导航按钮一致，聚焦时才亮出 accent 描边 */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              submitSearch(search)
-            }}
-            className="relative hidden sm:block"
-          >
+              底色与导航按钮一致，聚焦时才亮出 accent 描边。
+              后台不渲染：搜的是前台文章，正在后台做维护时用不上它，
+              留着只会挤占顶栏并诱导误触离开。 */}
+          {!isAdminRoute && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                submitSearch(search)
+              }}
+              className="relative hidden sm:block"
+            >
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               name="q"
@@ -270,7 +296,8 @@ export function Navbar() {
               placeholder="搜索文章..."
               className="h-11 w-44 rounded-lg bg-[var(--btn-regular-bg)] py-0 pl-9 pr-3 text-sm outline-none transition-[width,box-shadow,background-color] placeholder:text-muted-foreground focus:w-56 focus:bg-card focus:ring-2 focus:ring-accent/25"
             />
-          </form>
+            </form>
+          )}
 
           <AccentPicker className={iconBtnSolid} />
           <ThemeToggle className={iconBtnSolid} />

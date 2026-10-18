@@ -14,6 +14,7 @@ import {
 } from '@/lib/api'
 import { useNotify } from '@/components/toast'
 import { Pagination } from '@/components/pagination'
+import { AdminEmpty, AdminPageHeader } from '@/components/admin-page'
 import type { CommentItem } from '@/lib/types'
 
 export default function AdminCommentsPage() {
@@ -52,22 +53,17 @@ export default function AdminCommentsPage() {
 
   return (
     <div>
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">评论管理</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {data ? `共 ${data.total} 条评论` : '加载中...'}
-        </p>
-      </div>
+      <AdminPageHeader
+        title="评论管理"
+        description={data ? `共 ${data.total} 条评论` : '加载中...'}
+      />
 
       {isLoading ? (
         <div className="mt-6">
           <RowLoading rows={4} />
         </div>
       ) : (data?.comments ?? []).length === 0 ? (
-        <div className="mt-6 rounded-xl border border-dashed p-16 text-center">
-          <MessageSquare className="mx-auto h-10 w-10 text-muted-foreground/50" />
-          <p className="mt-4 text-muted-foreground">还没有任何评论</p>
-        </div>
+        <AdminEmpty icon={MessageSquare} title="还没有任何评论" />
       ) : (
         <div className="mt-6 space-y-3">
           {(data?.comments ?? []).map((comment: CommentItem, i: number) => (
@@ -76,7 +72,7 @@ export default function AdminCommentsPage() {
               y={12}
               delay={i * 0.04}
               duration={0.3}
-              className="card-flat group flex items-start gap-3 rounded-2xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
+              className="card-flat group flex items-start gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-accent/30"
             >
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-bold text-accent">
                 {comment.author.username.charAt(0).toUpperCase()}

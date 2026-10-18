@@ -17,8 +17,9 @@ import {
 import { fetchSitemapData } from '@/lib/api'
 import type { SitemapEntry, SitemapGroup } from '@/lib/types'
 import { useNotify } from '@/components/toast'
-import { PageTransition, Reveal, useReveal } from '@/components/motion'
+import { Reveal, useReveal } from '@/components/motion'
 import { PageLoading } from '@/components/page-loader'
+import { AdminEmpty, AdminPageHeader } from '@/components/admin-page'
 import { inputClass } from '@/lib/ui'
 
 /** 复制按钮：复制成功显示对勾 1.5s */
@@ -92,7 +93,7 @@ function GroupSection({ group, delay }: { group: SitemapGroup; delay: number }) 
   return (
     <section
       ref={ref}
-      className="card-flat overflow-hidden rounded-2xl border border-border bg-card"
+      className="card-flat overflow-hidden rounded-xl border border-border bg-card"
     >
       <header className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2.5">
         <h2 className="text-sm font-semibold">{group.label}</h2>
@@ -160,16 +161,14 @@ export default function AdminSitemapPage() {
   }, [sitemap])
 
   return (
-    <PageTransition>
+    <div>
       <div className="space-y-6">
         <header ref={headerRef}>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-            <MapIcon className="h-6 w-6 text-accent" />
-            站点地图
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            搜索引擎通过 sitemap.xml 发现站点内容。发布/更新文章、独立页后自动收录于此，无需手动操作。
-          </p>
+          <AdminPageHeader
+            icon={MapIcon}
+            title="站点地图"
+            description="搜索引擎通过 sitemap.xml 发现站点内容。发布/更新文章、独立页后自动收录于此，无需手动操作。"
+          />
         </header>
 
         {isLoading || !sitemap ? (
@@ -183,7 +182,7 @@ export default function AdminSitemapPage() {
               delay={0.05}
               className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
             >
-              <div className="card-flat rounded-2xl border border-border bg-card p-5">
+              <div className="card-flat rounded-xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <ListTree className="h-4 w-4 text-accent" /> 收录 URL 总数
                 </p>
@@ -197,7 +196,7 @@ export default function AdminSitemapPage() {
                 </p>
               </div>
 
-              <div className="card-flat rounded-2xl border border-border bg-card p-5">
+              <div className="card-flat rounded-xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <Globe className="h-4 w-4 text-accent" /> sitemap.xml
                 </p>
@@ -215,7 +214,7 @@ export default function AdminSitemapPage() {
                 </div>
               </div>
 
-              <div className="card-flat rounded-2xl border border-border bg-card p-5">
+              <div className="card-flat rounded-xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <FileCode2 className="h-4 w-4 text-accent" /> robots.txt
                 </p>
@@ -230,7 +229,7 @@ export default function AdminSitemapPage() {
               {/* RSS 订阅源：地址由前端域名拼出（后端 /feed.xml 挂在 gin 根路由，
                   不走 API 前缀）。这里只提供地址与复制，不预览内容——
                   订阅源是写给阅读器的，不是给人读的。 */}
-              <div className="card-flat rounded-2xl border border-border bg-card p-5">
+              <div className="card-flat rounded-xl border border-border bg-card p-5">
                 <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <Rss className="h-4 w-4 text-accent" /> feed.xml（RSS 订阅源）
                 </p>
@@ -277,9 +276,7 @@ export default function AdminSitemapPage() {
             {/* 分组列表 */}
             <div className="space-y-4">
               {groups.length === 0 ? (
-                <div className="rounded-2xl border border-dashed p-12 text-center text-sm text-muted-foreground">
-                  没有匹配的 URL
-                </div>
+                <AdminEmpty title="没有匹配的 URL" />
               ) : (
                 groups.map((g, i) => (
                   <GroupSection key={g.type} group={g} delay={0.1 + i * 0.05} />
@@ -293,6 +290,6 @@ export default function AdminSitemapPage() {
           </>
         )}
       </div>
-    </PageTransition>
+    </div>
   )
 }

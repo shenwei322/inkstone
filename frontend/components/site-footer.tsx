@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { FileText, GitBranch, Heart, Rss, ShieldCheck } from 'lucide-react'
 import { useSiteConfig } from '@/components/site-config-context'
 import { MenuIcon } from '@/components/menu-icon'
@@ -8,7 +9,18 @@ import { InView } from '@/components/motion'
 
 export function SiteFooter() {
   const site = useSiteConfig()
+  const pathname = usePathname()
   const year = new Date().getFullYear()
+
+  /* 管理后台是全屏工作台（左侧固定侧栏 + 内容区，见 app/admin/layout.tsx）：
+     页脚整块（品牌区、导航列、版权行）在后台只是重复信息与误触入口，
+     「导航」列点进去还会把管理员带回前台，因此后台路由下整块不渲染。
+     判定写法与 navbar.tsx 的 isAdminRoute 保持一致（含 /admin/ 子路由）。 */
+  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
+
+  /* 早返回必须放在所有 hook 调用之后（useSiteConfig / usePathname 已执行完），
+     否则后台/前台两条渲染路径的 hook 数量不一致，React 会直接报错。 */
+  if (isAdminRoute) return null
 
   // 页脚导航：优先使用自定义菜单，未配置时给默认项
   const links =

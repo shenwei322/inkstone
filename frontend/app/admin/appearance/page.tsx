@@ -15,6 +15,7 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react'
+import { AdminPageHeader } from '@/components/admin-page'
 import { IconPicker } from '@/components/menu-icon'
 import { Checkbox, Select } from '@/components/form-controls'
 import { Reveal, easeOut, hoverTapScale, prefersReducedMotion } from '@/components/motion'
@@ -127,7 +128,7 @@ function MenuTab() {
         <Reveal
           key={`${item.label}-${i}`}
           y={8}
-          className="card-flat flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-card p-3"
+          className="card-flat flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3"
         >
           <IconPicker
             value={item.icon}
@@ -199,7 +200,7 @@ function MenuTab() {
       {addPageOpen && (
         <Reveal
           y={8}
-          className="card-flat rounded-2xl border border-border bg-card p-3"
+          className="card-flat rounded-xl border border-border bg-card p-3"
         >
           <p className="mb-2 text-xs text-muted-foreground">
             选择已发布的页面（在页面管理中创建），将自动添加为菜单项
@@ -342,7 +343,7 @@ function WidgetsTab() {
         <Reveal
           key={`${w.type}-${i}`}
           y={8}
-          className="card-flat rounded-2xl border border-border bg-card p-4"
+          className="card-flat rounded-xl border border-border bg-card p-4"
         >
           <div className="flex items-center gap-2">
             <span className="rounded-md bg-accent/10 px-2 py-1 text-xs font-medium text-accent">
@@ -771,39 +772,40 @@ export default function AdminAppearancePage() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">外观管理</h1>
-          <p className="mt-1 text-sm text-muted-foreground">自定义前台顶部菜单与侧边栏小工具</p>
-        </div>
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-card p-1">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`relative flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm transition-colors ${
-                tab === t.key ? 'text-white' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab === t.key && (
-                <span
-                  key={t.key}
-                  ref={tabBgRef}
-                  className="absolute inset-0 rounded-md bg-accent"
-                />
-              )}
-              <t.icon className="relative h-4 w-4" />
-              <span className="relative">{t.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <AdminPageHeader
+        title="外观管理"
+        description="自定义前台顶部菜单与侧边栏小工具"
+        actions={
+          /* tab 切换条整体作为页头右侧操作区，内部逻辑保持不变 */
+          <div className="flex items-center gap-1 rounded-lg border border-border bg-card p-1">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`relative flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm transition-colors ${
+                  tab === t.key ? 'text-white' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {tab === t.key && (
+                  <span
+                    key={t.key}
+                    ref={tabBgRef}
+                    className="absolute inset-0 rounded-md bg-accent"
+                  />
+                )}
+                <t.icon className="relative h-4 w-4" />
+                <span className="relative">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        }
+      />
 
       <Reveal
         key={tab}
         y={12}
         duration={0.35}
-        className="card-flat mt-6 rounded-2xl border border-border bg-card p-5"
+        className="card-flat mt-6 rounded-xl border border-border bg-card p-5"
       >
         {tab === 'menu' ? <MenuTab /> : tab === 'widgets' ? <WidgetsTab /> : <SidebarPositionTab />}
       </Reveal>

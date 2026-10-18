@@ -262,7 +262,7 @@ export function PageList() {
 export function NewPageScreen() {
   return (
     <PageTransition>
-      <div className="mx-auto max-w-4xl px-4 py-10">
+      <div className="mx-auto max-w-4xl">
         <h1 className="text-2xl font-bold tracking-tight">新建页面</h1>
         <p className="mt-1 text-sm text-muted-foreground">创建后可通过 /p/页面slug 访问</p>
         <div className="mt-6">
@@ -281,7 +281,7 @@ export function EditPageScreen({ id }: { id: number }) {
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-10">
+      <div className="mx-auto max-w-4xl">
         {/* 编辑器加载态：GSAP 加载动画替换原骨架图 */}
         <PageLoading minHeight="3.5rem" hint="加载标题…" />
         <div className="mt-4">
@@ -292,7 +292,7 @@ export function EditPageScreen({ id }: { id: number }) {
   }
   if (isError || !data) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-24 text-center text-muted-foreground">
+      <div className="mx-auto max-w-4xl py-24 text-center text-muted-foreground">
         页面不存在
       </div>
     )
@@ -300,7 +300,7 @@ export function EditPageScreen({ id }: { id: number }) {
 
   return (
     <PageTransition>
-      <div className="mx-auto max-w-4xl px-4 py-10">
+      <div className="mx-auto max-w-4xl">
         <h1 className="text-2xl font-bold tracking-tight">编辑页面</h1>
         <p className="mt-1 text-sm text-muted-foreground">/p/{data.page.slug}</p>
         <div className="mt-6">

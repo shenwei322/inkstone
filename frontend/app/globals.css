@@ -472,6 +472,45 @@ body.has-wallpaper .prose blockquote {
   }
 }
 
+/* 后台是工作台，壁纸不进内容区。
+ *
+ * 壁纸是访客站的展示元素，`.has-wallpaper` 却挂在 <body> 上，
+ * 于是后台的卡片跟着变成 78% 半透明：深色壁纸会直接从表格、表单、
+ * 导航标题背后透上来（实拍过一次「分类与标签」页，空态文案几乎读不出来）。
+ * 后台要处理的是密集的小字号操作界面，可读性优先于氛围。
+ *
+ * 做法是给整个后台容器加 `admin-surface` 标记（见 app/admin/layout.tsx），
+ * 在这里把表面的混入比例抬到 100% —— 注意**不是**去掉 backdrop-filter：
+ * 保留模糊可以让导航卡片这类边缘仍然有轻微的材质感，而内容区已经是实心。
+ * 直接改 `--surface-alpha` 反而更稳妥：所有已收口的规则（卡片/输入框/
+ * 下拉/代码块）会一起变得不透明，不必逐个覆盖。 */
+.admin-surface {
+  --surface-alpha: 100%;
+}
+
+/* 后台内容区自身也需要一层实底：body 的壁纸是 background-image，
+   只让子元素不透明的话，内容区之间的空隙仍会露出壁纸。 */
+.admin-surface::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-color: var(--background);
+}
+
+/* 后台内不再需要壁纸那层半透明模糊（表面已是实心，模糊只是白耗 GPU） */
+.admin-surface .bg-card,
+.admin-surface header,
+.admin-surface nav,
+.admin-surface footer,
+.admin-surface .bg-background,
+.admin-surface .bg-muted,
+.admin-surface [role='menu'],
+.admin-surface [role='dialog'] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* Markdown prose */
 .prose {
   --tw-prose-body: color-mix(in srgb, var(--foreground) 88%, transparent);
@@ -1553,5 +1592,214 @@ body.has-wallpaper .navbar-card {
     background-color: var(--card);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+}
+
+/* ============================================================================
+   文章目录（TOC）
+   ============================================================================
+   改造前的问题（截图里那一版）：
+   1) 卡片用 bg-card/60，壁纸模式下几乎透明 —— 目录浮在一张图上，
+      文字与背后的光斑、建筑线条争夺注意力，读起来"散"；
+      而右侧其实还有大片留白，整块显得又空又飘。
+   2) 条目只有 text-xs（12px）+ tracking-widest 的标题、行距松、字号小，
+      五六条标题就把卡片撑得忽高忽低，密度极不均衡。
+   3) 激活态只有一根 1px 竖线 + 蓝色文字，层级信号太弱，
+      滚动时很难一眼看出"现在读到哪一节"。
+   4) 层级（h1/h2/h3）只靠 10px 的 padding 差区分，几乎看不出结构。
+
+   现在的做法：
+   - 卡片**坐实成实底色**（与导航卡片一致的思路：表面稳定 > 透出壁纸），
+     圆角 + 细边框 + 最轻一档阴影，和侧边栏小工具（.card-base）同族；
+   - 标题行 = 图标 + 「目录」+ 条目数徽章，底部一条分隔线收口；
+   - 导航区左缘一根**轨道竖线**，激活项在轨道上盖一段 accent 实线，
+     同时给一条极淡的 accent 底色 —— 底色是会随条目宽度收边的圆角块，
+     不再是一条飘在空中的细线；
+   - 层级缩进由 --toc-depth 驱动（h1=0 / h2=1 / h3=2），
+     步长与轨道对齐，层级差一眼可见；
+   - 条目单行截断 + 省略号（title 属性给完整标题），
+     所有条目等高，长标题不会把 240px 窄栏撑出参差的缺口。
+
+   参数集中在这里，改观感不用动组件。 ============================================================================ */
+
+:root {
+  /* 目录卡片底色：比 card 再压一点点，才能在壁纸/白底上都"坐住" */
+  --toc-bg: var(--card);
+  /* 轨道竖线颜色：比常规 border 略实，窄栏里才看得见 */
+  --toc-rail: color-mix(in srgb, var(--border) 88%, var(--foreground));
+  /* 激活项底色：accent 的极淡蒙版 */
+  --toc-active-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  /* 层级缩进步长 */
+  --toc-indent: 0.875rem;
+}
+
+.dark {
+  /* 深色下 border 本身就够暗，轨道要反过来提亮 */
+  --toc-rail: color-mix(in srgb, var(--border) 70%, var(--foreground));
+  --toc-active-bg: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 卡片主体。flex 列布局 + 内部滚动：条目很多时只有导航区滚动，
+   标题行始终钉在卡片顶部。 */
+.article-toc-card {
+  background-color: var(--toc-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 0.75rem);
+  /* overflow-anchor: none —— 目录内部滚动会改变可视高度，
+     浏览器默认的滚动锚定会试图"补偿"整页位置，造成点击目录后页面轻微跳动 */
+  overflow-anchor: none;
+}
+
+/* 壁纸模式：目录更需要稳定底色（与 .admin-sidebar 的处理一致）。
+   bg-card 在壁纸下是 78% 半透明，目录只有 240px 宽、文字又密，
+   透出的壁纸会直接把可读性拉下去。 */
+body.has-wallpaper .article-toc-card {
+  background-color: color-mix(in srgb, var(--card) 94%, var(--background));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* 标题行 */
+.article-toc-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--foreground) 72%, transparent);
+}
+
+/* 条目数徽章：给"这文章有几节"一个量化信号，也让标题行左右配平 */
+.article-toc-count {
+  margin-left: auto;
+  min-width: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: color-mix(in srgb, var(--foreground) 55%, transparent);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 导航区：左缘轨道线。padding-left 留出轨道到文字的呼吸，
+   缩进由条目的 margin-left 承担（这样轨道线保持在最左，不随层级右移）。 */
+.article-toc-nav {
+  position: relative;
+  margin: 0.375rem 0 0;
+  padding-left: 0.5rem;
+  /* 轨道：贴在卡片内容左缘的一条竖线 */
+  background-image: linear-gradient(to right, var(--toc-rail) 0 1px, transparent 1px);
+  background-repeat: no-repeat;
+  background-position: 0.5rem 0;
+  background-size: 1px 100%;
+}
+
+/* 单条目录项。
+
+   缩进落在 padding-left 上（而不是 margin-left）：所有条目左边缘都贴住
+   轨道线，h2/h3 只是文字往里缩。这样激活项的 accent 竖线（left:0）永远
+   压在轨道上，任何层级都不会偏出去；悬停/激活的底色块也从轨道起算，
+   不会出现"h3 的底色悬在半空、和轨道断开"的观感。
+
+   ⚠️ 截断方式选的是**单行省略号**，不是两行 -webkit-line-clamp。
+   两个原因：
+   1) Next 的 CSS 流水线（Lightning CSS）会把 display:-webkit-box 改写为
+      flow-root，-webkit-line-clamp 随之失效，条目会被硬裁成"第二行只露一半"；
+   2) 目录是导航不是正文，条目等高反而更好扫读：一眼能数出有几节，
+      也不会因为某条标题特别长把整块撑出一道缺口。
+   单行 + text-overflow:ellipsis 在所有浏览器上表现一致，
+   完整标题仍可通过 title 悬停提示与点击跳转获取。 */
+.article-toc-item {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  padding: 0.25rem 0.5rem 0.25rem calc(0.625rem + var(--toc-depth, 0) * var(--toc-indent));
+  border-radius: 0 0.5rem 0.5rem 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--foreground) 62%, transparent);
+  text-decoration: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease;
+}
+
+/* 层级递减：h1 最重、h3 最轻。用字重和透明度而不是字号，
+   字号一变整块高度就会跟着抖。 */
+.article-toc-item[data-toc-level='1'] {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--foreground) 78%, transparent);
+}
+
+.article-toc-item[data-toc-level='3'] {
+  font-size: 0.78125rem;
+  color: color-mix(in srgb, var(--foreground) 52%, transparent);
+}
+
+.article-toc-item:hover {
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+
+/* 激活项：accent 淡底 + 左侧实线 + 加粗。
+   左侧竖线用 ::before 画，left 取 0 而不是负偏移 —— 条目的左边缘就是
+   .article-toc-nav 的轨道线所在位置（nav 的 padding-left 与 background-position
+   同为 0.5rem），线落在 left:0 才正好压住轨道，不会偏出去一截。 */
+.article-toc-item[aria-current='true'] {
+  background-color: var(--toc-active-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.article-toc-item[aria-current='true']::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.25rem;
+  bottom: 0.25rem;
+  width: 2px;
+  border-radius: 9999px;
+  background: var(--accent);
+}
+
+/* 键盘聚焦：目录项也是链接，focus 必须可见 */
+.article-toc-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 目录内部滚动条收窄：240px 的栏里默认 8px 滚动条太抢眼 */
+.article-toc-nav::-webkit-scrollbar {
+  width: 4px;
+}
+
+.article-toc-nav::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  border-radius: 9999px;
+}
+
+/* 减少透明偏好：去掉模糊，底色已经接近实心 */
+@media (prefers-reduced-transparency: reduce) {
+  body.has-wallpaper .article-toc-card {
+    background-color: var(--card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* 减少动效偏好：只保留颜色变化，不做任何过渡动画 */
+@media (prefers-reduced-motion: reduce) {
+  .article-toc-item {
+    transition: none;
   }
 }

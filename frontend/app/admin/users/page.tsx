@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Unlock, UserPlus } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import gsap from 'gsap'
+import { AdminPageHeader } from '@/components/admin-page'
 import { easeOut, hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
 import { RowLoading } from '@/components/page-loader'
 import {
@@ -347,34 +348,32 @@ export default function AdminUsersPage() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">用户管理</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {data ? `共 ${data.total} 个用户` : '加载中...'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
-              setPage(1)
-            }}
-            placeholder="搜索邮箱或用户名..."
-            className="w-full min-w-0 rounded-lg border border-border bg-card px-3.5 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-56"
-          />
-          <button
-            onClick={() => setAddOpen(true)}
-            {...hoverTapScale}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25"
-          >
-            <UserPlus className="h-4 w-4" />
-            添加用户
-          </button>
-        </div>
-      </div>
+      <AdminPageHeader
+        title="用户管理"
+        description={data ? `共 ${data.total} 个用户` : '加载中...'}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                // 关键词一变就回第 1 页：否则可能停在一个已不存在的页码上。
+                setPage(1)
+              }}
+              placeholder="搜索邮箱或用户名..."
+              className="w-full min-w-0 rounded-lg border border-border bg-card px-3.5 py-2 text-sm outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 sm:w-56"
+            />
+            <button
+              onClick={() => setAddOpen(true)}
+              {...hoverTapScale}
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white shadow-md shadow-accent/25"
+            >
+              <UserPlus className="h-4 w-4" />
+              添加用户
+            </button>
+          </div>
+        }
+      />
 
       {isLoading ? (
         <div className="mt-6">

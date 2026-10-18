@@ -16,6 +16,7 @@ import { SecretInput } from '@/components/secret-input'
 import { Select } from '@/components/form-controls'
 import { useSiteConfigActions } from '@/components/site-config-context'
 import { hoverTapScale, prefersReducedMotion, useReveal } from '@/components/motion'
+import { AdminPageHeader } from '@/components/admin-page'
 import { PageLoading } from '@/components/page-loader'
 import type { SiteSettings } from '@/lib/types'
 
@@ -353,7 +354,8 @@ export default function AdminSettingsPage() {
   if (isLoading || !form) {
     return (
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">网站管理</h1>
+        {/* 加载态与正常态共用同一页头，避免标题在数据到达时跳一下 */}
+        <AdminPageHeader title="网站管理" />
         <div className="mt-6">
           <PageLoading minHeight="8rem" />
         </div>
@@ -366,20 +368,20 @@ export default function AdminSettingsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">网站管理</h1>
-          <p className="mt-1 text-sm text-muted-foreground">站点信息、注册开关与邮件服务配置</p>
-        </div>
-        <button
-          onClick={() => save.mutate()}
-          disabled={save.isPending}
-          {...hoverTapScale}
-          className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
-        >
-          {save.isPending ? '保存中...' : '保存设置'}
-        </button>
-      </div>
+      <AdminPageHeader
+        title="网站管理"
+        description="站点信息、注册开关与邮件服务配置"
+        actions={
+          <button
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            {...hoverTapScale}
+            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white shadow-md shadow-accent/25 disabled:opacity-50"
+          >
+            {save.isPending ? '保存中...' : '保存设置'}
+          </button>
+        }
+      />
 
       <div className="mt-6 grid gap-4">
         <Section icon={<Globe className="h-4 w-4 text-accent" />} title="站点信息">
