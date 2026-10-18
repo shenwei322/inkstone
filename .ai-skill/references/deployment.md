@@ -424,6 +424,48 @@ gh release create v1.28.0 dist/inkstone-images-v1.28.0.tar \
 gh release upload v1.28.0 dist/inkstone-images-v1.28.0.tar --clobber
 ```
 
+#### 发布说明的编码：中文绝不能经命令行内联
+
+Release 正文里的中文如果走命令行参数（`gh release create --notes "中文…"`、
+`curl -d "{...中文...}"`），Windows 的 `CreateProcessA` 会按 ANSI 代码页转换，
+非 ASCII 字符全部变成 `?`。这是**不可逆**的——GitHub 存下的就是问号，改不回来，
+只能照提交历史把整篇说明重写一遍。Beta1.28 整篇变成 `????`、768 个问号 0 个中文，
+就是这么来的。
+
+正确做法：正文先落成 **UTF-8 无 BOM** 文件，再从文件读进请求体。
+
+```powershell
+# 正文：write 工具或 [System.IO.File]::WriteAllText(..., UTF8Encoding($false)) 写出
+$body = [System.IO.File]::ReadAllText('RELEASE_NOTES.md', [System.Text.Encoding]::UTF8)
+$json = @{ tag_name='Beta1.30'; name='Beta1.30'; body=$body; draft=$false } |
+        ConvertTo-Json -Depth 3
+[System.IO.File]::WriteAllText('payload.json', $json, (New-Object System.Text.UTF8Encoding($false)))
+```
+
+```bash
+# 本机没有 gh CLI，用 REST API；--data-binary @文件 而不是 -d '内联 JSON'
+curl -x http://127.0.0.1:7897 -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json; charset=utf-8' \
+  --data-binary @payload.json \
+  https://api.github.com/repos/shenwei322/inkstone/releases
+# 改已有 Release 的正文（PATCH，只传要改的字段）
+curl -x http://127.0.0.1:7897 -X PATCH \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json; charset=utf-8' \
+  --data-binary @patch.json \
+  https://api.github.com/repos/shenwei322/inkstone/releases/<release_id>
+```
+
+另有两个同源坑，一起避开：
+
+- **`Get-Content -Raw` 不是纯字符串**：PowerShell 5.1 返回带 `PSPath`/`PSDrive` 元数据的
+  PSObject，直接 `ConvertTo-Json` 会把它序列化成一整个对象，GitHub 报 422。
+  用 `[System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)`。
+- **未认证 API 只有 60 次/小时**，且本机 GitHub 访问必须经过代理（`127.0.0.1:7897`）。
+  token 可从 git 凭据管理器取：`git credential fill`（`host=github.com`），
+  该 OAuth token 的 scope 为 `gist, repo, workflow`，够建 Release 与上传资产。
+
 发布后后台「系统更新 → 检查更新」即可在「发布说明 + 资产」里看到该版本并一键安装。
 
 ### 部署到服务器（deploy/publish-server.ps1，方式一）
