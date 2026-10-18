@@ -5,7 +5,7 @@ Next.js（App Router）+ React 19 + TypeScript + Tailwind CSS v4 + React Query +
 ## 目录结构
 
 ```
-frontend/app/                   # 访客站路由（App Router；含站内后台 app/admin/，19 页）
+frontend/app/                   # 访客站路由（App Router；含站内后台 app/admin/，15 个一级页面 + 4 个子路由）
 ├── layout.tsx                # 根布局：Providers + Navbar + 壁纸 + Footer + SiteHead
 ├── page.tsx                  # 首页（文章列表 + 侧栏小工具）
 ├── login/page.tsx            # 登录
@@ -27,24 +27,24 @@ frontend/app/                   # 访客站路由（App Router；含站内后台
 ├── me/drafts/[id]/           # 草稿预览
 ├── not-found.tsx             # 404（同时覆盖全应用未匹配 URL）
 ├── error.tsx                 # 错误边界（恢复回调 prop 是 retry）
-└── admin/                    # 站内管理后台（19 页）
-    ├── layout.tsx            # 侧边栏（fixed 贴视口最左、w-52 全高、顶部避开导航栏 4rem）+ 权限守卫 + 深浅模式；内容区 max-w-5xl，文章新建/编辑路由（/admin/articles/new|edit）放宽 max-w-7xl
-    ├── page.tsx              # 概览（统计卡 + 资源监控 + 趋势图）
+└── admin/                    # 站内管理后台（15 个一级页面 + 4 个子路由）
+    ├── layout.tsx            # 四组可折叠分组导航（fixed 贴视口最左、w-52 全高、顶部避开导航栏 4rem）+ 权限守卫 + 深浅模式；内容区 max-w-5xl，文章新建/编辑路由（/admin/articles/new|edit）放宽 max-w-7xl
+    ├── page.tsx              # 概览（统计卡 + 资源监控 + 趋势图 + 关于本系统）
     ├── users/                # 用户管理
-    ├── articles/             # 文章管理 + 编辑器
-    ├── tags/                 # 标签管理
+    ├── articles/             # 文章管理（含回收站标签页）+ 编辑器
+    ├── taxonomy/             # 分类与标签（含分类层级管理）
     ├── pages/                # 页面管理
     ├── comments/             # 评论管理（含审核）
     ├── files/                # 文件管理
-    ├── trash/                # 回收站（还原 / 彻底删除）
-    ├── backups/              # 备份恢复（刻意不做一键还原）
+    ├── system/               # 系统维护（版本与更新 / 数据备份）
     ├── sitemap/              # 站点地图（URL 列表 + 统计 + robots 预览）
     ├── links/                # 友情链接
     ├── appearance/           # 外观（菜单/小工具/侧栏位置）
-    ├── security/             # 安全防护（验证码/限流/邮箱验证）
-    ├── settings/             # 网站管理（站点信息/壁纸/SMTP）
-    ├── logs/                 # 网站日志（统计卡片/多维筛选/详情展开/CSV 导出）
-    └── about/                # 关于系统
+    ├── security/             # 安全防护（验证码/限流/邮箱验证/IP 封禁阈值）
+    ├── ip-access/            # IP 管理（访问明细/高频排行/封禁与解封）
+    ├── settings/             # 站点设置（站点信息/壁纸/SMTP）
+    └── logs/                 # 网站日志（统计卡片/多维筛选/详情展开/CSV 导出）
+    # 旧路由保留为跳转页：trash/、tags/、about/ 已删除；backups/、system-update/ 仅剩重定向
 
 frontend/components/          # 组件（页面组件单份存放于此）
 frontend/lib/                 # 工具与状态（api.ts / types.ts / auth-context / ui.ts / seo.ts）
@@ -193,11 +193,12 @@ export function uploadImage(file: File): Promise<string>  // 返回 url
 export function downloadFile(id: number, filename: string)  // 鉴权下载
 ```
 
-**系统更新**（Beta1.27，见「系统更新页」）：
+**系统更新**（Beta1.28 起只提示、不执行，见「系统维护页 / 版本与更新」）：
 ```ts
-fetchUpdateStatus()                    // GET  /admin/system/update        只读本地状态，可高频轮询
-checkSystemUpdate()                    // POST /admin/system/update/check  联网比对上游提交
-applySystemUpdate(commit)              // POST /admin/system/update/apply  返回 202，异步执行
+fetchUpdateStatus()                    // GET  /admin/system/update        只读本地状态
+checkSystemUpdate()                    // POST /admin/system/update/check  联网比对上游版本（页面唯一会调的写操作）
+// 下面两个接口保留，但默认 UPDATE_MANUAL_ONLY=true 时直接返回 403（前端已不再调用）
+applySystemUpdate(target)              // POST /admin/system/update/apply
 rollbackSystemUpdate(backupId)         // POST /admin/system/update/rollback
 ```
 
@@ -590,7 +591,96 @@ RSS 2.0 + `content:encoded` 全文，加密文章只给标题链接）。前端�
 拼出，`/feed.xml` 不在 `/api/v1` 下所以不能从 API 基址推），提供打开与复制。
 
 ### 管理后台（博客站 `/admin` 全功能）
-`frontend/app/admin/`（21 页，全部管理功能）：站内 `layout.tsx` 做**权限守卫**（未登录跳 `/login`，非管理员显示「需要管理员权限」）+ 侧边栏导航；navbar「后台管理」按钮、登录分流（admin 角色跳 `/admin`）、首页空态「写文章」都指向这里。侧边栏导航顺序（15 项）：概览/用户管理/文章管理/标签管理/页面管理/评论管理/文件管理/站点地图/友情链接/外观管理/安全防护/网站管理/系统更新/网站日志/关于系统。
+
+`frontend/app/admin/`（15 个一级页面 + 4 个 new/edit 子路由，共 19 个 `page.tsx`）：站内 `layout.tsx` 做**权限守卫**（未登录跳 `/login`，非管理员显示「需要管理员权限」）+ 分组导航；navbar「后台管理」按钮、登录分流（admin 角色跳 `/admin`）、首页空态「写文章」都指向这里。
+
+#### 导航结构（Beta1.28 重排：18 项平铺 → 15 项四组）
+
+| 分组 | 条目 |
+|---|---|
+| （无标题） | 概览 |
+| 内容 | 文章管理 / 页面管理 / 分类与标签 / 评论管理 / 文件管理 |
+| 站点 | 友情链接 / 外观管理 / 站点地图 |
+| 安全 | 安全防护 / IP 管理 |
+| 系统 | 用户管理 / 站点设置 / 系统维护 / 网站日志 |
+
+为什么这么分：
+
+- **平铺 18 项的痛点**：一屏放不下，滚到底才看得到「网站日志」；而且「回收站」与「关于系统」视觉同级，实际使用频率差两个数量级。
+- **分组标题是折叠按钮**：默认全展开（约 312px，720p 也放得下），点标题可收起不常用的组。折叠状态存 `localStorage['admin_nav_collapsed']`，**用 `useSyncExternalStore` 订阅**而不是「effect 里 setState」——项目开了 `react-hooks/set-state-in-effect`，同步 setState 直接报 error（见下方「折叠状态的实现约束」）。
+- **当前所在分组强制展开**：`group.key !== activeGroupKey` 才允许折叠。否则用户收起过某组、又通过链接进到该组内的页面时会「进了页面却找不到自己在哪」。
+- **`isActive` 支持 `prefix: false`**：概览是 `/admin` 且必须精确匹配，否则所有后台路由都会把它点亮（`pathname.startsWith('/admin')` 恒为 true）。其余条目按 `item.href` 或 `item.href + '/'` 前缀匹配。
+
+#### 三组已合并的同源功能
+
+| 合并前 | 合并后 | 理由 |
+|---|---|---|
+| 文章管理 + 回收站 | `articles` 页的「全部 / 已发布 / 草稿 / 回收站」筛选标签页 | 同一张表、同一套删除/还原语义。删完文章下一步必然是去回收站确认，来回跳页只是多两次导航 |
+| 标签管理 | `taxonomy` 页（分类 / 标签两个标签页） | **分类的增删改接口一直存在，前端此前没有任何入口**（只能在写文章下拉框里选已有分类，建不了也改不了名）。顺带补齐这个缺口 |
+| 系统更新 + 备份恢复 | `system` 页（版本与更新 / 数据备份） | 运维看到「有新版本」后第一步就是备份，两页本就该相邻，此前分居侧栏两处 |
+| 关于系统 | 概览页底部的「关于本系统」区 | 全是静态介绍与版本信息，访问频率接近零，却占侧栏最后一行 |
+
+**旧路由保留为跳转页**：`backups/page.tsx` 与 `system-update/page.tsx` 只剩 `router.replace('/admin/system')`（用 `replace` 不留历史中间页）。`trash/`、`tags/`、`about/` 已直接删除。
+
+#### 折叠状态的实现约束（别改回 useState + useEffect）
+
+```ts
+// ✅ 现在：外部系统订阅
+const collapsed = useSyncExternalStore(subscribeCollapsed, getCollapsedSnapshot, () => EMPTY_COLLAPSED)
+
+// ❌ 会报 react-hooks/set-state-in-effect
+useEffect(() => { setCollapsed(readCollapsed()) }, [])
+```
+
+`getSnapshot` 必须返回**稳定引用**，否则 React 判定为无限更新并抛错。所以模块级缓存了 `collapsedSnapshot` + `collapsedRaw` 两个变量：只有 `localStorage` 里的字符串变了才换新对象；写入时同步更新缓存并通知监听器。
+
+#### 后台顶部导航与前台化差异
+
+`components/navbar.tsx` 在 `/admin` 下（`isAdminRoute`）：
+
+- **品牌区不再是 `<Link>`**：改为纯标识（同级渲染 `<span>`），后面接 `/ 管理控制台` 面包屑。点品牌回首页会让正在写文章的人误触离开。
+- **主导航整体不渲染**：那些入口与左侧栏功能重复，点进去会离开工作台。
+- **搜索框不渲染**：搜的是前台文章，后台维护时用不上，留着只挤占顶栏并诱导误触。
+
+#### 后台不渲染页脚
+`components/site-footer.tsx` 在 `/admin` 及其子路由返回 `null`（判定 `isAdminRoute` 与 `navbar.tsx` 同款）：后台是全屏工作台，页脚品牌区与「导航」列（含自定义菜单、隐私政策、用户协议）在这里既重复又会把管理员带回前台。早返回必须放在 `useSiteConfig()` / `usePathname()` 之后，避免后台/前台两条渲染路径 hook 数量不一致。前台各页仍正常显示页脚。
+
+#### 壁纸不进后台内容区（`.admin-surface`）
+壁纸是访客站的展示元素，`body.has-wallpaper` 却挂在 `<body>` 上，于是后台卡片跟着变成 `--surface-alpha: 78%` 半透明：深色壁纸会直接从表格、表单、导航标题背后透上来（实拍过「分类与标签」页，空态文案几乎读不出来）。
+
+后台容器加 `admin-surface` 类（`app/admin/layout.tsx` 根 div），在 `globals.css` 里把这个变量抬到 `100%`——**不改 `--surface-alpha` 的全局值**，只覆盖后台作用域；所有已收口的规则（卡片/输入框/下拉/代码块）会一起变实心，不必逐个覆盖。另加 `.admin-surface::before` 一层 `position: fixed` 的实底，否则内容区之间的空隙仍会露出壁纸。同域内 `backdrop-filter` 一并关掉（表面已实心，模糊只是白耗 GPU）。
+
+#### 新增接口：分类管理
+`lib/api.ts` 新增 `fetchCategoryTree` / `createCategory` / `updateCategory` / `deleteCategory`，类型 `CategoryNode`（`lib/types.ts`，含 `parent_id` / `depth` / `article_count` / `children`）。
+
+⚠️ **后端 `depth` 从 1 起算**（顶级分类 = 1，见 `service/taxonomy_service.go` 的 `categoryDepth`）。前端缩进必须用 `Math.max(0, node.depth - 1)`，直接把 `depth` 当级数会让顶级分类也缩进一格，看起来凭空多一层父级。
+
+#### 共用分段标签页组件
+`components/admin-tabs.tsx` 导出 `AdminTabs` / `AdminTabPanel`。**只用于「同一实体/同一件事」的不同视角**（文章/回收站、更新/备份、分类/标签）——不同领域的功能（如安全防护里的验证码与 IP 封禁）不要塞进 tab，那会让侧栏点进来的人一脸茫然地数标签页。
+
+`AdminTabPanel` 用 `key={value}` 强制重挂：内容区常带自己的 `useReveal` 入场动画，不重挂的话第二次切回来动画不再播，视觉上像卡住了。
+
+#### 后台页头与空态（`components/admin-page.tsx`）
+16 个功能页此前各写一份 `<h1> + <p>` 与虚线空态，图标尺寸/着色、`items-center` 与 `items-start`、操作区 `gap-2` 与 `gap-3`、空态 `p-16` 与 `py-16` 全是各写各的。现统一为两个共享组件：
+
+```tsx
+<AdminPageHeader
+  title="标签管理"
+  description={<>共 {tags.length} 个标签</>}   // 允许 ReactNode：可塞徽章、用量
+  icon={TagIcon}                               // 可选，统一 24px + text-accent
+  actions={<button …>保存</button>}            // 可选，窄屏自动换行到标题下方
+/>
+
+<AdminEmpty icon={TagIcon} title="还没有标签" hint="可选第二行" action={<可选按钮/>} />
+```
+
+硬约束：
+- 后台页头**一律**走 `AdminPageHeader`，不要再手写 `<h1 className="text-2xl font-bold tracking-tight">`。唯一例外是概览页末尾「关于本系统」区的 logo + 站名 + 版本徽章 Hero 横排（原独立「关于系统」页，现在是 `AboutSection` 而非页面级标题）。
+- 页面级 **不要再用 `PageTransition`**：`admin/layout.tsx` 的 `<Reveal duration={0.45}>` 已统一负责后台入场，页面内再包一层会二次淡入。9 个页面原有的 `PageTransition` 已全部改回普通 `<div>`。
+- 列表页空态一律 `AdminEmpty`（自带 `card-flat` + 虚线边框 + `mt-6`）。**卡片内部**的小空提示（`rounded-lg border-dashed p-6`，如版本与更新页的发布说明为空）保留原样，不要硬套 `AdminEmpty`——它是页面级组件，塞进卡片会撑高并多出一层阴影。
+- 后台卡片圆角统一 `rounded-xl`；`rounded-2xl` 只留给浮层、弹窗、头像/图标容器，以及背景不是 `bg-card` 的提示块（amber 告警、accent 待生效块）。
+- 主按钮统一 `shadow-md shadow-accent/25`（旧代码里 `shadow-lg shadow-accent/25` 已收敛）。
+- 编辑页（`/admin/pages/new|edit`）的宽度与内边距由 `components/page-admin.tsx` 的 `mx-auto max-w-4xl` 提供，**不要再叠 `px-4 py-10`**：`admin/layout.tsx` 已有 `px-4 py-6 sm:px-6 sm:py-8`，叠加会让标题离导航远一截。文章编辑页（`article-editor.tsx` 的 `px-4 py-8`）是跨场景共享组件（`/me/articles/*` 也在用，前台没有内层 padding），**不要动**。
 
 #### 站点地图页（`frontend/app/admin/sitemap/page.tsx`）
 - 数据：`useQuery(['admin','sitemap'], fetchSitemapData)`（GET `/admin/sitemap`）
@@ -608,20 +698,90 @@ RSS 2.0 + `content:encoded` 全文，加密文章只给标题链接）。前端�
 - 导出 CSV：`downloadLogs()` 用 `fetch + Bearer` 直接取 blob（**不能走 `api()` JSON 客户端**），401 时 `tryRefresh()` 刷新重试；通过 `a[download]` + `URL.createObjectURL` 触发浏览器下载
 - 分页：每页 30 条
 
+#### IP 管理页（`frontend/app/admin/ip-access/page.tsx`，Beta1.28 新增）
+三段信息按「先看全局 → 再看是谁 → 最后动手」排列：
+
+1. **概览卡片**：窗口请求数（含 IP 数）/ 最忙的 IP / 生效封禁 / 丢弃记录
+2. **高频 IP 表**：按请求量排序，点击行展开该 IP 的路径分布（带状态码着色，
+   4xx 橙、5xx 红），行内直接封禁/解封
+3. **封禁记录 + 访问明细**：前者用于管理（含已过期，标「自动/手动」），后者用于取证
+
+时段用 `WINDOW_OPTIONS`（近 5 分钟 / 1 小时 / 24 小时 / 7 天）表达而非日期选择器：
+排查 CC 时关心的永远是「最近 5 分钟」，让运维手填日期反而更慢。
+明细的 `from` 由所选窗口换算成 ISO 字符串，与上方排行保持同一口径。
+
+**易踩的坑**：
+
+- 展开行用 `<Fragment key={row.ip}>` 而非 `<>…</>`——简写不能挂 key，循环里会触发
+  React 的 missing key 警告，且展开状态会错位；
+- `bans` 用 `useMemo(() => bansQuery.data?.bans ?? [], [bansQuery.data])` 包一层：
+  `?? []` 每次渲染都新建数组，直接当下方 `useMemo` 的依赖等于白做；
+- 封禁表的「剩余」列与「解封」按钮必须 `whitespace-nowrap`，
+  否则窄列会把「1 小时 59 分钟」和两个字挤成竖排。
+
+`createIPBan` 的 `minutes` 三态（不传 = 默认时长 / 0 = 永久 / >0 = 指定分钟）
+在页面里由空输入框 → `undefined`、`"0"` → `0` 完成映射。
+
+#### 安全防护页的 IP 封禁配置块（`frontend/app/admin/security/page.tsx`）
+在上述日志页同级的「安全防护」页里，`限流阈值` 之后新增 `IP 访问封禁` 一个 Section：
+两个 Toggle（记录开关、自动封禁开关）+ 四个数字输入（窗口/上限/封禁时长/保留天数）
++ 一个白名单 textarea。
+
+「记录开关」与「自动封禁开关」分开是刻意的：默认只记录、不自动封。
+谁都不希望升级完第二天发现搜索引擎爬虫被自己站点封了——
+先让运维在「IP 管理」页看清楚常态流量，再把阈值调到常态之上并打开自动封禁。
+
 ### 用户中心（`app/me/page.tsx`）
 所有登录用户可用：账户安全（改用户名/密码）、我的文章、我的评论。
 
-#### 系统更新页（`frontend/app/admin/system-update/page.tsx`，Beta1.27）
+#### 系统维护页（`frontend/app/admin/system/page.tsx`，Beta1.28 合并）
+原「系统更新」与「备份恢复」两页的合并体，内含两个标签页：**版本与更新** / **数据备份**。正文分别在 `components/system-update-panel.tsx` 与 `components/backup-panel.tsx`。
+
+**为什么抽成组件**：操作按钮（刷新状态 / 检查更新 / 立即备份）留在**面板内部**而不是页头 `actions`。页头 actions 是整页共用的，接到 tab 上就得把 mutation 提升到父组件，换来的是「切到备份 tab 后，页头还挂着检查更新按钮」这种错位。
+
+**该页刻意不读 `searchParams`**：那会让整页依赖 `useSearchParams`，在 App Router 下退化成 CSR bailout，必须再包一层 `Suspense` 才能静态化。旧路由 `/admin/backups` 只是跳到本页，多一次点击远比这层复杂度划算。
+
+##### 版本与更新（原 `/admin/system-update`）
+后台**不执行更新**：面板只负责告诉你有新版本，更新动作由运维在服务器上手动完成。
 - 数据：`useQuery(['admin','system','update'], fetchUpdateStatus)`（GET `/admin/system/update`，**后端不联网**）；
-  `refetchInterval` 按 `stage.running` 动态开关（进行中 2.5 秒轮询，空闲不轮询）
+  已去掉 `refetchInterval`——没有后台任务可等，只在进入页面与点「刷新状态」时读一次
 - 进入页面自动检查一次：本地 `version.last_checked` 为空或超过 10 分钟才触发 `checkSystemUpdate()`（`autoChecked` ref 保证只触发一次，避免循环）
 - 检查更新：`checkSystemUpdate()` → 把返回的 `update` 直接 `setQueryData` 写回缓存（不额外请求）
-- 一键更新：`applySystemUpdate(commit)` 返回 **202**，先 `notify.confirm()` 二次确认（提示落后提交数、预计替换文件数、可能短暂中断），随后靠轮询看进度
-- 进度面板 `StagePanel`：阶段中文名（`PHASE_LABEL`）、进度条（`stage.progress`）、错误文案、变更文件数、备份 ID
-- 「待生效」卡片：`version.pending` 存在时说明源码已替换、等宿主代理重建（`mode === 'waiting_agent'`）；
-  宿主代理执行完毕会写回 `update-result.json` → 页面显示代理结果
-- 回滚：`rollbackSystemUpdate(backupId)`（来自 `backups`，最新在前）
-- 更新历史：`update.history`（后端保留最近 20 条）
+- 有新版本时显示醒目提示卡（`version.update_available`）：commits 模式写「上游有 N 个提交」，releases 模式写「发现新版本 vX」
+- 「手动更新步骤」卡：两段命令（源码/二进制 与 Docker Compose），路径统一用 `/path/to/inkstone` 占位，装更新前提醒备份数据库与 `data/`
+- **已移除、不要加回来的 UI**：`SyncButton`（立即更新）、`StagePanel`（进度条）、「回滚」面板、`pending` 卡里的操作入口。
+  版本对比、更新日志/发布说明、更新历史仍是只读信息，保留
+- 后端契约：`UpdateOverview.manual_only` 为 true（默认）时 apply/rollback 返回 **403**；前端不调用这两个接口，
+  `lib/api.ts` 里保留函数并注明已停用（避免其它调用点编译失败）
+- 想恢复一键更新：运维显式设 `UPDATE_MANUAL_ONLY=false` 并重启后端，同时需把被删的入口补回来（属于功能回退，不是配置开关）
+
+##### 数据备份（原 `/admin/backups`）
+- 汇总卡：备份份数 / 总占用 / 单份体积（单份用 `total_size / total` 现算）
+- 列表：文件名（`font-mono`）、大小、创建时间、来源徽章（`manual` 手动备份 / `update` 更新前自动）
+- **刻意不提供一键还原**：导出的是 JSON 内容快照，不是 `pg_restore` 能直接消费的转储文件；直接灌回生产库会绕开系统的入库校验与消毒逻辑。页面底部「如何恢复备份」把这条写清楚，并指向 `deploy/backup.sh` 的 `pg_dump` 方案
+- 下载走 `downloadBackup()`（内部 `fetch + Bearer` 取 blob），**不能改成普通 `api()` 调用**——`api()` 只 `res.json()`
+
+#### 概览页的「关于本系统」（原 `/admin/about`）
+`app/admin/page.tsx` 末尾的 `AboutSection`，内容与原独立页一致（Hero + 版本提交 + 系统介绍 + 技术栈 + 功能特性 + 项目主页），数据来自 `fetchSystemInfo()`。
+
+保留原页的一个关键修复：技术栈卡片的入场动画必须用 `gsap.fromTo` 并**显式写出终态** `opacity: 1, x: 0`。用 `from` 只声明起点、终点依赖 GSAP 记住的当前值，而父级 section 的 `useReveal` 在同一批里也写 `transform/opacity`，两边抢同名属性时会有一方被覆盖——实测结果是动画被打断在 `opacity≈0.1` 的半透明态，卡片文字几乎看不见。
+
+`fetchSystemInfo` 失败时页面显示一条明确的错误条（`infoQuery.isError`），不能让页面看起来「一切正常但全是占位符」。
+
+#### 分类与标签页（`frontend/app/admin/taxonomy/page.tsx`，Beta1.28 新增）
+原「标签管理」页扩写，两个标签页：
+
+- **分类**：新建（名称 + 父级下拉，父级选项把树拍平并按层级用全角空格缩进）+ 树形列表（按 `depth` 缩进、`ChevronRight` 标记子级、显示各分类直接文章数）+ 行内重命名/删除。删除确认会说明「有 N 篇文章会变成未分类」而不是连文章一起删
+- **标签**：原标签页逻辑原样搬入（新建 / 重命名 / 删除，网格布局）
+
+⚠️ 后端 `depth` 从 1 起算，缩进用 `Math.max(0, node.depth - 1)`；`depth <= 1` 判为顶级（accent 着色）。
+
+两个 mutation 的 `invalidate` 同时失效 `['categories']` 与 `['tags']`：分类改动会影响树、编辑器下拉（走扁平 `/categories`）与前台导航。
+
+#### 文章管理页的回收站标签页
+`app/admin/articles/page.tsx` 的四个筛选：全部 / 已发布 / 草稿 / 回收站。前三个走 `fetchAdminArticles`，回收站走独立端点 `fetchArticleTrash`。
+
+关键实现：两个 `useQuery` 各自带 `enabled`，**互不请求**（`enabled: !isTrash` / `enabled: isTrash`）。`total` 也要跟着切——否则回收站 tab 会显示文章总数，翻页器直接错乱。
 
 ---
 

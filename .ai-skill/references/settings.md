@@ -104,6 +104,39 @@
 | `security_api_max` | `600` | API 上限（次/分钟/IP） |
 | `security_block_minutes` | `15` | 封禁时长（保留参数） |
 
+### IP 访问记录与封禁（Beta1.28）
+| Key | 默认值 | 说明 |
+|---|---|---|
+| `ip_guard_enabled` | `true` | 是否记录访问明细（关掉后仍在拦截已封禁 IP） |
+| `ip_guard_auto_ban` | `false` | 是否启用自动封禁（**默认关**，先观察常态流量） |
+| `ip_guard_window` | `5` | 统计窗口（分钟，1–1440） |
+| `ip_guard_max` | `600` | 窗口内允许的请求数上限 |
+| `ip_guard_ban_min` | `60` | 自动封禁时长（分钟，**0 = 永久**） |
+| `ip_guard_days` | `7` | 访问明细保留天数（1–365） |
+| `ip_guard_whitelist` | `""` | 白名单 IP / CIDR，逗号或换行分隔，**永不封禁** |
+
+这一组与上面的 `security_*` 是**两套机制**，别混：
+
+- `security_*` 是**请求级**限流：超预算的请求当场返回 429，IP 不落黑名单；
+- `ip_guard_*` 是**来源级**封禁：先把访问写进明细表，按窗口统计，
+  超过阈值就把整个 IP 拉黑，此后连静态资源都返回 403。
+
+两个关键设计点：
+
+1. **`ip_guard_whitelist` 是逃生通道**。`Banned()` 在判定时会先查白名单，
+   命中就直接放行——即使库里有该 IP 的封禁行。这样运维把自己误封之后，
+   只要把自己的 IP 写进白名单就能立刻恢复（被封的人进不了后台）。
+   同时 `Ban()` 拒绝封禁白名单内的地址，避免「刚加白又被封」的死循环。
+2. **`ip_guard_whitelist` 与整组 `ip_guard_*` 都不下发访客**。
+   `publicHiddenPrefixes` 里按前缀过滤，新增成员自动继承「不公开」。
+   把内网网段和运维固定出口 IP 暴露给匿名访客，等于免费告诉对方
+   「从哪些地址打过来不会被封」。
+
+`SettingsService.OnUpdate` 是这一组参数的配套机制：`IPGuardService` 自己缓存了
+阈值快照（每个请求都要判定，不能每次都反序列化整张设置表），
+保存设置后由回调立即失效——否则改完阈值要等最多 10 秒才生效，
+调参时会以为「设置没保存」。
+
 ### 文件管理
 | Key | 默认值 | 说明 |
 |---|---|---|
@@ -197,6 +230,23 @@ if maskKeys[key] && strings.TrimSpace(value) == "" {
 
 **目的**：用户在后台清空密钥输入框点保存时，不会误删已配置的密钥。
 
+### 2b. 只对访客隐藏（`publicHiddenPrefixes`）
+
+`maskKeys` 是「密钥」，后台也只给 `_set` 布尔值。但有些字段后台**必须能看到并编辑**，
+访客却一个都用不上——例如 `ip_guard_whitelist`（内网网段、运维固定出口 IP）
+和整组 `ip_guard_*` 阈值：
+
+```go
+var publicHiddenPrefixes = []string{"ip_guard_"}
+
+// Public() 里：
+if hasPublicHiddenPrefix(k) { continue }
+// AdminView() 不受影响
+```
+
+按**前缀**过滤而不是逐个列 key：这一组的成员还会增加，
+每加一个都要记得回来改名单，漏一次就是把防护参数永久暴露给匿名访客。
+
 ### 3. JSON 字段自动编解码（`jsonSettingKeys`）
 
 ```go
@@ -218,12 +268,19 @@ Get(key) (string, error)
 IntValue(key, fallback) int    // 数字读取
 BoolValue(key, fallback) bool  // 布尔读取（"true"/"false"）
 AllowRegistration() bool
-Update(map[string]any) error   // 更新 + 失效缓存
-Public() (map[string]any, error)     // 前端配置（排除 maskKeys）
+Update(map[string]any) error   // 更新 + 失效缓存 + 通知 OnUpdate 订阅者
+OnUpdate(fn func())            // 注册「设置已保存」回调
+Public() (map[string]any, error)     // 前端配置（排除 maskKeys 与 publicHiddenPrefixes）
 AdminView() (map[string]any, error)  // 管理视图（maskKeys → xxx_set）
 ```
 
-**缓存**：`All()` 结果缓存 30 秒；`Update()` 立即失效缓存（`cacheTime = time.Time{}`）。
+**缓存**：`All()` 结果缓存 30 秒；`Update()` 立即失效缓存（`cacheTime = time.Time{}`）
+并同步调用所有 `OnUpdate` 回调。
+
+**`OnUpdate` 解决什么问题**：`IPGuardService` 把阈值、窗口、白名单缓存在自己的
+快照里（每个请求都要判定，不能每次都反序列化整张设置表），
+`NewIPGuardService` 里用 `settings.OnUpdate(s.InvalidateConfig)` 订阅。
+没有这个回调的话，运维改完阈值要等 10 秒才生效，调参时会以为保存失败。
 
 ---
 

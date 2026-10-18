@@ -8,9 +8,9 @@ InkStone（砚石）把整套博客系统装进一次部署：后端 **Go + Gin 
 
 无论个人专栏还是多人协作的站点，InkStone 都想成为那种「五年后你还维护得动」的博客：没有插件泥潭，没有月费，也不会给你意外。
 
-✍️ 双编辑器 · 🛡️ 三种人机验证 · 🔄 后台一键更新 · 🌏 中英双语文档
+✍️ 双编辑器 · 🛡️ 三种人机验证 · 🔄 后台版本提示（手动更新） · 🌏 中英双语文档
 
-**Beta1.27** · [MIT 许可证](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
+**Beta1.28** · [MIT 许可证](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
 
 > **语言说明**：本文档为简体中文版，英文版见 [README.md](./README.md)。系统界面（访客站与后台）以及 `docs/`、`.ai-skill/` 文档目前均为简体中文——项目按中文优先设计，**尚未实现界面多语言（i18n）**。
 
@@ -51,7 +51,7 @@ InkStone（砚石）把整套博客系统装进一次部署：后端 **Go + Gin 
 
 ### 管理后台
 
-站点内置 `/admin` 后台，覆盖：仪表盘、文章、页面、分类标签、评论、友链、文件、用户、外观、安全防护、网站日志、站点地图、系统更新、关于系统。
+站点内置 `/admin` 后台，覆盖：概览、文章（含回收站）、页面、分类与标签、评论、友链、文件、用户、外观、安全防护、IP 管理、网站日志、站点地图、系统维护（版本更新与数据备份）。导航按内容 / 站点 / 安全 / 系统四组折叠，同类功能合并到同一页的标签页下。
 
 ## 技术栈
 
@@ -117,13 +117,14 @@ ssh root@<服务器IP> "docker load -i /opt/inkstone-images-<版本>.tar \
 
 镜像包由 `deploy/package-images.sh`（Linux/macOS）或 `deploy/package-images.ps1`（Windows）生成，同时产出 `.sha256` 校验文件。
 
-**方式三：后台在线更新（部署后长期使用）**
+**方式三：后台版本提示（手动更新）**
 
-在服务器上常驻更新代理，之后所有版本升级都在后台「系统更新」页完成：
+后台「系统维护 → 版本与更新」只负责提示：联网比对上游版本（提交或 Release），发现新版本时给出提示和手动更新命令，**不会自己下载、替换或重启任何东西**（`UPDATE_MANUAL_ONLY=true`，默认值）。升级仍按方式一 / 方式二在服务器上执行。
 
 ```bash
-# 更新目录必须是绑定挂载，宿主代理才拿得到待更新清单
-INKSTONE_UPDATE_DIR=/opt/inkstone-deploy/data/update ./deploy/update-agent.sh
+# 打开版本检查（不设置则连「有没有新版本」都不查）
+UPDATE_ENABLED=true
+# 恢复一键更新属于功能回退：还需设 UPDATE_MANUAL_ONLY=false，并补回前端入口
 ```
 
 生产环境还需同步 `deploy/nginx/inkstone.conf`（其中 `sitemap.xml`、`robots.txt`、`feed.xml` 三个精确匹配 location 缺失会导致 SEO 端点 404）。

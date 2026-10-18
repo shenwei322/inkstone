@@ -86,7 +86,7 @@ db.AutoMigrate(
     &model.User{}, &model.Article{}, &model.Category{}, &model.Tag{},
     &model.Comment{}, &model.Reaction{}, &model.Setting{}, &model.Page{},
     &model.FriendLink{}, &model.FileAsset{}, &model.DailyStat{}, &model.VisitorDay{},
-    &model.FriendLinkApplication{},
+    &model.FriendLinkApplication{}, &model.IPAccessLog{}, &model.IPBan{},
 )
 ```
 
@@ -126,6 +126,29 @@ middleware.RequireRole(model.RoleAdmin)
 
 ### TrafficStats（`middleware/stats.go`）
 异步记录每请求流量到 `StatService`，不阻塞请求。
+
+### IP 封禁与访问记录（`middleware/ip_guard.go`，Beta1.28 新增）
+
+两个中间件，职责刻意分开：
+
+| 中间件 | 时机 | 行为 |
+|---|---|---|
+| `IPBanGuard(guard)` | 前置 | 命中生效封禁 → `403` + `Retry-After`，不再进路由 |
+| `IPAccessRecorder(guard)` | `c.Next()` 之后 | 拿最终状态码，推给 `IPGuardService.Observe` |
+
+**注册顺序的三条硬约束**（在 `main.go` 里，别调换）：
+
+1. `IPBanGuard` 在 `TrafficStats` **之前** —— 被封 IP 的请求不该累加 PV/带宽；
+2. `IPBanGuard` 在 `IPAccessRecorder` **之前** —— 否则被封 IP 仍然写记录，
+   会把它自己刷成排行榜第一；
+3. 两者都在 `/api/v1` 分组与业务中间件之前 —— 被封的请求连 CSRF/CORS 都不该走到。
+
+`/healthz` 通过 `banCheckPathPrefixes` 跳过拦截：
+健康检查来自固定内网地址，一旦被封（比如它扫过别的路径），
+探活全失败 → 编排不停重启实例，形成「自己被自己封到起不来」。
+
+`IPAccessRecorder` 记录已登录用户时带上 `UserID`/`Username`（从 `GetCurrentUser`），
+这样后台可以回答「这个账号的请求来自哪些 IP」。
 
 ### CORS（`middleware/cors.go`）
 
@@ -463,8 +486,9 @@ All()                          // 全部（含默认值）
 Get(key)                       // 单值
 IntValue(key, fallback)        // 整数读取
 BoolValue(key, fallback)       // 布尔读取
-Update(map[string]any)         // 更新，自动失效缓存
-Public()                       // 公开配置（排除 maskKeys）
+Update(map[string]any)         // 更新，自动失效缓存 + 通知 OnUpdate 订阅者
+OnUpdate(fn func())            // 注册「设置已保存」回调
+Public()                       // 公开配置（排除 maskKeys 与 publicHiddenPrefixes）
 AdminView()                    // 管理视图（maskKeys 转为 xxx_set）
 ```
 
@@ -472,6 +496,11 @@ AdminView()                    // 管理视图（maskKeys 转为 xxx_set）
 - `maskKeys` 中的字段（SMTP 密码、验证码密钥）API 只返回 `xxx_set` 布尔值
 - **Update 时空值 = 保持原值**（防误删密钥）
 - `jsonSettingKeys` 中的字段（nav_menu、sidebar_widgets）自动 JSON 编解码
+- `publicHiddenPrefixes`（`ip_guard_`）只在 `Public()` 里隐藏，后台照常可见——
+  后台必须能编辑这些值，访客却一个都用不上；尤其白名单暴露出去等于
+  告诉对方「从哪些地址打过来不会被封」
+- `OnUpdate` 让持有本地缓存的 service 立即失效快照（`IPGuardService` 用它），
+  否则改完阈值要等 10 秒才生效，调参时会以为保存失败
 
 ### StatService
 - `Record(bytesIn, bytesOut, clientIP)` — 异步队列记录流量（IP 存 SHA256 哈希，不存原始地址）
@@ -500,9 +529,49 @@ Stats()                   // 各分类计数（旧接口）
 - article：文章创建/更新/删除（更新日志含**变更字段明细**，如「变更：标题、内容」）
 - user：创建/改资料/封禁/解禁/改角色/删除用户
 - comment：用户删自己评论、管理员删评论
-- setting：更新设置（**只记 key 名列表，绝不记录值**——设置含 SMTP 密码等密钥）、测试邮件
+- setting：更新设置（**只记 key 名列表，绝不记录值**——设置含 SMTP 密码等密钥）、测试邮件、封禁/解封 IP
 - file / link / page / taxonomy / system：增删改详情含标题/名称，更新前先查实体名
 - Detail 长度防护：`Record` 按字符截断到 500（列宽上限），防长标题导致入库失败
+
+### IPGuardService（`service/ip_guard_service.go`，Beta1.28 新增）
+
+IP 访问记录 + 封禁的核心逻辑。三段职责，全部与请求路径解耦：
+
+**1. 记录（`Observe`）** —— 请求结束后把事件推进 `chan AccessTask`（容量 4096），
+后台 `writeLoop` 消费并按「分钟桶」合并落库（见 `data-models.md`）。
+请求线程只做一次 channel send，**队列满就直接丢弃并计数**：
+访问记录是「可丢弃」的统计数据，绝不能因为它把正常请求拖慢或拖挂——
+这和 `LogService`（审计日志，满时同步落库）的取舍方向正好相反。
+
+`writeLoop` 里单条写入独立 `recover`：`for range` 里一次 panic 会让整个 worker 退出，
+此后所有访问记录静默消失，而页面上看不出任何异常。
+
+**2. 封禁判定（`Banned`）** —— 中间件每个请求都要问一次，必须 O(1)。
+生效封禁常驻内存 map，`banReloadInterval`（30 秒）重载 + 本实例封禁/解封后立即 `ReloadBans`。
+判定时做**惰性过期**：`IPBan.Active(now)` 当场失效，不依赖 reload 时点。
+
+`Banned` 会**先查白名单**再查 map：即使库里有该 IP 的封禁行也放行。
+这是运维的逃生通道——把自己误封之后，只要把自己的 IP 写进白名单就能立刻恢复
+（被封的人根本进不了后台去解封）。
+
+**3. 自动封禁（`maybeAutoBan`）** —— 内存里按 IP 做滑动窗口计数（`map[string][]time.Time`），
+窗口内总量超过 `ip_guard_max` 就写一条 `source=auto` 的封禁。
+
+内存计数器有两个上限保护：
+
+- `maxCounterIPs = 20000`：条目饱和后不再为新 IP 建档（不计数也就不会自动封），
+  但访问记录仍会落库，运维能在列表里看到；
+- `counterSweepInterval = 10 分钟`：清掉窗口内零命中的条目，防 map 无限增长。
+
+多副本部署时各实例各自计数、各自写库，最终以数据库里的封禁行为准（reload 会带进内存）。
+
+**其他约定**：
+
+- 本地回环默认**不记录**（同机反代探活、开发期本机访问会刷屏），
+  除非运维把回环显式写进白名单——那说明他明确想观察本机流量；
+- `DefaultBanMinutes()` 供 handler 区分「没传 minutes」与「传了 0（永久）」；
+- `TotalRequests()` 单独聚合窗口总量：拿 `TopIPs` 的结果累加会漏掉榜外 IP，
+  运维看到「总量 = 首名」会以为统计坏了。
 
 ### UpdateService（`service/update_*.go`，Beta1.27 新增）
 

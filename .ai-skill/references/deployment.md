@@ -114,7 +114,8 @@ server {
 | `FILES_DIR` | `./data/files` | 文件管理存储目录 |
 | `INKSTONE_DISABLE_CAPTCHA` | — | 设为 `1` 全局停用验证码（应急） |
 | `INKSTONE_LAP_SECRET` | 内置默认值 | 覆盖内置 Lap 实例的 siteverify secret（生产建议设置；未设置时用代码内置默认实例，零配置可用） |
-| `UPDATE_ENABLED` | `true` | 在线更新总开关（离线镜像部署默认 `false`） |
+| `UPDATE_ENABLED` | `true` | 更新检查开关：关掉后连「有没有新版本」都不查（离线镜像部署设 `false`） |
+| `UPDATE_MANUAL_ONLY` | `true` | **后台只提示、不执行更新**（本项目默认策略）。为 true 时 `apply` / `rollback` 一律 403，更新由运维在服务器上手动执行；只有显式设 `false` 才恢复一键更新与回滚 |
 | `UPDATE_REPO_URL` | GitHub 仓库地址 | 上游仓库，用于比对提交与生成网页链接 |
 | `UPDATE_BRANCH` | `main` | 跟踪分支 |
 | `UPDATE_SOURCE` | `commits` | 更新源协议：`commits`（默认，源码包替换源码）/ `releases`（GitHub Releases 镜像包） |
@@ -192,18 +193,24 @@ services:
 
 ---
 
-## 在线更新系统（Beta1.27）
+## 更新策略：只提示、不执行（Beta1.28 起）
 
-后台「后台管理 → 系统更新」（`/admin/system-update`）可以一键把站点升级到上游最新提交。
-链路：**检查上游提交 → 下载源码镜像包 → SHA256 校验 → 安全解压 → 逐文件备份 → 原子替换源码 → 触发重建**。
+后台「系统更新」（`/admin/system-update`）**不再提供一键更新**。它只做两件事：
+联网比对上游版本、把「有新版本」提示出来，并把手动更新命令贴在同一页。
+真正的更新由运维在服务器上执行（`git pull` + 重建，或 `docker compose pull/build`）。
 
-### 为什么需要宿主更新代理
+- 开关组合：`UPDATE_ENABLED=true`（允许检查）+ `UPDATE_MANUAL_ONLY=true`（默认，禁止执行）
+- `POST /admin/system/update/apply`、`/rollback` 在 `UPDATE_MANUAL_ONLY=true` 时**直接 403**，
+  不会下载、解压或替换任何文件（拒绝发生在调用 UpdateService 之前，有单测守着）
+- 手动更新命令与常规发布流程一致，页面上的两段命令就是从这里摘的
 
-后端跑在容器里：它能下载源码包、校验、替换源码，但**没有 docker 权限，也没有 systemd**，
-没法把新代码真正跑起来。最后一步「重建 + 重启」交给宿主机的代理脚本：
+### 旧的一键更新链路（已停用，仅作背景）
+
+原链路：**检查上游提交 → 下载源码镜像包 → SHA256 校验 → 安全解压 → 逐文件备份 → 原子替换源码 → 触发重建**。
+后半段依赖宿主更新代理（容器里既没有 docker 权限，也没有 systemd）：
 
 ```
-后台点「立即更新」
+后台点「立即更新」（按钮已移除）
   → 后端下载源码包（UPDATE_MIRROR）→ 校验 → 解压到 /app/data/update/staging/<commit>
   → 备份被覆盖的文件 → 写入宿主的源码目录（/app/src → 宿主 ./）
   → 写 /app/data/update/pending-update.json
@@ -211,10 +218,16 @@ services:
 宿主更新代理（默认每 60 秒轮询）
   → 读 pending-update.json → docker compose build && up -d
   → 写回 update-result.json + deployed-commit.json
-  → 后台页面显示「更新完成」
 ```
 
+这套代码仍在仓库里（`internal/service/update_*.go`、`deploy/update-agent.*`），
+设 `UPDATE_MANUAL_ONLY=false` 会重新接上——但前端入口已删除，属功能回退，生产不建议打开。
+
 ### 配置（源码构建部署）
+
+> 以下小节（配置 / 常驻代理 / 二进制部署 / 镜像包更新）描述的都是**已停用链路**的运维细节，
+> 只在设 `UPDATE_MANUAL_ONLY=false` 恢复一键更新时才需要。日常更新按上面的手动流程走：
+> `git pull` → 重建前后端（或 `docker compose up -d --build`）→ 重启。
 
 `docker-compose.prod.yml` 已内置两处挂载，**两者缺一不可**：
 
@@ -285,7 +298,7 @@ journalctl -u inkstone-update-agent -f      # 观察更新过程
 安装动作是 `docker load` + `docker compose up -d`：
 
 ```
-后台点「立即更新」（目标 = Release tag，如 v1.28.0）
+后台点「立即更新」（按钮已移除；目标 = Release tag，如 v1.28.0）
   → 后端 GET /repos/{owner}/{name}/releases/latest（或 /releases/tags/{tag}）
   → 版本比较：本地 deployed-version.json（缺失回落 AppVersion，兼容 Beta1.27 写法）
   → 从 assets 里按 UPDATE_IMAGE_ASSET 正则挑镜像包，下载到 UPDATE_DIR/images/
@@ -294,6 +307,13 @@ journalctl -u inkstone-update-agent -f      # 观察更新过程
 宿主更新代理（update-agent.sh / .ps1 均已支持 release_image 分支）
   → 校验 SHA-256 → docker load -i <镜像包> → docker compose up -d
   → 写回 deployed-version.json + release-history.json + update-result.json
+```
+
+手动更新（现在唯一的方式）：从 Release 下载 `inkstone-images-<tag>.tar` 上传到服务器，然后
+
+```bash
+docker load -i inkstone-images-vX.Y.Z.tar
+docker compose -f docker-compose.offline.yml up -d
 ```
 
 要点：

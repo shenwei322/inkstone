@@ -13,9 +13,9 @@ without ever touching the code.
 Personal column or multi-author publication, InkStone is built to be the blog you can
 still maintain five years from now: no plugin sprawl, no monthly fees, no surprises.
 
-✍️ Two editors · 🛡️ Three CAPTCHA providers · 🔄 One-click online updates · 🌏 Bilingual docs
+✍️ Two editors · 🛡️ Three CAPTCHA providers · 🔄 Version notifications (manual upgrades) · 🌏 Bilingual docs
 
-**Beta1.27** · [MIT License](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
+**Beta1.28** · [MIT License](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
 
 > **Language note**: the visitor site, the admin dashboard, and the `docs/` + `.ai-skill/` documentation currently ship with Simplified Chinese copy only — the project is Chinese-first by design. Application-level i18n (including an English UI) is **not implemented yet**; this README is bilingual, the product itself is not.
 
@@ -45,18 +45,17 @@ still maintain five years from now: no plugin sprawl, no monthly fees, no surpri
 - Rate limiting on login/registration, CORS allowlist, and a trusted-reverse-proxy setting that prevents spoofed `X-Forwarded-For` headers from bypassing rate limits
 - Defense in depth: article HTML sanitized through a bluemonday allowlist, sidebar custom HTML sanitized on write, and SSRF-guarded link health checks
 
-### Operations & online updates
+### Operations & version checks
 
-- **One-click updates from the dashboard**: check upstream → download → SHA256 verify → backup → atomic swap → rebuild → restart, with live progress reporting
-- **Two update sources**: `commits` (compare commits, download a source archive) and `releases` (GitHub Releases — version tags, release notes, and image-package assets)
-- Image-package installs run `docker load` + `docker compose up -d`: **no source tree required, no rebuild needed**, and fully offline-capable
-- Updates never touch your data: `data/`, `uploads/`, `files/`, any-level `.env*`, `node_modules/`, `.git/`, `.next/` and similar paths are skipped automatically; a failed swap rolls back on its own, and rollback points stay restorable from the dashboard
-- No Docker access inside the container? The "rebuild + restart" step is delegated to a host-side update agent (`deploy/update-agent.sh` / `.ps1`)
+- **Update checks only — the dashboard never updates itself**: it compares against upstream and shows the manual upgrade commands when a newer version exists. Nothing is downloaded, swapped, or restarted from the web UI (`UPDATE_MANUAL_ONLY=true`, the default)
+- **Two check sources**: `commits` (compare commits) and `releases` (GitHub Releases — version tags, release notes, and image-package assets)
+- Upgrades stay manual: `git pull` + rebuild, or `docker load` the image package + `docker compose up -d` — no source tree or rebuild needed on the image route, fully offline-capable
+- The legacy one-click pipeline (download → SHA256 verify → atomic swap → rebuild via a host-side update agent) still lives in the codebase behind `UPDATE_MANUAL_ONLY=false`, but its UI entry points are gone
 - Audit logs, traffic analytics, maintenance mode, sitemap / robots.txt / RSS (`sitemap.xml`, `feed.xml`)
 
 ### Admin dashboard
 
-A built-in `/admin` dashboard covers: overview, articles, pages, categories and tags, comments, friend links, files, users, appearance, security, site logs, sitemap, system update, and about.
+A built-in `/admin` dashboard covers: overview, articles (recycle bin included), pages, categories and tags, comments, friend links, files, users, appearance, security, IP access control, site logs, sitemap, and system maintenance (version checks and data backups). The sidebar groups navigation into Content / Site / Security / System, and related screens live behind tabs on a single page.
 
 ## Tech stack
 
@@ -122,13 +121,15 @@ ssh root@<server-ip> "docker load -i /opt/inkstone-images-<version>.tar \
 
 Image packages are produced by `deploy/package-images.sh` (Linux/macOS) or `deploy/package-images.ps1` (Windows), which also emit a `.sha256` checksum file.
 
-**Option 3: Online updates from the dashboard (for long-running deployments)**
+**Option 3: Version notifications from the dashboard**
 
-Run the update agent on the host; every later upgrade then happens from the dashboard's "System Update" page:
+Set `UPDATE_ENABLED=true` and the "System Update" page reports when a newer upstream version exists, together with the manual upgrade commands. It never updates anything by itself — apply upgrades with Option 1 or 2.
 
 ```bash
-# The update directory must be a bind mount so the host agent can read the pending-update manifest
-INKSTONE_UPDATE_DIR=/opt/inkstone-deploy/data/update ./deploy/update-agent.sh
+# Turn on version checks (without it, the page cannot even compare versions)
+UPDATE_ENABLED=true
+# Restoring one-click updates is a feature rollback: also set UPDATE_MANUAL_ONLY=false
+# and put the removed dashboard entry points back
 ```
 
 For production you must also keep `deploy/nginx/inkstone.conf` in sync — the three exact-match locations for `sitemap.xml`, `robots.txt`, and `feed.xml` are required, or those SEO endpoints return 404.

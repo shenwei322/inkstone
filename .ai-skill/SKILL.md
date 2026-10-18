@@ -15,7 +15,7 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 当前版本 | `Beta1.27`（`AppVersion` 常量为准，见 `internal/service/system_service.go`） |
 | 后端端口 | `8080`（API 前缀 `/api/v1`） |
 | 前端端口 | `3000`（Next.js App Router，访客站） |
-| 管理后台 | 博客站内 `/admin`（`frontend/app/admin`，含回收站与备份恢复） |
+| 管理后台 | 博客站内 `/admin`（`frontend/app/admin`，15 个一级页面）。导航按场景分四组可折叠：概览 / 内容（文章·页面·分类标签·评论·文件）/ 站点（友链·外观·地图）/ 安全（安全防护·IP 管理）/ 系统（用户·站点设置·系统维护·网站日志）。**同源功能已合并**：回收站并入文章管理的筛选标签页、标签管理扩写为「分类与标签」、系统更新+备份恢复并为「系统维护」、关于系统并入概览页底部 |
 | 数据库 | PostgreSQL 16（GORM AutoMigrate 自动建表） |
 | 认证 | JWT 双令牌（access 15min / refresh 7d）+ **TokenVersion 代次**（改密码/封禁/改角色即作废旧令牌） |
 | 角色 | `admin` / `user`（RBAC 中间件） |
@@ -27,10 +27,11 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 软删除 | Article / Page 有 `gorm.DeletedAt`。删除只置 `deleted_at` **不清关联**（还原时评论点赞还在）；彻底清关联只发生在 `purge` |
 | 文章增强 | 摘要（`excerpt` 空则自动生成）、置顶（`is_pinned`，热门榜不掺）、访问密码（`view_password` 存 bcrypt，`json:"-"`）、定时发布（`scheduled_at`）、历史版本（`article_revisions`，上限 50 版） |
 | 缓存策略 | `middleware.CachePolicy()`：默认 `private, no-cache`；`/uploads/*` 长缓存 immutable；文章/分类/标签/feed/sitemap/site-config `max-age=60` + stale-while-revalidate；≥400 一律 `no-store` |
-| 在线更新 | 后台「系统更新」。两套源（`UPDATE_SOURCE`）：默认 `commits`（检查上游提交 → 下载源码镜像包 → 校验 → 备份 → 替换源码 → 宿主代理重建）；`releases`（GitHub Releases：tag 版本号 + 发布说明 + 镜像包资产 → 宿主代理 `docker load` + compose 重建）。代码在 `internal/service/update_*.go`（`update_release.go`  Releases 源）+ `deploy/update-agent.sh` / `.ps1` |
+| 在线更新 | 后台「系统更新」**只提示、不执行**（Beta1.28 起）：联网比对上游版本 → 页面显示「有新版本」+ 手动更新命令，更新由运维在服务器上做。`UPDATE_MANUAL_ONLY=true`（默认）时 `apply` / `rollback` 直接 403，前端入口已删除。两套检查源（`UPDATE_SOURCE`）：默认 `commits`（比对上游提交）/ `releases`（Releases tag + 发布说明 + 镜像包资产）。旧的一键更新链路仍在 `internal/service/update_*.go` + `deploy/update-agent.sh` / `.ps1`，只在 `UPDATE_MANUAL_ONLY=false` 时启用 |
 | 人机验证 | provider 三选一（`captcha_provider`）：`lap`（默认，Cap 的 CF Workers 分支）/ `pow`（自研工作量证明 v2：内存表+本地交互信号，零外部依赖，服务器不通外网/不能用代理也能用）/ `geetest`（极验四代）；场景与强度参数在后台「安全防护」页 |
 | Markdown 渲染 | 编辑前端 `marked` → 保存 HTML（后端 bluemonday 消毒）；预览高亮用 `highlight.js/lib/common`（主题在 `globals.css`，仅前端 DOM 后处理，不入库） |
 | 动画库 | GSAP 3.15（framer-motion 已彻底移除）；`components/motion.tsx` 封装 + `route-loader.tsx` 路由进度条 + `page-loader.tsx` 加载动画，**无 `.skeleton` 骨架图** |
+| IP 记录与封禁 | 两套机制别混：`security_*` 是**请求级**限流（超预算 429，不拉黑）；`ip_guard_*` 是**来源级**封禁（超阈值整个 IP 403）。访问明细表 `ip_access_logs` 存**明文 IP + 路径**（与 `VisitorDay` 只存哈希是两回事），按 `(ip, path_hash, 分钟)` 合并累加 `hits`，默认保留 7 天。默认**只记录不自动封**（`ip_guard_auto_ban=false`）；白名单 `ip_guard_whitelist` 是逃生通道，命中即放行且拒绝被封。后台页 `/admin/ip-access`，配置在「安全防护」页 |
 
 ## 目录导航
 
@@ -39,21 +40,27 @@ backend/
   cmd/server/main.go              # 入口：依赖注入 + 全部路由注册
   internal/handler/               # HTTP 层：参数绑定、调用 service、错误映射
   internal/handler/log_record.go  # recordOp：操作日志辅助（自动带当前用户/IP/UA）
+  internal/handler/ip_handler.go  # IP 管理后台接口（明细/排行/封禁/解封）
   internal/service/               # 业务逻辑层
-  internal/service/update_*.go    # 在线更新：检查/下载/解压/替换/回滚/重建（见 backend.md）
+  internal/service/ip_guard_service.go  # IP 访问记录 + 自动/手动封禁（内存计数 + 分钟桶落库）
+  internal/service/update_*.go    # 版本检查/下载/替换/回滚（执行侧默认停用，只保留检查；见 backend.md）
   internal/repository/            # GORM 数据访问层
   internal/middleware/            # Auth / CORS / 限流 / 安全头 / 流量统计
+  internal/middleware/ip_guard.go # IPBanGuard（封禁拦截）+ IPAccessRecorder（访问采集）
   internal/model/                 # 数据模型（GORM 结构体）
+  internal/model/ip_access.go     # IPAccessLog / IPBan
   pkg/config/                     # 环境变量配置
   pkg/mailer/                     # SMTP 发信
 frontend/                         # 访客站（Next.js App Router）
-  app/                            # Next.js 路由（页面）；app/admin/ = 站内管理后台（21 页）
+  app/                            # Next.js 路由（页面）；app/admin/ = 站内管理后台（15 个一级页面 + 4 个 new/edit 子路由）
   components/                     # 可复用组件
   lib/api.ts                      # 类型化 API 客户端（唯一 API 入口）
   lib/types.ts                    # 全部 TypeScript 类型
   lib/auth-context.tsx            # 认证上下文
   lib/ui.ts                       # 共享 UI 常量（inputClass、formatSize）
   components/site-config-context.tsx  # 站点配置全局上下文
+  components/admin-page.tsx         # 后台页头/空态共享组件（AdminPageHeader / AdminEmpty）
+  components/admin-tabs.tsx         # 后台分段标签页（AdminTabs / AdminTabPanel），仅用于同源功能切换
   components/motion.tsx             # GSAP 动画封装（PageTransition/Reveal/Stagger/Presence/hoverTapScale 等）
   components/route-loader.tsx       # 路由切换 GSAP 顶部进度条（挂在根 layout）
   components/page-loader.tsx        # PageLoading / RowLoading / Spinner 加载动画（替代骨架图）
@@ -135,6 +142,7 @@ errorResponse(c, err)                  // 统一错误响应
 - `.prose-reading` 与 `max-w-none` specificity 相同（都是单类），靠源码顺序决定胜负：`globals.css` 的 `@import "tailwindcss"` 在最前，规则写在文件后段即生效
 - 动画统一用 `components/motion.tsx` 的 GSAP 封装：`PageTransition` / `Reveal` / `StaggerList` / `StaggerItem` / `HoverLift` / `InView` / `Presence` / `hoverTapScale` / `hoverLift` / `useReveal` / `CountUp`；**framer-motion 已彻底移除，禁止再引入**
 - 路由切换由根 layout 的 `RouteLoader`（GSAP 顶部进度条）接管；页面数据 loading 态统一 `components/page-loader.tsx` 的 `PageLoading` / `RowLoading` / `Spinner`，**全站不使用 `.skeleton` 骨架图**
+- 后台页头与列表空态统一用 `components/admin-page.tsx` 的 `AdminPageHeader` / `AdminEmpty`，不要再手写 `<h1>` 页头或虚线空态；后台页面内**不要再用 `PageTransition`**（`admin/layout.tsx` 的 `Reveal` 已负责入场）
 - **React Compiler 规则**：组件体内不要写 `useCallback`（`preserve-manual-memoization` 会报 error），动画函数提到模块级
 
 ### 图标用 lucide-react
@@ -216,6 +224,16 @@ cd frontend && npm run build && npx eslint app components lib --ext .ts,.tsx
 | fixed 弹窗别内联在带动画的容器里 | 调用方外层（如友链申请表单）常是带 `transform` 动画的容器 div，内联 `fixed inset-0` 会被 transform 包含块困住，遮罩只覆盖卡片区域 → 人机验证「只有提交窗口模糊」。必须 `createPortal` 到 `document.body`（与 `modal.tsx` 一致）；portal 的 mounted 判断用 `useSyncExternalStore`（SSR 首帧 false），避免 hydration mismatch 与 effect 内 setState |
 | React Compiler 禁 useCallback | `react-hooks/preserve-manual-memoization`：组件体内 `useCallback` 直接 error。RouteLoader 的做法：start/finish 提到模块级，effect 内重建 refs 对象调用 |
 | Presence 延迟卸载 | 替代 AnimatePresence：渲染期 `if (show && !mounted) setMounted(true)` 同步挂载；退场播 GSAP，`onComplete` 里 setMounted(false)。setState 只允许出现在渲染期同步分支与异步回调，effect 体内同步 setState 会触发 `react-hooks/set-state-in-effect` |
+| 访问明细表会被刷爆 | `ip_access_logs` 必须走「分钟桶合并」：唯一索引 `(ip, path_hash, bucket_at)` + `ON CONFLICT hits = hits + 1`。单请求一条记录会让表量级直接等于全站 QPS |
+| path 不能进唯一索引 | Postgres btree 单行索引项上限约 2704 字节，`path` 是 255 **字符**（中文按 UTF-8 最多 1020 字节），叠上 IP 与时间戳可能顶到上限，报错是难定位的 `index row size exceeds maximum`。存 `PathHash`（SHA256 前 16 字节定长）参与索引 |
+| IP 排行误用 COUNT(*) | 桶合并后一行代表多次请求，`COUNT(*)` 只会得到「活跃分钟数」，最该被看见的高频 IP 会被排到后面。排序与总量都必须 `SUM(hits)` |
+| 窗口总量别累加排行榜 | `TopIPs` 只是榜单，漏掉榜外 IP；概览的 `window_requests` 必须单独聚合（`TotalRequestsSince`），否则运维看到「总量 = 首名」会以为统计坏了 |
+| 封禁中间件的顺序 | `IPBanGuard` 必须在 `TrafficStats` 之前（否则攻击流量撑出虚假 PV 尖峰）、在 `IPAccessRecorder` 之前（否则被封 IP 把自己刷成排行第一）。`/healthz` 必须跳过拦截，否则健康检查被封 → 编排不停重启实例 |
+| 白名单是逃生通道 | `Banned()` 判定时**先查白名单**再查封禁表，命中即放行；`Ban()` 拒绝封禁白名单内的地址。被封的人进不了后台，白名单是唯一自救途径 |
+| 封禁 `minutes` 用指针 | `*int`：不传 = 默认时长 / `0` = 永久 / `>0` = 指定分钟。改成值类型会让「永久」和「没填」变成同一个 0，很容易误封一整年 |
+| Gin 路由段冲突 | `/admin/ip/:ip` 会与同级静态段（`/ip/access`、`/ip/top`、`/ip/bans`）争用 radix 节点，可能 panic。写成 `/admin/ip/detail/:ip` |
+| 设置缓存导致调参无感 | 持有设置快照的 service 要订阅 `SettingsService.OnUpdate`，`Update()` 后立即失效；否则改完阈值要等最多 10 秒才生效，运维会以为保存失败 |
+| 运维参数别下发访客 | `publicHiddenPrefixes`（`ip_guard_`）只在 `Public()` 里过滤，`AdminView()` 照常可见。白名单暴露给匿名访客等于告诉对方「从哪些地址打过来不会被封」 |
 | confirm 弹窗内容快照 | toast 的 confirm 用 `dialogShown` state 缓存内容：`closeConfirm` 只清 `confirmState`，Presence 退场期间 `dialogShown` 保留，内容不闪空；且 `show={!!confirmState}` 会丢 TS 收窄，读取一律 `dialogShown?.xxx` |
 | GSAP 入场动画被 rAF 节流卡透明 | framer-motion 的 opacity/transform 走 WAAPI（合成器线程），GSAP 是 JS tween 逐帧（rAF）。**远程桌面/浏览器窗口被遮挡时 Chrome 节流 rAF**，`gsap.from({opacity:0})` 会永久停在透明态 → "内容被白色遮挡"（首页/管理表格都踩过）。`components/motion.tsx` 已内置双保险：①全局 patch `gsap.from/fromTo`，凡从透明态起步的 tween 自动注册超时看门狗（1.2s 后强制 clearProps 恢复可见）；②各入场组件自带 `revealFallback` + `clearProps`。**新写动画必须用 `Reveal/InView/useReveal/hoverTapScale`，不要手搓 `gsap.from(el, {opacity:0})`**；悬浮按钮（如 BackToTop）入场直接用 globals.css 的 `.animate-scale-in`（CSS keyframes 走合成器，连 1.2s 看门狗等待都没有），阈值切换还要做滞回（480 显示/320 隐藏）防临界闪烁 |
 | toast 弹窗动画必须 CSS keyframes | `toast.tsx` 曾用 `gsap.from/to` 做 opacity 入场退场，rAF 节流时**卡在 opacity 0.32**——实色卡片半透明糊在右下角 = 「白雾遮挡」（2026-10 实测）。已改为 globals.css 的 `.toast-enter/.toast-leave`（keyframes 走合成器）+ `animationend` 移除 + 600ms 兜底。新增弹窗/浮层动画一律 CSS keyframes，勿再引入 gsap opacity |

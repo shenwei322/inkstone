@@ -5,7 +5,10 @@
 ## 全局中间件链
 
 ```
-请求 → gin.Logger → gin.Recovery → SecurityHeaders → TrafficStats
+请求 → gin.Logger → gin.Recovery → SecurityHeaders → CachePolicy
+     → IPBanGuard（封禁拦截，命中直接 403）
+     → TrafficStats（被封禁的请求不计入流量）
+     → IPAccessRecorder（c.Next() 之后记录访问明细）
      → CORS → [api/v1 分组] rateLimitMiddle（全局限流 600/分钟/IP）
      → 路由级中间件（Auth / RequireRole / 专属限流）
      → handler
@@ -14,7 +17,9 @@
 | 中间件 | 作用域 | 说明 |
 |---|---|---|
 | `SecurityHeaders` | 全局 | X-Frame-Options 等安全响应头 |
+| `IPBanGuard` | 全局 | 生效中的封禁直接 403（`/healthz` 除外，见下） |
 | `TrafficStats` | 全局 | 异步记录流量到统计表 |
+| `IPAccessRecorder` | 全局 | 异步记录 IP/路径/状态码到访问明细 |
 | `CORS` | 全局 | 白名单来自 `FRONTEND_URL` |
 | `rateLimitMiddle` | `/api/v1` | 全局 API 限流，超限 429 |
 | `registerLimit` | 注册/发验证码 | 注册专属限流（默认 20/小时） |
@@ -24,6 +29,21 @@
 | `OptionalAuth` | articles 分组 | 有 token 识别用户，无 token 匿名 |
 | `Auth` | 需登录路由 | 强校验 + 实时查库校验封禁状态 |
 | `RequireRole("admin")` | `/admin` 分组 | 管理员权限 |
+
+**`IPBanGuard` 的两个必须注意的顺序约束**：
+
+1. **必须在 `TrafficStats` 之前**：被封 IP 的请求不该再累加 PV/带宽，
+   否则攻击流量会把后台的流量曲线撑出一个虚假尖峰。
+2. **必须在 `IPAccessRecorder` 之前**：否则被封的 IP 每次请求仍写一条访问记录，
+   反而把它自己刷成排行榜第一，干扰运维判断。
+
+`/healthz` 走 `banCheckPathPrefixes` 白名单直接跳过封禁判定：
+容器编排的健康检查来自固定内网地址，一旦被封（比如它扫过别的路径），
+探活全失败 → 编排不停重启实例，形成「自己被自己封到起不来」的死循环。
+
+**封禁响应**：`403 {"error":"该 IP 已被限制访问","ip_banned":true,"retry_after_secs":N}`，
+并带 `Retry-After` 头。永久封禁的 `retry_after_secs` 归一化为 `0`（不返回负数）。
+响应刻意不含阈值与封禁来源——那等于把绕过参数交给对方。
 
 ## 鉴权说明
 
@@ -151,6 +171,10 @@ gin 不允许同层出现两个不同名的通配段，注册时直接 panic。
 | DELETE | `/admin/categories/:id` | 管理员 | 删除分类（有子分类或有关文章时拒绝） |
 
 > 文章创建/更新时传 `tags: ["标签名"]` 会自动 find-or-create。
+
+**`/categories/tree` 的 `depth` 从 1 起算**（顶级分类 = 1，`service/taxonomy_service.go` 的 `categoryDepth`）。前端做缩进或层级判断时要用 `depth - 1`，把 `depth` 直接当级数会让顶级分类也缩进一格。`article_count` 是分类**自身**的直接文章数，不含子分类。
+
+> 前端入口（Beta1.28）：分类的增删改接口一直存在，但此前**前端没有任何入口**——只能在写文章下拉框里选已有分类，建不了也改不了名。现在由后台 `/admin/taxonomy` 页的「分类」标签页承载（`lib/api.ts` 的 `createCategory` / `updateCategory` / `deleteCategory` / `fetchCategoryTree`）。
 
 **删除分类的拒绝条件**（返回 400 而非级联删除）：分类下还有子分类，或还有文章。
 刻意不做级联——分类被连带清掉文章属不可逆误操作，代价比重试高得多。
@@ -519,6 +543,43 @@ curl -H "Authorization: Bearer <token>" \
   -o logs.csv
 ```
 
+### IP 管理（Beta1.28 新增）
+
+后台「IP 管理」页（`/admin/ip-access`）的全部接口。全部需要 `role=admin`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/ip/access?ip=&path=&from=&to=&page=&page_size=` | 访问明细分页。`from`/`to` 支持 `2006-01-02` 或 RFC3339 |
+| GET | `/admin/ip/overview?window=` | 概览：`window_minutes`/`retention_days`/`active_bans`/`dropped_records`/`busiest_ip`/`busiest_hits`/`window_requests`/`window_ips` |
+| GET | `/admin/ip/top?window=&limit=` | 按 `SUM(hits)` 倒序的 IP 排行（`limit` 上限 500，默认 50） |
+| GET | `/admin/ip/detail/:ip?window=&limit=` | 单 IP 的路径分布 + 当前封禁状态 |
+| GET | `/admin/ip/bans?ip=&source=&active=&page=&page_size=` | 封禁列表（含已过期，`active` 标注状态） |
+| POST | `/admin/ip/bans` | 手动封禁。Body: `{ip, minutes?, reason?, note?}` |
+| DELETE | `/admin/ip/bans/:ip` | 解封。返回 404 表示本来就没封 |
+
+`window` 是**分钟数**（统计窗口），缺省取后台配置的 `ip_guard_window`（默认 5），上限 30 天。
+
+**`minutes` 的三态语义**（`*int` 指针，别改成值类型）：
+
+| 传值 | 含义 |
+|---|---|
+| 不传 / `null` | 用后台配置的默认时长 `ip_guard_ban_min` |
+| `0` | 永久封禁 |
+| `>0` | 指定分钟数 |
+
+改成值类型会让「永久封禁」和「没填」变成同一个 `0`，
+前端无论怎么传都会被解释成永久——很容易误封一整年。
+
+**`/admin/ip/detail/:ip` 为什么多一层 `detail/`**：
+如果写成 `/admin/ip/:ip`，它就会和同级的静态段（`/ip/access`、`/ip/top`、`/ip/bans`…）
+争用同一个 radix 节点，Gin 在建路由表时可能直接 panic。多一层静态前缀最稳。
+
+**封禁与日志**：`POST`/`DELETE` 都会写一条 `setting` 分类的操作日志
+（动作「封禁 IP」/「解除封禁」，detail 里带时长说明）。
+
+> `ip_guard_whitelist` 与整组 `ip_guard_*` 设置**不下发访客**
+> （`GET /site-config` 里看不到），详见 `settings.md`。
+
 ### 系统更新（Beta1.27 新增）
 
 后台「系统更新」页的全部接口。两套更新源（`UPDATE_SOURCE`，`update.source` 字段返回值）：
@@ -530,10 +591,10 @@ curl -H "Authorization: Bearer <token>" \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/admin/system/update` | 状态总览：`{update, backups, agent}`。**不联网**，前端可安全高频轮询 |
-| POST | `/admin/system/update/check` | 联网检查上游最新版本（提交或 Release）并生成更新日志，返回最新 `update` |
-| POST | `/admin/system/update/apply` | 启动一键更新。Body: `{commit?, target?, confirm:true}`（目标留空 = 上游最新；`target` 优先于 `commit`。commits 模式传 commit 哈希，releases 模式传版本 tag 如 `v1.28.0`）。成功返回 **202** + `{message, update}` |
-| POST | `/admin/system/update/rollback` | 回滚。Body: `{backup_id, confirm:true}`（commits 模式为备份 ID；releases 模式为历史版本号） |
+| GET | `/admin/system/update` | 状态总览：`{update, backups, agent, manual_only}`。**不联网**，前端可安全轮询 |
+| POST | `/admin/system/update/check` | 联网检查上游最新版本（提交或 Release）并生成更新日志，返回最新 `update`。**这是后台唯一会发起写操作的更新接口** |
+| POST | `/admin/system/update/apply` | **默认停用（403）**。`UPDATE_MANUAL_ONLY=true`（默认）时直接返回 `{"error":"后台已停用一键更新，请按「系统更新」页的手动更新步骤在服务器上执行"}`，不触碰 UpdateService。仅当显式设 `UPDATE_MANUAL_ONLY=false` 才执行原逻辑：Body `{commit?, target?, confirm:true}`，成功 **202** + `{message, update}` |
+| POST | `/admin/system/update/rollback` | **默认停用（403）**，规则同上。恢复后 Body `{backup_id, confirm:true}`（commits 模式为备份 ID；releases 模式为历史版本号） |
 
 `update` 结构要点：
 

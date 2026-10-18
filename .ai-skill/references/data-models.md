@@ -341,6 +341,60 @@ type OperationLog struct {
 **行为**：异步入队（1024 缓冲，满丢弃）→ worker 落库；每 24h 清理 90 天前记录。
 后台页面 `/admin/logs`，导出走 `GET /admin/logs/export`（CSV，UTF-8 BOM，上限 5 万条）。
 
+## IPAccessLog / IPBan（IP 访问记录与封禁，Beta1.28）
+
+```go
+type IPAccessLog struct {
+    ID       uint
+    IP       string    // 明文 IP（不是哈希，见下方隐私说明）
+    Method   string
+    Path     string    // 截断 255 字符
+    PathHash string    // path 的 SHA256 前 16 字节，参与唯一索引
+    Status   int       // 该分钟内最后一次的状态码
+    Hits     int64     // 本分钟桶内的请求次数（关键字段）
+    BucketAt time.Time // 桶起始时刻（截断到分钟）
+    UserAgent, Referer string
+    UserID   uint
+    Username string
+    CreatedAt time.Time
+}
+
+type IPBan struct {
+    ID        uint
+    IP        string     // uniqueIndex，一个 IP 只有一行
+    Reason    string
+    Source    string     // auto（自动封禁）/ manual（管理员手动）
+    Hits      int64      // 封禁时窗口内的请求数快照
+    ExpiresAt *time.Time // nil = 永久封禁
+    CreatedBy string     // 管理员用户名，自动封禁写 "system"
+    Note      string
+    CreatedAt, UpdatedAt time.Time
+}
+```
+
+**写入方式：分钟桶合并。**
+唯一索引 `(ip, path_hash, bucket_at)` + `ON CONFLICT DO UPDATE hits = hits + 1`。
+同一 IP 对同一路径在一分钟内的多次请求只占一行，`Hits` 累加。
+不这么做的话，表量级直接等于全站 QPS。
+
+> `PathHash` 参与索引而不是 `Path` 原文：Postgres btree 单行索引项上限约 2704 字节，
+> 而 `path` 是 255 **字符**（中文按 UTF-8 最多 1020 字节），
+> 叠上 IP 与时间戳后可能顶到上限，报错还是难以定位的
+> `index row size exceeds maximum`。存定长哈希既绕开限制，索引也更小。
+
+**聚合查询要点**：按 IP 排序必须用 `SUM(hits)` 而不是 `COUNT(*)`——
+桶合并之后一行代表多次请求，`COUNT(*)` 只会得到「活跃分钟数」，
+反而把最该被看见的高频 IP 排到后面。
+
+**封禁是惰性过期**：到期的行不删，只由 `IPBan.Active(now)` 判定失效。
+保留历史是因为「这个 IP 上周因为 CC 被自动封过 3 次」正是判断要不要永久封的依据。
+过期满 30 天后才由清理任务删除。
+
+> 隐私：`VisitorDay` 只存 IP 哈希（UV 去重，隐私优先）；
+> `IPAccessLog` 存**明文 IP + 路径**，因为后台要能回答「这个 IP 是谁、打了什么、要不要封」——
+> 哈希做不到这件事。因此保留期明显更短（默认 7 天，`ip_guard_days` 可调），
+> 且可通过 `ip_guard_enabled` 整体关闭写入。
+
 ---
 
 ## 关系图
@@ -360,6 +414,7 @@ Page          （独立，无外键）
 FriendLink    （独立）
 Setting       （键值对）
 DailyStat / VisitorDay（统计）
+IPAccessLog / IPBan（IP 访问与封禁，无外键，靠 IP 字符串关联）
 ```
 
 ---
