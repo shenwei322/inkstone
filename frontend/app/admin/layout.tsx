@@ -33,7 +33,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { AccentPicker } from '@/components/accent-picker'
 
 /**
- * 后台导航（Beta1.28 重排）。
+ * 后台导航（Beta1.29 重排）。
  *
  * 此前是 18 项平铺：一屏塞不下，滚到底才能看到「网站日志」，
  * 而且功能之间没有亲疏关系——「回收站」和「关于系统」在视觉上是同级，

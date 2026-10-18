@@ -193,7 +193,7 @@ export function uploadImage(file: File): Promise<string>  // 返回 url
 export function downloadFile(id: number, filename: string)  // 鉴权下载
 ```
 
-**系统更新**（Beta1.28 起只提示、不执行，见「系统维护页 / 版本与更新」）：
+**系统更新**（Beta1.29 起只提示、不执行，见「系统维护页 / 版本与更新」）：
 ```ts
 fetchUpdateStatus()                    // GET  /admin/system/update        只读本地状态
 checkSystemUpdate()                    // POST /admin/system/update/check  联网比对上游版本（页面唯一会调的写操作）
@@ -594,7 +594,7 @@ RSS 2.0 + `content:encoded` 全文，加密文章只给标题链接）。前端�
 
 `frontend/app/admin/`（15 个一级页面 + 4 个 new/edit 子路由，共 19 个 `page.tsx`）：站内 `layout.tsx` 做**权限守卫**（未登录跳 `/login`，非管理员显示「需要管理员权限」）+ 分组导航；navbar「后台管理」按钮、登录分流（admin 角色跳 `/admin`）、首页空态「写文章」都指向这里。
 
-#### 导航结构（Beta1.28 重排：18 项平铺 → 15 项四组）
+#### 导航结构（Beta1.29 重排：18 项平铺 → 15 项四组）
 
 | 分组 | 条目 |
 |---|---|
@@ -698,7 +698,7 @@ useEffect(() => { setCollapsed(readCollapsed()) }, [])
 - 导出 CSV：`downloadLogs()` 用 `fetch + Bearer` 直接取 blob（**不能走 `api()` JSON 客户端**），401 时 `tryRefresh()` 刷新重试；通过 `a[download]` + `URL.createObjectURL` 触发浏览器下载
 - 分页：每页 30 条
 
-#### IP 管理页（`frontend/app/admin/ip-access/page.tsx`，Beta1.28 新增）
+#### IP 管理页（`frontend/app/admin/ip-access/page.tsx`，Beta1.29 新增）
 三段信息按「先看全局 → 再看是谁 → 最后动手」排列：
 
 1. **概览卡片**：窗口请求数（含 IP 数）/ 最忙的 IP / 生效封禁 / 丢弃记录
@@ -734,7 +734,7 @@ useEffect(() => { setCollapsed(readCollapsed()) }, [])
 ### 用户中心（`app/me/page.tsx`）
 所有登录用户可用：账户安全（改用户名/密码）、我的文章、我的评论。
 
-#### 系统维护页（`frontend/app/admin/system/page.tsx`，Beta1.28 合并）
+#### 系统维护页（`frontend/app/admin/system/page.tsx`，Beta1.29 合并）
 原「系统更新」与「备份恢复」两页的合并体，内含两个标签页：**版本与更新** / **数据备份**。正文分别在 `components/system-update-panel.tsx` 与 `components/backup-panel.tsx`。
 
 **为什么抽成组件**：操作按钮（刷新状态 / 检查更新 / 立即备份）留在**面板内部**而不是页头 `actions`。页头 actions 是整页共用的，接到 tab 上就得把 mutation 提升到父组件，换来的是「切到备份 tab 后，页头还挂着检查更新按钮」这种错位。
@@ -768,7 +768,7 @@ useEffect(() => { setCollapsed(readCollapsed()) }, [])
 
 `fetchSystemInfo` 失败时页面显示一条明确的错误条（`infoQuery.isError`），不能让页面看起来「一切正常但全是占位符」。
 
-#### 分类与标签页（`frontend/app/admin/taxonomy/page.tsx`，Beta1.28 新增）
+#### 分类与标签页（`frontend/app/admin/taxonomy/page.tsx`，Beta1.29 新增）
 原「标签管理」页扩写，两个标签页：
 
 - **分类**：新建（名称 + 父级下拉，父级选项把树拍平并按层级用全角空格缩进）+ 树形列表（按 `depth` 缩进、`ChevronRight` 标记子级、显示各分类直接文章数）+ 行内重命名/删除。删除确认会说明「有 N 篇文章会变成未分类」而不是连文章一起删

@@ -15,7 +15,7 @@ still maintain five years from now: no plugin sprawl, no monthly fees, no surpri
 
 ✍️ Two editors · 🛡️ Three CAPTCHA providers · 🔄 Version notifications (manual upgrades) · 🌏 Bilingual docs
 
-**Beta1.28** · [MIT License](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
+**Beta1.29** · [MIT License](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
 
 > **Language note**: the visitor site, the admin dashboard, and the `docs/` + `.ai-skill/` documentation currently ship with Simplified Chinese copy only — the project is Chinese-first by design. Application-level i18n (including an English UI) is **not implemented yet**; this README is bilingual, the product itself is not.
 

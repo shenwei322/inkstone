@@ -104,7 +104,7 @@
 | `security_api_max` | `600` | API 上限（次/分钟/IP） |
 | `security_block_minutes` | `15` | 封禁时长（保留参数） |
 
-### IP 访问记录与封禁（Beta1.28）
+### IP 访问记录与封禁（Beta1.29）
 | Key | 默认值 | 说明 |
 |---|---|---|
 | `ip_guard_enabled` | `true` | 是否记录访问明细（关掉后仍在拦截已封禁 IP） |

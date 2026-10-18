@@ -341,7 +341,7 @@ type OperationLog struct {
 **行为**：异步入队（1024 缓冲，满丢弃）→ worker 落库；每 24h 清理 90 天前记录。
 后台页面 `/admin/logs`，导出走 `GET /admin/logs/export`（CSV，UTF-8 BOM，上限 5 万条）。
 
-## IPAccessLog / IPBan（IP 访问记录与封禁，Beta1.28）
+## IPAccessLog / IPBan（IP 访问记录与封禁，Beta1.29）
 
 ```go
 type IPAccessLog struct {

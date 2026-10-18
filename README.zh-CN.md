@@ -10,7 +10,7 @@ InkStone（砚石）把整套博客系统装进一次部署：后端 **Go + Gin 
 
 ✍️ 双编辑器 · 🛡️ 三种人机验证 · 🔄 后台版本提示（手动更新） · 🌏 中英双语文档
 
-**Beta1.28** · [MIT 许可证](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
+**Beta1.29** · [MIT 许可证](./LICENSE) · [github.com/shenwei322/inkstone](https://github.com/shenwei322/inkstone)
 
 > **语言说明**：本文档为简体中文版，英文版见 [README.md](./README.md)。系统界面（访客站与后台）以及 `docs/`、`.ai-skill/` 文档目前均为简体中文——项目按中文优先设计，**尚未实现界面多语言（i18n）**。
 

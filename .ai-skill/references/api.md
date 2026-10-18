@@ -174,7 +174,7 @@ gin 不允许同层出现两个不同名的通配段，注册时直接 panic。
 
 **`/categories/tree` 的 `depth` 从 1 起算**（顶级分类 = 1，`service/taxonomy_service.go` 的 `categoryDepth`）。前端做缩进或层级判断时要用 `depth - 1`，把 `depth` 直接当级数会让顶级分类也缩进一格。`article_count` 是分类**自身**的直接文章数，不含子分类。
 
-> 前端入口（Beta1.28）：分类的增删改接口一直存在，但此前**前端没有任何入口**——只能在写文章下拉框里选已有分类，建不了也改不了名。现在由后台 `/admin/taxonomy` 页的「分类」标签页承载（`lib/api.ts` 的 `createCategory` / `updateCategory` / `deleteCategory` / `fetchCategoryTree`）。
+> 前端入口（Beta1.29）：分类的增删改接口一直存在，但此前**前端没有任何入口**——只能在写文章下拉框里选已有分类，建不了也改不了名。现在由后台 `/admin/taxonomy` 页的「分类」标签页承载（`lib/api.ts` 的 `createCategory` / `updateCategory` / `deleteCategory` / `fetchCategoryTree`）。
 
 **删除分类的拒绝条件**（返回 400 而非级联删除）：分类下还有子分类，或还有文章。
 刻意不做级联——分类被连带清掉文章属不可逆误操作，代价比重试高得多。
@@ -543,7 +543,7 @@ curl -H "Authorization: Bearer <token>" \
   -o logs.csv
 ```
 
-### IP 管理（Beta1.28 新增）
+### IP 管理（Beta1.29 新增）
 
 后台「IP 管理」页（`/admin/ip-access`）的全部接口。全部需要 `role=admin`。
 

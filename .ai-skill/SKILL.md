@@ -27,7 +27,7 @@ Go + Gin + GORM + PostgreSQL 后端，Next.js 15 + React 19 前端，Docker 部�
 | 软删除 | Article / Page 有 `gorm.DeletedAt`。删除只置 `deleted_at` **不清关联**（还原时评论点赞还在）；彻底清关联只发生在 `purge` |
 | 文章增强 | 摘要（`excerpt` 空则自动生成）、置顶（`is_pinned`，热门榜不掺）、访问密码（`view_password` 存 bcrypt，`json:"-"`）、定时发布（`scheduled_at`）、历史版本（`article_revisions`，上限 50 版） |
 | 缓存策略 | `middleware.CachePolicy()`：默认 `private, no-cache`；`/uploads/*` 长缓存 immutable；文章/分类/标签/feed/sitemap/site-config `max-age=60` + stale-while-revalidate；≥400 一律 `no-store` |
-| 在线更新 | 后台「系统更新」**只提示、不执行**（Beta1.28 起）：联网比对上游版本 → 页面显示「有新版本」+ 手动更新命令，更新由运维在服务器上做。`UPDATE_MANUAL_ONLY=true`（默认）时 `apply` / `rollback` 直接 403，前端入口已删除。两套检查源（`UPDATE_SOURCE`）：默认 `commits`（比对上游提交）/ `releases`（Releases tag + 发布说明 + 镜像包资产）。旧的一键更新链路仍在 `internal/service/update_*.go` + `deploy/update-agent.sh` / `.ps1`，只在 `UPDATE_MANUAL_ONLY=false` 时启用 |
+| 在线更新 | 后台「系统更新」**只提示、不执行**（Beta1.29 起）：联网比对上游版本 → 页面显示「有新版本」+ 手动更新命令，更新由运维在服务器上做。`UPDATE_MANUAL_ONLY=true`（默认）时 `apply` / `rollback` 直接 403，前端入口已删除。两套检查源（`UPDATE_SOURCE`）：默认 `commits`（比对上游提交）/ `releases`（Releases tag + 发布说明 + 镜像包资产）。旧的一键更新链路仍在 `internal/service/update_*.go` + `deploy/update-agent.sh` / `.ps1`，只在 `UPDATE_MANUAL_ONLY=false` 时启用 |
 | 人机验证 | provider 三选一（`captcha_provider`）：`lap`（默认，Cap 的 CF Workers 分支）/ `pow`（自研工作量证明 v2：内存表+本地交互信号，零外部依赖，服务器不通外网/不能用代理也能用）/ `geetest`（极验四代）；场景与强度参数在后台「安全防护」页 |
 | Markdown 渲染 | 编辑前端 `marked` → 保存 HTML（后端 bluemonday 消毒）；预览高亮用 `highlight.js/lib/common`（主题在 `globals.css`，仅前端 DOM 后处理，不入库） |
 | 动画库 | GSAP 3.15（framer-motion 已彻底移除）；`components/motion.tsx` 封装 + `route-loader.tsx` 路由进度条 + `page-loader.tsx` 加载动画，**无 `.skeleton` 骨架图** |

@@ -127,7 +127,7 @@ middleware.RequireRole(model.RoleAdmin)
 ### TrafficStats（`middleware/stats.go`）
 异步记录每请求流量到 `StatService`，不阻塞请求。
 
-### IP 封禁与访问记录（`middleware/ip_guard.go`，Beta1.28 新增）
+### IP 封禁与访问记录（`middleware/ip_guard.go`，Beta1.29 新增）
 
 两个中间件，职责刻意分开：
 
@@ -533,7 +533,7 @@ Stats()                   // 各分类计数（旧接口）
 - file / link / page / taxonomy / system：增删改详情含标题/名称，更新前先查实体名
 - Detail 长度防护：`Record` 按字符截断到 500（列宽上限），防长标题导致入库失败
 
-### IPGuardService（`service/ip_guard_service.go`，Beta1.28 新增）
+### IPGuardService（`service/ip_guard_service.go`，Beta1.29 新增）
 
 IP 访问记录 + 封禁的核心逻辑。三段职责，全部与请求路径解耦：
 

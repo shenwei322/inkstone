@@ -7,7 +7,7 @@ import { PageLoading } from '@/components/page-loader'
 /**
  * 旧路由兼容：`/admin/system-update` → `/admin/system`。
  *
- * 这一页在 Beta1.28 并入了「系统维护」。留一个跳转而不是直接删掉目录，
+ * 这一页在 Beta1.29 并入了「系统维护」。留一个跳转而不是直接删掉目录，
  * 是因为后台地址会被收藏、也会出现在运维文档与日志的「前往该页」链接里，
  * 直接 404 会让人以为是故障。
  *

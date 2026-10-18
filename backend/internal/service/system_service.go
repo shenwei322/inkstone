@@ -11,7 +11,7 @@ import (
 )
 
 // AppVersion is the current backend release version.
-const AppVersion = "Beta1.28"
+const AppVersion = "Beta1.29"
 
 var appStartTime = time.Now()
 
